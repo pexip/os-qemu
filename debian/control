@@ -2,8 +2,9 @@
 Source: qemu
 Section: otherosfs
 Priority: optional
-Maintainer: Debian QEMU Team <pkg-qemu-devel@lists.alioth.debian.org>
-Uploaders: Aurelien Jarno <aurel32@debian.org>,
+Maintainer: Pexip AS <packaging@pexip.com>
+XSBC-Pexip-Original-Maintainer: Debian QEMU Team <pkg-qemu-devel@lists.alioth.debian.org>
+XSBC-Pexip-Original-Uploaders: Aurelien Jarno <aurel32@debian.org>,
 	Riku Voipio <riku.voipio@iki.fi>,
 	Michael Tokarev <mjt@tls.msk.ru>
 Build-Depends: debhelper (>= 11),
@@ -120,6 +121,7 @@ Standards-Version: 3.9.8
 Homepage: http://www.qemu.org/
 Vcs-Browser: https://salsa.debian.org/qemu-team/qemu
 Vcs-Git: https://salsa.debian.org/qemu-team/qemu.git
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ buster
 
 Package: qemu
 Architecture: amd64 arm arm64 armel armhf i386 ia64 kfreebsd-amd64 kfreebsd-i386 mips mipsel mips64 mips64el powerpc powerpcspe ppc64 ppc64el s390x sparc sparc64 x32
