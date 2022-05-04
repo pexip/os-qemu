@@ -7,44 +7,42 @@ instead of deriving it at runtime from executable path.
 This way it is possible to move qemu binary to another directory
 and it will still work.
 
---- a/os-posix.c
-+++ b/os-posix.c
-@@ -72,6 +72,7 @@ void os_setup_signal_handling(void)
-     sigaction(SIGTERM, &act, NULL);
- }
+diff --git a/softmmu/vl.c b/softmmu/vl.c
+index e6e0ad5a925..de716a8635b 100644
+--- a/softmmu/vl.c
++++ b/softmmu/vl.c
+@@ -2853,12 +2853,14 @@ static void create_default_memdev(MachineState *ms, const char *path)
+  */
+ static char *find_datadir(void)
+ {
++#if 0
+     g_autofree char *dir = NULL;
  
-+#if 0 /* we use a fixed configured data path */
- /* Find a likely location for support files using the location of the binary.
-    For installed binaries this will be "$bindir/../share/qemu".  When
-    running from the build tree this will be "$bindir/../pc-bios".  */
-@@ -107,6 +108,7 @@ char *os_find_datadir(void)
- }
- #undef SHARE_SUFFIX
- #undef BUILD_SUFFIX
+     dir = g_build_filename(qemu_get_exec_dir(), "pc-bios", NULL);
+     if (g_file_test(dir, G_FILE_TEST_IS_DIR)) {
+         return g_steal_pointer(&dir);
+     }
 +#endif
  
- void os_set_proc_name(const char *s)
+     return get_relocated_path(CONFIG_QEMU_DATADIR);
+ }
+diff --git a/util/cutils.c b/util/cutils.c
+index 0b5073b3301..8808a1bc85d 100644
+--- a/util/cutils.c
++++ b/util/cutils.c
+@@ -929,6 +929,9 @@ static inline const char *next_component(const char *dir, int *p_len)
+ 
+ char *get_relocated_path(const char *dir)
  {
---- a/vl.c
-+++ b/vl.c
-@@ -3051,7 +3051,7 @@ int main(int argc, char **argv, char **e
-     Error *main_loop_err = NULL;
-     Error *err = NULL;
-     bool list_data_dirs = false;
--    char *dir, **dirs;
-+    char **dirs;
-     typedef struct BlockdevOptions_queue {
-         BlockdevOptions *bdo;
-         Location loc;
-@@ -4170,11 +4170,6 @@ int main(int argc, char **argv, char **e
++#if 1	/* for Debian we dont need paths to be relocable */
++    return g_strdup(dir);
++#else
+     size_t prefix_len = strlen(CONFIG_PREFIX);
+     const char *bindir = CONFIG_BINDIR;
+     const char *exec_dir = qemu_get_exec_dir();
+@@ -964,4 +967,5 @@ char *get_relocated_path(const char *dir)
+         g_string_append(result, dir - 1);
      }
-     g_strfreev(dirs);
- 
--    /* try to find datadir relative to the executable path */
--    dir = os_find_datadir();
--    qemu_add_data_dir(dir);
--    g_free(dir);
--
-     /* add the datadir specified when building */
-     qemu_add_data_dir(CONFIG_QEMU_DATADIR);
- 
+     return result->str;
++#endif
+ }

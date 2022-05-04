@@ -16,6 +16,7 @@
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qstring.h"
 #include "qemu/cutils.h"
+#include "qemu/module.h"
 #include "qemu/option.h"
 
 /* Disk format stuff - taken from Linux drivers/md/dm-log-writes.c */
@@ -148,15 +149,14 @@ static int blk_log_writes_open(BlockDriverState *bs, QDict *options, int flags,
     bool log_append;
 
     opts = qemu_opts_create(&runtime_opts, NULL, 0, &error_abort);
-    qemu_opts_absorb_qdict(opts, options, &local_err);
-    if (local_err) {
+    if (!qemu_opts_absorb_qdict(opts, options, errp)) {
         ret = -EINVAL;
-        error_propagate(errp, local_err);
         goto fail;
     }
 
     /* Open the file */
-    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_file, false,
+    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_of_bds,
+                               BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY, false,
                                &local_err);
     if (local_err) {
         ret = -EINVAL;
@@ -165,8 +165,8 @@ static int blk_log_writes_open(BlockDriverState *bs, QDict *options, int flags,
     }
 
     /* Open the log file */
-    s->log_file = bdrv_open_child(NULL, options, "log", bs, &child_file, false,
-                                  &local_err);
+    s->log_file = bdrv_open_child(NULL, options, "log", bs, &child_of_bds,
+                                  BDRV_CHILD_METADATA, false, &local_err);
     if (local_err) {
         ret = -EINVAL;
         error_propagate(errp, local_err);
@@ -280,33 +280,8 @@ static int64_t blk_log_writes_getlength(BlockDriverState *bs)
     return bdrv_getlength(bs->file->bs);
 }
 
-static void blk_log_writes_refresh_filename(BlockDriverState *bs,
-                                            QDict *options)
-{
-    BDRVBlkLogWritesState *s = bs->opaque;
-
-    /* bs->file->bs has already been refreshed */
-    bdrv_refresh_filename(s->log_file->bs);
-
-    if (bs->file->bs->full_open_options
-        && s->log_file->bs->full_open_options)
-    {
-        QDict *opts = qdict_new();
-        qdict_put_str(opts, "driver", "blklogwrites");
-
-        qobject_ref(bs->file->bs->full_open_options);
-        qdict_put_obj(opts, "file", QOBJECT(bs->file->bs->full_open_options));
-        qobject_ref(s->log_file->bs->full_open_options);
-        qdict_put_obj(opts, "log",
-                      QOBJECT(s->log_file->bs->full_open_options));
-        qdict_put_int(opts, "log-sector-size", s->sectorsize);
-
-        bs->full_open_options = opts;
-    }
-}
-
 static void blk_log_writes_child_perm(BlockDriverState *bs, BdrvChild *c,
-                                      const BdrvChildRole *role,
+                                      BdrvChildRole role,
                                       BlockReopenQueue *ro_q,
                                       uint64_t perm, uint64_t shrd,
                                       uint64_t *nperm, uint64_t *nshrd)
@@ -317,11 +292,8 @@ static void blk_log_writes_child_perm(BlockDriverState *bs, BdrvChild *c,
         return;
     }
 
-    if (!strcmp(c->name, "log")) {
-        bdrv_format_default_perms(bs, c, role, ro_q, perm, shrd, nperm, nshrd);
-    } else {
-        bdrv_filter_default_perms(bs, c, role, ro_q, perm, shrd, nperm, nshrd);
-    }
+    bdrv_default_perms(bs, c, role, ro_q, perm, shrd,
+                       nperm, nshrd);
 }
 
 static void blk_log_writes_refresh_limits(BlockDriverState *bs, Error **errp)
@@ -521,6 +493,13 @@ blk_log_writes_co_pdiscard(BlockDriverState *bs, int64_t offset, int count)
                                  LOG_DISCARD_FLAG, false);
 }
 
+static const char *const blk_log_writes_strong_runtime_opts[] = {
+    "log-append",
+    "log-sector-size",
+
+    NULL
+};
+
 static BlockDriver bdrv_blk_log_writes = {
     .format_name            = "blklogwrites",
     .instance_size          = sizeof(BDRVBlkLogWritesState),
@@ -528,7 +507,6 @@ static BlockDriver bdrv_blk_log_writes = {
     .bdrv_open              = blk_log_writes_open,
     .bdrv_close             = blk_log_writes_close,
     .bdrv_getlength         = blk_log_writes_getlength,
-    .bdrv_refresh_filename  = blk_log_writes_refresh_filename,
     .bdrv_child_perm        = blk_log_writes_child_perm,
     .bdrv_refresh_limits    = blk_log_writes_refresh_limits,
 
@@ -537,9 +515,9 @@ static BlockDriver bdrv_blk_log_writes = {
     .bdrv_co_pwrite_zeroes  = blk_log_writes_co_pwrite_zeroes,
     .bdrv_co_flush_to_disk  = blk_log_writes_co_flush_to_disk,
     .bdrv_co_pdiscard       = blk_log_writes_co_pdiscard,
-    .bdrv_co_block_status   = bdrv_co_block_status_from_file,
 
     .is_filter              = true,
+    .strong_runtime_opts    = blk_log_writes_strong_runtime_opts,
 };
 
 static void bdrv_blk_log_writes_init(void)

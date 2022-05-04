@@ -12,7 +12,6 @@ Authors:
 This work is licensed under the terms of the GNU GPL, version 2 or later. See
 the COPYING file in the top-level directory.
 """
-from __future__ import print_function
 
 import ctypes
 import struct
@@ -163,13 +162,14 @@ class ELF(object):
         phdr = get_arch_phdr(self.endianness, self.elfclass)
         phdr.p_type = p_type
         phdr.p_paddr = p_paddr
+        phdr.p_vaddr = p_paddr
         phdr.p_filesz = p_size
         phdr.p_memsz = p_size
         self.segments.append(phdr)
         self.ehdr.e_phnum += 1
 
     def to_file(self, elf_file):
-        """Writes all ELF structures to the the passed file.
+        """Writes all ELF structures to the passed file.
 
         Structure:
         Ehdr

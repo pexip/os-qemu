@@ -12,6 +12,7 @@
 
 #include "qemu/osdep.h"
 #include "sysemu/hostmem.h"
+#include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "qapi/error.h"
 #include "qapi/qapi-builtin-visit.h"
@@ -28,6 +29,16 @@ QEMU_BUILD_BUG_ON(HOST_MEM_POLICY_BIND != MPOL_BIND);
 QEMU_BUILD_BUG_ON(HOST_MEM_POLICY_INTERLEAVE != MPOL_INTERLEAVE);
 #endif
 
+char *
+host_memory_backend_get_name(HostMemoryBackend *backend)
+{
+    if (!backend->use_canonical_path) {
+        return g_strdup(object_get_canonical_path_component(OBJECT(backend)));
+    }
+
+    return object_get_canonical_path(OBJECT(backend));
+}
+
 static void
 host_memory_backend_get_size(Object *obj, Visitor *v, const char *name,
                              void *opaque, Error **errp)
@@ -43,26 +54,24 @@ host_memory_backend_set_size(Object *obj, Visitor *v, const char *name,
                              void *opaque, Error **errp)
 {
     HostMemoryBackend *backend = MEMORY_BACKEND(obj);
-    Error *local_err = NULL;
     uint64_t value;
 
     if (host_memory_backend_mr_inited(backend)) {
-        error_setg(&local_err, "cannot change property value");
-        goto out;
+        error_setg(errp, "cannot change property %s of %s ", name,
+                   object_get_typename(obj));
+        return;
     }
 
-    visit_type_size(v, name, &value, &local_err);
-    if (local_err) {
-        goto out;
+    if (!visit_type_size(v, name, &value, errp)) {
+        return;
     }
     if (!value) {
-        error_setg(&local_err, "Property '%s.%s' doesn't take value '%"
-                   PRIu64 "'", object_get_typename(obj), name, value);
-        goto out;
+        error_setg(errp,
+                   "property '%s' of %s doesn't take value '%" PRIu64 "'",
+                   name, object_get_typename(obj), value);
+        return;
     }
     backend->size = value;
-out:
-    error_propagate(errp, local_err);
 }
 
 static void
@@ -76,7 +85,7 @@ host_memory_backend_get_host_nodes(Object *obj, Visitor *v, const char *name,
 
     value = find_first_bit(backend->host_nodes, MAX_NODES);
     if (value == MAX_NODES) {
-        return;
+        goto ret;
     }
 
     *node = g_malloc0(sizeof(**node));
@@ -94,6 +103,7 @@ host_memory_backend_get_host_nodes(Object *obj, Visitor *v, const char *name,
         node = &(*node)->next;
     } while (true);
 
+ret:
     visit_type_uint16List(v, name, &host_nodes, errp);
 }
 
@@ -103,14 +113,23 @@ host_memory_backend_set_host_nodes(Object *obj, Visitor *v, const char *name,
 {
 #ifdef CONFIG_NUMA
     HostMemoryBackend *backend = MEMORY_BACKEND(obj);
-    uint16List *l = NULL;
+    uint16List *l, *host_nodes = NULL;
 
-    visit_type_uint16List(v, name, &l, errp);
+    visit_type_uint16List(v, name, &host_nodes, errp);
 
-    while (l) {
-        bitmap_set(backend->host_nodes, l->value, 1);
-        l = l->next;
+    for (l = host_nodes; l; l = l->next) {
+        if (l->value >= MAX_NODES) {
+            error_setg(errp, "Invalid host-nodes value: %d", l->value);
+            goto out;
+        }
     }
+
+    for (l = host_nodes; l; l = l->next) {
+        bitmap_set(backend->host_nodes, l->value, 1);
+    }
+
+out:
+    qapi_free_uint16List(host_nodes);
 #else
     error_setg(errp, "NUMA node binding are not supported by this QEMU");
 #endif
@@ -192,7 +211,7 @@ static bool host_memory_backend_get_prealloc(Object *obj, Error **errp)
 {
     HostMemoryBackend *backend = MEMORY_BACKEND(obj);
 
-    return backend->prealloc || backend->force_prealloc;
+    return backend->prealloc;
 }
 
 static void host_memory_backend_set_prealloc(Object *obj, bool value,
@@ -200,14 +219,6 @@ static void host_memory_backend_set_prealloc(Object *obj, bool value,
 {
     Error *local_err = NULL;
     HostMemoryBackend *backend = MEMORY_BACKEND(obj);
-
-    if (backend->force_prealloc) {
-        if (value) {
-            error_setg(errp,
-                       "remove -mem-prealloc to use the prealloc property");
-            return;
-        }
-    }
 
     if (!host_memory_backend_mr_inited(backend)) {
         backend->prealloc = value;
@@ -219,7 +230,7 @@ static void host_memory_backend_set_prealloc(Object *obj, bool value,
         void *ptr = memory_region_get_ram_ptr(&backend->mr);
         uint64_t sz = memory_region_size(&backend->mr);
 
-        os_mem_prealloc(fd, ptr, sz, smp_cpus, &local_err);
+        os_mem_prealloc(fd, ptr, sz, backend->prealloc_threads, &local_err);
         if (local_err) {
             error_propagate(errp, local_err);
             return;
@@ -228,14 +239,44 @@ static void host_memory_backend_set_prealloc(Object *obj, bool value,
     }
 }
 
+static void host_memory_backend_get_prealloc_threads(Object *obj, Visitor *v,
+    const char *name, void *opaque, Error **errp)
+{
+    HostMemoryBackend *backend = MEMORY_BACKEND(obj);
+    visit_type_uint32(v, name, &backend->prealloc_threads, errp);
+}
+
+static void host_memory_backend_set_prealloc_threads(Object *obj, Visitor *v,
+    const char *name, void *opaque, Error **errp)
+{
+    HostMemoryBackend *backend = MEMORY_BACKEND(obj);
+    uint32_t value;
+
+    if (!visit_type_uint32(v, name, &value, errp)) {
+        return;
+    }
+    if (value <= 0) {
+        error_setg(errp, "property '%s' of %s doesn't take value '%d'", name,
+                   object_get_typename(obj), value);
+        return;
+    }
+    backend->prealloc_threads = value;
+}
+
 static void host_memory_backend_init(Object *obj)
 {
     HostMemoryBackend *backend = MEMORY_BACKEND(obj);
     MachineState *machine = MACHINE(qdev_get_machine());
 
+    /* TODO: convert access to globals to compat properties */
     backend->merge = machine_mem_merge(machine);
     backend->dump = machine_dump_guest_core(machine);
-    backend->prealloc = mem_prealloc;
+    backend->prealloc_threads = 1;
+}
+
+static void host_memory_backend_post_init(Object *obj)
+{
+    object_apply_compat_props(obj);
 }
 
 bool host_memory_backend_mr_inited(HostMemoryBackend *backend)
@@ -275,7 +316,7 @@ size_t host_memory_backend_pagesize(HostMemoryBackend *memdev)
 #else
 size_t host_memory_backend_pagesize(HostMemoryBackend *memdev)
 {
-    return getpagesize();
+    return qemu_real_host_page_size;
 }
 #endif
 
@@ -333,8 +374,10 @@ host_memory_backend_memory_complete(UserCreatable *uc, Error **errp)
         assert(sizeof(backend->host_nodes) >=
                BITS_TO_LONGS(MAX_NODES + 1) * sizeof(unsigned long));
         assert(maxnode <= MAX_NODES);
-        if (mbind(ptr, sz, backend->policy,
-                  maxnode ? backend->host_nodes : NULL, maxnode + 1, flags)) {
+
+        if (maxnode &&
+            mbind(ptr, sz, backend->policy, backend->host_nodes, maxnode + 1,
+                  flags)) {
             if (backend->policy != MPOL_DEFAULT || errno != ENOSYS) {
                 error_setg_errno(errp, errno,
                                  "cannot bind memory to host NUMA nodes");
@@ -348,7 +391,7 @@ host_memory_backend_memory_complete(UserCreatable *uc, Error **errp)
          */
         if (backend->prealloc) {
             os_mem_prealloc(memory_region_get_fd(&backend->mr), ptr, sz,
-                            smp_cpus, &local_err);
+                            backend->prealloc_threads, &local_err);
             if (local_err) {
                 goto out;
             }
@@ -386,6 +429,23 @@ static void host_memory_backend_set_share(Object *o, bool value, Error **errp)
     backend->share = value;
 }
 
+static bool
+host_memory_backend_get_use_canonical_path(Object *obj, Error **errp)
+{
+    HostMemoryBackend *backend = MEMORY_BACKEND(obj);
+
+    return backend->use_canonical_path;
+}
+
+static void
+host_memory_backend_set_use_canonical_path(Object *obj, bool value,
+                                           Error **errp)
+{
+    HostMemoryBackend *backend = MEMORY_BACKEND(obj);
+
+    backend->use_canonical_path = value;
+}
+
 static void
 host_memory_backend_class_init(ObjectClass *oc, void *data)
 {
@@ -396,42 +456,50 @@ host_memory_backend_class_init(ObjectClass *oc, void *data)
 
     object_class_property_add_bool(oc, "merge",
         host_memory_backend_get_merge,
-        host_memory_backend_set_merge, &error_abort);
+        host_memory_backend_set_merge);
     object_class_property_set_description(oc, "merge",
-        "Mark memory as mergeable", &error_abort);
+        "Mark memory as mergeable");
     object_class_property_add_bool(oc, "dump",
         host_memory_backend_get_dump,
-        host_memory_backend_set_dump, &error_abort);
+        host_memory_backend_set_dump);
     object_class_property_set_description(oc, "dump",
-        "Set to 'off' to exclude from core dump", &error_abort);
+        "Set to 'off' to exclude from core dump");
     object_class_property_add_bool(oc, "prealloc",
         host_memory_backend_get_prealloc,
-        host_memory_backend_set_prealloc, &error_abort);
+        host_memory_backend_set_prealloc);
     object_class_property_set_description(oc, "prealloc",
-        "Preallocate memory", &error_abort);
+        "Preallocate memory");
+    object_class_property_add(oc, "prealloc-threads", "int",
+        host_memory_backend_get_prealloc_threads,
+        host_memory_backend_set_prealloc_threads,
+        NULL, NULL);
+    object_class_property_set_description(oc, "prealloc-threads",
+        "Number of CPU threads to use for prealloc");
     object_class_property_add(oc, "size", "int",
         host_memory_backend_get_size,
         host_memory_backend_set_size,
-        NULL, NULL, &error_abort);
+        NULL, NULL);
     object_class_property_set_description(oc, "size",
-        "Size of the memory region (ex: 500M)", &error_abort);
+        "Size of the memory region (ex: 500M)");
     object_class_property_add(oc, "host-nodes", "int",
         host_memory_backend_get_host_nodes,
         host_memory_backend_set_host_nodes,
-        NULL, NULL, &error_abort);
+        NULL, NULL);
     object_class_property_set_description(oc, "host-nodes",
-        "Binds memory to the list of NUMA host nodes", &error_abort);
+        "Binds memory to the list of NUMA host nodes");
     object_class_property_add_enum(oc, "policy", "HostMemPolicy",
         &HostMemPolicy_lookup,
         host_memory_backend_get_policy,
-        host_memory_backend_set_policy, &error_abort);
+        host_memory_backend_set_policy);
     object_class_property_set_description(oc, "policy",
-        "Set the NUMA policy", &error_abort);
+        "Set the NUMA policy");
     object_class_property_add_bool(oc, "share",
-        host_memory_backend_get_share, host_memory_backend_set_share,
-        &error_abort);
+        host_memory_backend_get_share, host_memory_backend_set_share);
     object_class_property_set_description(oc, "share",
-        "Mark the memory as private to QEMU or shared", &error_abort);
+        "Mark the memory as private to QEMU or shared");
+    object_class_property_add_bool(oc, "x-use-canonical-path-for-ramblock-id",
+        host_memory_backend_get_use_canonical_path,
+        host_memory_backend_set_use_canonical_path);
 }
 
 static const TypeInfo host_memory_backend_info = {
@@ -442,6 +510,7 @@ static const TypeInfo host_memory_backend_info = {
     .class_init = host_memory_backend_class_init,
     .instance_size = sizeof(HostMemoryBackend),
     .instance_init = host_memory_backend_init,
+    .instance_post_init = host_memory_backend_post_init,
     .interfaces = (InterfaceInfo[]) {
         { TYPE_USER_CREATABLE },
         { }

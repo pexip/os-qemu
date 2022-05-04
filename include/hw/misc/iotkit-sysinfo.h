@@ -14,6 +14,8 @@
  * Arm IoTKit and documented in
  * http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.ecm0601256/index.html
  * QEMU interface:
+ *  + QOM property "SYS_VERSION": value to use for SYS_VERSION register
+ *  + QOM property "SYS_CONFIG": value to use for SYS_CONFIG register
  *  + sysbus MMIO region 0: the system information register bank
  */
 
@@ -21,17 +23,21 @@
 #define HW_MISC_IOTKIT_SYSINFO_H
 
 #include "hw/sysbus.h"
+#include "qom/object.h"
 
 #define TYPE_IOTKIT_SYSINFO "iotkit-sysinfo"
-#define IOTKIT_SYSINFO(obj) OBJECT_CHECK(IoTKitSysInfo, (obj), \
-                                        TYPE_IOTKIT_SYSINFO)
+OBJECT_DECLARE_SIMPLE_TYPE(IoTKitSysInfo, IOTKIT_SYSINFO)
 
-typedef struct IoTKitSysInfo {
+struct IoTKitSysInfo {
     /*< private >*/
     SysBusDevice parent_obj;
 
     /*< public >*/
     MemoryRegion iomem;
-} IoTKitSysInfo;
+
+    /* Properties */
+    uint32_t sys_version;
+    uint32_t sys_config;
+};
 
 #endif
