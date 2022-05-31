@@ -16,18 +16,21 @@
  * Contributions after 2012-01-13 are licensed under the terms of the
  * GNU GPL, version 2 or (at your option) any later version.
  */
+
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "qemu/cutils.h"
-#include "hw/hw.h"
 #include "hw/pci/pci.h"
+#include "hw/qdev-properties.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
 #include "sysemu/kvm.h"
 #include "migration/blocker.h"
+#include "migration/vmstate.h"
 #include "qemu/error-report.h"
 #include "qemu/event_notifier.h"
+#include "qemu/module.h"
 #include "qom/object_interfaces.h"
 #include "chardev/char-fe.h"
 #include "sysemu/hostmem.h"
@@ -35,6 +38,7 @@
 #include "qapi/visitor.h"
 
 #include "hw/misc/ivshmem.h"
+#include "qom/object.h"
 
 #define PCI_VENDOR_ID_IVSHMEM   PCI_VENDOR_ID_REDHAT_QUMRANET
 #define PCI_DEVICE_ID_IVSHMEM   0x1110
@@ -54,20 +58,21 @@
     } while (0)
 
 #define TYPE_IVSHMEM_COMMON "ivshmem-common"
-#define IVSHMEM_COMMON(obj) \
-    OBJECT_CHECK(IVShmemState, (obj), TYPE_IVSHMEM_COMMON)
+typedef struct IVShmemState IVShmemState;
+DECLARE_INSTANCE_CHECKER(IVShmemState, IVSHMEM_COMMON,
+                         TYPE_IVSHMEM_COMMON)
 
 #define TYPE_IVSHMEM_PLAIN "ivshmem-plain"
-#define IVSHMEM_PLAIN(obj) \
-    OBJECT_CHECK(IVShmemState, (obj), TYPE_IVSHMEM_PLAIN)
+DECLARE_INSTANCE_CHECKER(IVShmemState, IVSHMEM_PLAIN,
+                         TYPE_IVSHMEM_PLAIN)
 
 #define TYPE_IVSHMEM_DOORBELL "ivshmem-doorbell"
-#define IVSHMEM_DOORBELL(obj) \
-    OBJECT_CHECK(IVShmemState, (obj), TYPE_IVSHMEM_DOORBELL)
+DECLARE_INSTANCE_CHECKER(IVShmemState, IVSHMEM_DOORBELL,
+                         TYPE_IVSHMEM_DOORBELL)
 
 #define TYPE_IVSHMEM "ivshmem"
-#define IVSHMEM(obj) \
-    OBJECT_CHECK(IVShmemState, (obj), TYPE_IVSHMEM)
+DECLARE_INSTANCE_CHECKER(IVShmemState, IVSHMEM,
+                         TYPE_IVSHMEM)
 
 typedef struct Peer {
     int nb_eventfds;
@@ -80,7 +85,7 @@ typedef struct MSIVector {
     bool unmasked;
 } MSIVector;
 
-typedef struct IVShmemState {
+struct IVShmemState {
     /*< private >*/
     PCIDevice parent_obj;
     /*< public >*/
@@ -112,14 +117,7 @@ typedef struct IVShmemState {
     /* migration stuff */
     OnOffAuto master;
     Error *migration_blocker;
-
-    /* legacy cruft */
-    char *role;
-    char *shmobj;
-    char *sizearg;
-    size_t legacy_size;
-    uint32_t not_legacy_32bit;
-} IVShmemState;
+};
 
 /* registers for the Inter-VM shared memory device */
 enum ivshmem_registers {
@@ -140,44 +138,11 @@ static inline bool ivshmem_is_master(IVShmemState *s)
     return s->master == ON_OFF_AUTO_ON;
 }
 
-static void ivshmem_update_irq(IVShmemState *s)
-{
-    PCIDevice *d = PCI_DEVICE(s);
-    uint32_t isr = s->intrstatus & s->intrmask;
-
-    /*
-     * Do nothing unless the device actually uses INTx.  Here's how
-     * the device variants signal interrupts, what they put in PCI
-     * config space:
-     * Device variant    Interrupt  Interrupt Pin  MSI-X cap.
-     * ivshmem-plain         none            0         no
-     * ivshmem-doorbell     MSI-X            1        yes(1)
-     * ivshmem,msi=off       INTx            1         no
-     * ivshmem,msi=on       MSI-X            1(2)     yes(1)
-     * (1) if guest enabled MSI-X
-     * (2) the device lies
-     * Leads to the condition for doing nothing:
-     */
-    if (ivshmem_has_feature(s, IVSHMEM_MSI)
-        || !d->config[PCI_INTERRUPT_PIN]) {
-        return;
-    }
-
-    /* don't print ISR resets */
-    if (isr) {
-        IVSHMEM_DPRINTF("Set IRQ to %d (%04x %04x)\n",
-                        isr ? 1 : 0, s->intrstatus, s->intrmask);
-    }
-
-    pci_set_irq(d, isr != 0);
-}
-
 static void ivshmem_IntrMask_write(IVShmemState *s, uint32_t val)
 {
     IVSHMEM_DPRINTF("IntrMask write(w) val = 0x%04x\n", val);
 
     s->intrmask = val;
-    ivshmem_update_irq(s);
 }
 
 static uint32_t ivshmem_IntrMask_read(IVShmemState *s)
@@ -193,7 +158,6 @@ static void ivshmem_IntrStatus_write(IVShmemState *s, uint32_t val)
     IVSHMEM_DPRINTF("IntrStatus write(w) val = 0x%04x\n", val);
 
     s->intrstatus = val;
-    ivshmem_update_irq(s);
 }
 
 static uint32_t ivshmem_IntrStatus_read(IVShmemState *s)
@@ -202,7 +166,6 @@ static uint32_t ivshmem_IntrStatus_read(IVShmemState *s)
 
     /* reading ISR clears all interrupts */
     s->intrstatus = 0;
-    ivshmem_update_irq(s);
     return ret;
 }
 
@@ -528,17 +491,6 @@ static void process_msg_shmem(IVShmemState *s, int fd, Error **errp)
     }
 
     size = buf.st_size;
-
-    /* Legacy cruft */
-    if (s->legacy_size != SIZE_MAX) {
-        if (size < s->legacy_size) {
-            error_setg(errp, "server sent only %zd bytes of shared memory",
-                       (size_t)buf.st_size);
-            close(fd);
-            return;
-        }
-        size = s->legacy_size;
-    }
 
     /* mmap the region and map into the BAR2 */
     memory_region_init_ram_from_fd(&s->server_bar2, OBJECT(s),
@@ -882,9 +834,6 @@ static void ivshmem_common_realize(PCIDevice *dev, Error **errp)
     IVShmemState *s = IVSHMEM_COMMON(dev);
     Error *err = NULL;
     uint8_t *pci_conf;
-    uint8_t attr = PCI_BASE_ADDRESS_SPACE_MEMORY |
-        PCI_BASE_ADDRESS_MEM_PREFETCH;
-    Error *local_err = NULL;
 
     /* IRQFD requires MSI */
     if (ivshmem_has_feature(s, IVSHMEM_IOEVENTFD) &&
@@ -902,10 +851,6 @@ static void ivshmem_common_realize(PCIDevice *dev, Error **errp)
     /* region for registers*/
     pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
                      &s->ivshmem_mmio);
-
-    if (s->not_legacy_32bit) {
-        attr |= PCI_BASE_ADDRESS_MEM_TYPE_64;
-    }
 
     if (s->hostmem != NULL) {
         IVSHMEM_DPRINTF("using hostmem\n");
@@ -955,16 +900,18 @@ static void ivshmem_common_realize(PCIDevice *dev, Error **errp)
     if (!ivshmem_is_master(s)) {
         error_setg(&s->migration_blocker,
                    "Migration is disabled when using feature 'peer mode' in device 'ivshmem'");
-        migrate_add_blocker(s->migration_blocker, &local_err);
-        if (local_err) {
-            error_propagate(errp, local_err);
+        if (migrate_add_blocker(s->migration_blocker, errp) < 0) {
             error_free(s->migration_blocker);
             return;
         }
     }
 
     vmstate_register_ram(s->ivshmem_bar2, DEVICE(s));
-    pci_register_bar(PCI_DEVICE(s), 2, attr, s->ivshmem_bar2);
+    pci_register_bar(PCI_DEVICE(s), 2,
+                     PCI_BASE_ADDRESS_SPACE_MEMORY |
+                     PCI_BASE_ADDRESS_MEM_PREFETCH |
+                     PCI_BASE_ADDRESS_MEM_TYPE_64,
+                     s->ivshmem_bar2);
 }
 
 static void ivshmem_exit(PCIDevice *dev)
@@ -1084,13 +1031,6 @@ static Property ivshmem_plain_properties[] = {
     DEFINE_PROP_END_OF_LIST(),
 };
 
-static void ivshmem_plain_init(Object *obj)
-{
-    IVShmemState *s = IVSHMEM_PLAIN(obj);
-
-    s->not_legacy_32bit = 1;
-}
-
 static void ivshmem_plain_realize(PCIDevice *dev, Error **errp)
 {
     IVShmemState *s = IVSHMEM_COMMON(dev);
@@ -1099,9 +1039,8 @@ static void ivshmem_plain_realize(PCIDevice *dev, Error **errp)
         error_setg(errp, "You must specify a 'memdev'");
         return;
     } else if (host_memory_backend_is_mapped(s->hostmem)) {
-        char *path = object_get_canonical_path_component(OBJECT(s->hostmem));
-        error_setg(errp, "can't use already busy memdev: %s", path);
-        g_free(path);
+        error_setg(errp, "can't use already busy memdev: %s",
+                   object_get_canonical_path_component(OBJECT(s->hostmem)));
         return;
     }
 
@@ -1114,7 +1053,7 @@ static void ivshmem_plain_class_init(ObjectClass *klass, void *data)
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
     k->realize = ivshmem_plain_realize;
-    dc->props = ivshmem_plain_properties;
+    device_class_set_props(dc, ivshmem_plain_properties);
     dc->vmsd = &ivshmem_plain_vmsd;
 }
 
@@ -1122,7 +1061,6 @@ static const TypeInfo ivshmem_plain_info = {
     .name          = TYPE_IVSHMEM_PLAIN,
     .parent        = TYPE_IVSHMEM_COMMON,
     .instance_size = sizeof(IVShmemState),
-    .instance_init = ivshmem_plain_init,
     .class_init    = ivshmem_plain_class_init,
 };
 
@@ -1155,8 +1093,6 @@ static void ivshmem_doorbell_init(Object *obj)
     IVShmemState *s = IVSHMEM_DOORBELL(obj);
 
     s->features |= (1 << IVSHMEM_MSI);
-    s->legacy_size = SIZE_MAX;  /* whatever the server sends */
-    s->not_legacy_32bit = 1;
 }
 
 static void ivshmem_doorbell_realize(PCIDevice *dev, Error **errp)
@@ -1177,7 +1113,7 @@ static void ivshmem_doorbell_class_init(ObjectClass *klass, void *data)
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
     k->realize = ivshmem_doorbell_realize;
-    dc->props = ivshmem_doorbell_properties;
+    device_class_set_props(dc, ivshmem_doorbell_properties);
     dc->vmsd = &ivshmem_doorbell_vmsd;
 }
 
@@ -1189,181 +1125,11 @@ static const TypeInfo ivshmem_doorbell_info = {
     .class_init    = ivshmem_doorbell_class_init,
 };
 
-static int ivshmem_load_old(QEMUFile *f, void *opaque, int version_id)
-{
-    IVShmemState *s = opaque;
-    PCIDevice *pdev = PCI_DEVICE(s);
-    int ret;
-
-    IVSHMEM_DPRINTF("ivshmem_load_old\n");
-
-    if (version_id != 0) {
-        return -EINVAL;
-    }
-
-    ret = ivshmem_pre_load(s);
-    if (ret) {
-        return ret;
-    }
-
-    ret = pci_device_load(pdev, f);
-    if (ret) {
-        return ret;
-    }
-
-    if (ivshmem_has_feature(s, IVSHMEM_MSI)) {
-        msix_load(pdev, f);
-        ivshmem_msix_vector_use(s);
-    } else {
-        s->intrstatus = qemu_get_be32(f);
-        s->intrmask = qemu_get_be32(f);
-    }
-
-    return 0;
-}
-
-static bool test_msix(void *opaque, int version_id)
-{
-    IVShmemState *s = opaque;
-
-    return ivshmem_has_feature(s, IVSHMEM_MSI);
-}
-
-static bool test_no_msix(void *opaque, int version_id)
-{
-    return !test_msix(opaque, version_id);
-}
-
-static const VMStateDescription ivshmem_vmsd = {
-    .name = "ivshmem",
-    .version_id = 1,
-    .minimum_version_id = 1,
-    .pre_load = ivshmem_pre_load,
-    .post_load = ivshmem_post_load,
-    .fields = (VMStateField[]) {
-        VMSTATE_PCI_DEVICE(parent_obj, IVShmemState),
-
-        VMSTATE_MSIX_TEST(parent_obj, IVShmemState, test_msix),
-        VMSTATE_UINT32_TEST(intrstatus, IVShmemState, test_no_msix),
-        VMSTATE_UINT32_TEST(intrmask, IVShmemState, test_no_msix),
-
-        VMSTATE_END_OF_LIST()
-    },
-    .load_state_old = ivshmem_load_old,
-    .minimum_version_id_old = 0
-};
-
-static Property ivshmem_properties[] = {
-    DEFINE_PROP_CHR("chardev", IVShmemState, server_chr),
-    DEFINE_PROP_STRING("size", IVShmemState, sizearg),
-    DEFINE_PROP_UINT32("vectors", IVShmemState, vectors, 1),
-    DEFINE_PROP_BIT("ioeventfd", IVShmemState, features, IVSHMEM_IOEVENTFD,
-                    false),
-    DEFINE_PROP_BIT("msi", IVShmemState, features, IVSHMEM_MSI, true),
-    DEFINE_PROP_STRING("shm", IVShmemState, shmobj),
-    DEFINE_PROP_STRING("role", IVShmemState, role),
-    DEFINE_PROP_UINT32("use64", IVShmemState, not_legacy_32bit, 1),
-    DEFINE_PROP_END_OF_LIST(),
-};
-
-static void desugar_shm(IVShmemState *s)
-{
-    Object *obj;
-    char *path;
-
-    obj = object_new("memory-backend-file");
-    path = g_strdup_printf("/dev/shm/%s", s->shmobj);
-    object_property_set_str(obj, path, "mem-path", &error_abort);
-    g_free(path);
-    object_property_set_int(obj, s->legacy_size, "size", &error_abort);
-    object_property_set_bool(obj, true, "share", &error_abort);
-    object_property_add_child(OBJECT(s), "internal-shm-backend", obj,
-                              &error_abort);
-    object_unref(obj);
-    user_creatable_complete(obj, &error_abort);
-    s->hostmem = MEMORY_BACKEND(obj);
-}
-
-static void ivshmem_realize(PCIDevice *dev, Error **errp)
-{
-    IVShmemState *s = IVSHMEM_COMMON(dev);
-
-    if (!qtest_enabled()) {
-        warn_report("ivshmem is deprecated, please use ivshmem-plain"
-                    " or ivshmem-doorbell instead");
-    }
-
-    if (qemu_chr_fe_backend_connected(&s->server_chr) + !!s->shmobj != 1) {
-        error_setg(errp, "You must specify either 'shm' or 'chardev'");
-        return;
-    }
-
-    if (s->sizearg == NULL) {
-        s->legacy_size = 4 * MiB; /* 4 MB default */
-    } else {
-        int ret;
-        uint64_t size;
-
-        ret = qemu_strtosz_MiB(s->sizearg, NULL, &size);
-        if (ret < 0 || (size_t)size != size || !is_power_of_2(size)) {
-            error_setg(errp, "Invalid size %s", s->sizearg);
-            return;
-        }
-        s->legacy_size = size;
-    }
-
-    /* check that role is reasonable */
-    if (s->role) {
-        if (strncmp(s->role, "peer", 5) == 0) {
-            s->master = ON_OFF_AUTO_OFF;
-        } else if (strncmp(s->role, "master", 7) == 0) {
-            s->master = ON_OFF_AUTO_ON;
-        } else {
-            error_setg(errp, "'role' must be 'peer' or 'master'");
-            return;
-        }
-    } else {
-        s->master = ON_OFF_AUTO_AUTO;
-    }
-
-    if (s->shmobj) {
-        desugar_shm(s);
-    }
-
-    /*
-     * Note: we don't use INTx with IVSHMEM_MSI at all, so this is a
-     * bald-faced lie then.  But it's a backwards compatible lie.
-     */
-    pci_config_set_interrupt_pin(dev->config, 1);
-
-    ivshmem_common_realize(dev, errp);
-}
-
-static void ivshmem_class_init(ObjectClass *klass, void *data)
-{
-    DeviceClass *dc = DEVICE_CLASS(klass);
-    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
-
-    k->realize = ivshmem_realize;
-    k->revision = 0;
-    dc->desc = "Inter-VM shared memory (legacy)";
-    dc->props = ivshmem_properties;
-    dc->vmsd = &ivshmem_vmsd;
-}
-
-static const TypeInfo ivshmem_info = {
-    .name          = TYPE_IVSHMEM,
-    .parent        = TYPE_IVSHMEM_COMMON,
-    .instance_size = sizeof(IVShmemState),
-    .class_init    = ivshmem_class_init,
-};
-
 static void ivshmem_register_types(void)
 {
     type_register_static(&ivshmem_common_info);
     type_register_static(&ivshmem_plain_info);
     type_register_static(&ivshmem_doorbell_info);
-    type_register_static(&ivshmem_info);
 }
 
 type_init(ivshmem_register_types)

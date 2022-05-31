@@ -24,25 +24,27 @@
 
 #include "qemu/osdep.h"
 
-#include "hw/qdev.h"
+#include "hw/qdev-properties.h"
 #include "qom/object.h"
+#include "qapi/error.h"
 #include "qapi/visitor.h"
 
 
 #define TYPE_STATIC_PROPS "static_prop_type"
-#define STATIC_TYPE(obj) \
-    OBJECT_CHECK(MyType, (obj), TYPE_STATIC_PROPS)
+typedef struct MyType MyType;
+DECLARE_INSTANCE_CHECKER(MyType, STATIC_TYPE,
+                         TYPE_STATIC_PROPS)
 
 #define TYPE_SUBCLASS "static_prop_subtype"
 
 #define PROP_DEFAULT 100
 
-typedef struct MyType {
+struct MyType {
     DeviceState parent_obj;
 
     uint32_t prop1;
     uint32_t prop2;
-} MyType;
+};
 
 static Property static_props[] = {
     DEFINE_PROP_UINT32("prop1", MyType, prop1, PROP_DEFAULT),
@@ -55,7 +57,7 @@ static void static_prop_class_init(ObjectClass *oc, void *data)
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = NULL;
-    dc->props = static_props;
+    device_class_set_props(dc, static_props);
 }
 
 static const TypeInfo static_prop_type = {
@@ -76,7 +78,7 @@ static void test_static_prop_subprocess(void)
     MyType *mt;
 
     mt = STATIC_TYPE(object_new(TYPE_STATIC_PROPS));
-    qdev_init_nofail(DEVICE(mt));
+    qdev_realize(DEVICE(mt), NULL, &error_fatal);
 
     g_assert_cmpuint(mt->prop1, ==, PROP_DEFAULT);
 }
@@ -89,6 +91,16 @@ static void test_static_prop(void)
     g_test_trap_assert_stdout("");
 }
 
+static void register_global_properties(GlobalProperty *props)
+{
+    int i;
+
+    for (i = 0; props[i].driver != NULL; i++) {
+        qdev_prop_register_global(props + i);
+    }
+}
+
+
 /* Test setting of static property using global properties */
 static void test_static_globalprop_subprocess(void)
 {
@@ -98,10 +110,10 @@ static void test_static_globalprop_subprocess(void)
         {}
     };
 
-    qdev_prop_register_global_list(props);
+    register_global_properties(props);
 
     mt = STATIC_TYPE(object_new(TYPE_STATIC_PROPS));
-    qdev_init_nofail(DEVICE(mt));
+    qdev_realize(DEVICE(mt), NULL, &error_fatal);
 
     g_assert_cmpuint(mt->prop1, ==, 200);
     g_assert_cmpuint(mt->prop2, ==, PROP_DEFAULT);
@@ -116,8 +128,8 @@ static void test_static_globalprop(void)
 }
 
 #define TYPE_DYNAMIC_PROPS "dynamic-prop-type"
-#define DYNAMIC_TYPE(obj) \
-    OBJECT_CHECK(MyType, (obj), TYPE_DYNAMIC_PROPS)
+DECLARE_INSTANCE_CHECKER(MyType, DYNAMIC_TYPE,
+                         TYPE_DYNAMIC_PROPS)
 
 #define TYPE_UNUSED_HOTPLUG   "hotplug-type"
 #define TYPE_UNUSED_NOHOTPLUG "nohotplug-type"
@@ -141,9 +153,9 @@ static void prop2_accessor(Object *obj, Visitor *v, const char *name,
 static void dynamic_instance_init(Object *obj)
 {
     object_property_add(obj, "prop1", "uint32", prop1_accessor, prop1_accessor,
-                        NULL, NULL, NULL);
+                        NULL, NULL);
     object_property_add(obj, "prop2", "uint32", prop2_accessor, prop2_accessor,
-                        NULL, NULL, NULL);
+                        NULL, NULL);
 }
 
 static void dynamic_class_init(ObjectClass *oc, void *data)
@@ -206,25 +218,25 @@ static void test_dynamic_globalprop_subprocess(void)
 {
     MyType *mt;
     static GlobalProperty props[] = {
-        { TYPE_DYNAMIC_PROPS, "prop1", "101", true },
-        { TYPE_DYNAMIC_PROPS, "prop2", "102", true },
-        { TYPE_DYNAMIC_PROPS"-bad", "prop3", "103", true },
-        { TYPE_UNUSED_HOTPLUG, "prop4", "104", true },
-        { TYPE_UNUSED_NOHOTPLUG, "prop5", "105", true },
-        { TYPE_NONDEVICE, "prop6", "106", true },
+        { TYPE_DYNAMIC_PROPS, "prop1", "101", },
+        { TYPE_DYNAMIC_PROPS, "prop2", "102", },
+        { TYPE_DYNAMIC_PROPS"-bad", "prop3", "103", },
+        { TYPE_UNUSED_HOTPLUG, "prop4", "104", },
+        { TYPE_UNUSED_NOHOTPLUG, "prop5", "105", },
+        { TYPE_NONDEVICE, "prop6", "106", },
         {}
     };
-    int all_used;
+    int global_error;
 
-    qdev_prop_register_global_list(props);
+    register_global_properties(props);
 
     mt = DYNAMIC_TYPE(object_new(TYPE_DYNAMIC_PROPS));
-    qdev_init_nofail(DEVICE(mt));
+    qdev_realize(DEVICE(mt), NULL, &error_fatal);
 
     g_assert_cmpuint(mt->prop1, ==, 101);
     g_assert_cmpuint(mt->prop2, ==, 102);
-    all_used = qdev_prop_check_globals();
-    g_assert_cmpuint(all_used, ==, 1);
+    global_error = qdev_prop_check_globals();
+    g_assert_cmpuint(global_error, ==, 1);
     g_assert(props[0].used);
     g_assert(props[1].used);
     g_assert(!props[2].used);
@@ -239,50 +251,13 @@ static void test_dynamic_globalprop(void)
     g_test_trap_assert_passed();
     g_test_trap_assert_stderr_unmatched("*prop1*");
     g_test_trap_assert_stderr_unmatched("*prop2*");
-    g_test_trap_assert_stderr("*warning: global dynamic-prop-type-bad.prop3 has invalid class name\n*");
+    g_test_trap_assert_stderr(
+        "*warning: global dynamic-prop-type-bad.prop3 has invalid class name*");
     g_test_trap_assert_stderr_unmatched("*prop4*");
-    g_test_trap_assert_stderr("*warning: global nohotplug-type.prop5=105 not used\n*");
-    g_test_trap_assert_stderr("*warning: global nondevice-type.prop6 has invalid class name\n*");
-    g_test_trap_assert_stdout("");
-}
-
-/* Test setting of dynamic properties using user_provided=false properties */
-static void test_dynamic_globalprop_nouser_subprocess(void)
-{
-    MyType *mt;
-    static GlobalProperty props[] = {
-        { TYPE_DYNAMIC_PROPS, "prop1", "101" },
-        { TYPE_DYNAMIC_PROPS, "prop2", "102" },
-        { TYPE_DYNAMIC_PROPS"-bad", "prop3", "103" },
-        { TYPE_UNUSED_HOTPLUG, "prop4", "104" },
-        { TYPE_UNUSED_NOHOTPLUG, "prop5", "105" },
-        { TYPE_NONDEVICE, "prop6", "106" },
-        {}
-    };
-    int all_used;
-
-    qdev_prop_register_global_list(props);
-
-    mt = DYNAMIC_TYPE(object_new(TYPE_DYNAMIC_PROPS));
-    qdev_init_nofail(DEVICE(mt));
-
-    g_assert_cmpuint(mt->prop1, ==, 101);
-    g_assert_cmpuint(mt->prop2, ==, 102);
-    all_used = qdev_prop_check_globals();
-    g_assert_cmpuint(all_used, ==, 0);
-    g_assert(props[0].used);
-    g_assert(props[1].used);
-    g_assert(!props[2].used);
-    g_assert(!props[3].used);
-    g_assert(!props[4].used);
-    g_assert(!props[5].used);
-}
-
-static void test_dynamic_globalprop_nouser(void)
-{
-    g_test_trap_subprocess("/qdev/properties/dynamic/global/nouser/subprocess", 0, 0);
-    g_test_trap_assert_passed();
-    g_test_trap_assert_stderr("");
+    g_test_trap_assert_stderr(
+        "*warning: global nohotplug-type.prop5=105 not used*");
+    g_test_trap_assert_stderr(
+        "*warning: global nondevice-type.prop6 has invalid class name*");
     g_test_trap_assert_stdout("");
 }
 
@@ -299,10 +274,10 @@ static void test_subclass_global_props(void)
         {}
     };
 
-    qdev_prop_register_global_list(props);
+    register_global_properties(props);
 
     mt = STATIC_TYPE(object_new(TYPE_SUBCLASS));
-    qdev_init_nofail(DEVICE(mt));
+    qdev_realize(DEVICE(mt), NULL, &error_fatal);
 
     g_assert_cmpuint(mt->prop1, ==, 102);
     g_assert_cmpuint(mt->prop2, ==, 104);
@@ -334,11 +309,6 @@ int main(int argc, char **argv)
                     test_dynamic_globalprop_subprocess);
     g_test_add_func("/qdev/properties/dynamic/global",
                     test_dynamic_globalprop);
-
-    g_test_add_func("/qdev/properties/dynamic/global/nouser/subprocess",
-                    test_dynamic_globalprop_nouser_subprocess);
-    g_test_add_func("/qdev/properties/dynamic/global/nouser",
-                    test_dynamic_globalprop_nouser);
 
     g_test_add_func("/qdev/properties/global/subclass",
                     test_subclass_global_props);

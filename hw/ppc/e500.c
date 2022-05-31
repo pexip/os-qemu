@@ -15,23 +15,26 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "e500.h"
 #include "e500-ccsr.h"
 #include "net/net.h"
 #include "qemu/config-file.h"
-#include "hw/hw.h"
 #include "hw/char/serial.h"
 #include "hw/pci/pci.h"
 #include "hw/boards.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/kvm.h"
+#include "sysemu/reset.h"
+#include "sysemu/runstate.h"
 #include "kvm_ppc.h"
 #include "sysemu/device_tree.h"
 #include "hw/ppc/openpic.h"
 #include "hw/ppc/openpic_kvm.h"
 #include "hw/ppc/ppc.h"
+#include "hw/qdev-properties.h"
 #include "hw/loader.h"
 #include "elf.h"
 #include "hw/sysbus.h"
@@ -42,6 +45,8 @@
 #include "qemu/error-report.h"
 #include "hw/platform-bus.h"
 #include "hw/net/fsl_etsec/etsec.h"
+#include "hw/i2c/i2c.h"
+#include "hw/irq.h"
 
 #define EPAPR_MAGIC                (0x45504150)
 #define BINARY_DEVICE_TREE_FILE    "mpc8544ds.dtb"
@@ -63,7 +68,10 @@
 #define MPC8544_PCI_REGS_SIZE      0x1000ULL
 #define MPC8544_UTIL_OFFSET        0xe0000ULL
 #define MPC8XXX_GPIO_OFFSET        0x000FF000ULL
+#define MPC8544_I2C_REGS_OFFSET    0x3000ULL
 #define MPC8XXX_GPIO_IRQ           47
+#define MPC8544_I2C_IRQ            43
+#define RTC_REGS_OFFSET            0x68
 
 struct boot_info
 {
@@ -160,6 +168,39 @@ static void create_dt_mpc8xxx_gpio(void *fdt, const char *soc, const char *mpic)
     g_free(node);
     g_free(poweroff);
 }
+
+static void dt_rtc_create(void *fdt, const char *i2c, const char *alias)
+{
+    int offset = RTC_REGS_OFFSET;
+
+    gchar *rtc = g_strdup_printf("%s/rtc@%"PRIx32, i2c, offset);
+    qemu_fdt_add_subnode(fdt, rtc);
+    qemu_fdt_setprop_string(fdt, rtc, "compatible", "pericom,pt7c4338");
+    qemu_fdt_setprop_cells(fdt, rtc, "reg", offset);
+    qemu_fdt_setprop_string(fdt, "/aliases", alias, rtc);
+
+    g_free(rtc);
+}
+
+static void dt_i2c_create(void *fdt, const char *soc, const char *mpic,
+                             const char *alias)
+{
+    hwaddr mmio0 = MPC8544_I2C_REGS_OFFSET;
+    int irq0 = MPC8544_I2C_IRQ;
+
+    gchar *i2c = g_strdup_printf("%s/i2c@%"PRIx64, soc, mmio0);
+    qemu_fdt_add_subnode(fdt, i2c);
+    qemu_fdt_setprop_string(fdt, i2c, "device_type", "i2c");
+    qemu_fdt_setprop_string(fdt, i2c, "compatible", "fsl-i2c");
+    qemu_fdt_setprop_cells(fdt, i2c, "reg", mmio0, 0x14);
+    qemu_fdt_setprop_cells(fdt, i2c, "cell-index", 0);
+    qemu_fdt_setprop_cells(fdt, i2c, "interrupts", irq0, 0x2);
+    qemu_fdt_setprop_phandle(fdt, i2c, "interrupt-parent", mpic);
+    qemu_fdt_setprop_string(fdt, "/aliases", alias, i2c);
+
+    g_free(i2c);
+}
+
 
 typedef struct PlatformDevtreeData {
     void *fdt;
@@ -270,6 +311,7 @@ static int ppce500_load_device_tree(PPCE500MachineState *pms,
                                     bool dry_run)
 {
     MachineState *machine = MACHINE(pms);
+    unsigned int smp_cpus = machine->smp.cpus;
     const PPCE500MachineClass *pmc = PPCE500_MACHINE_GET_CLASS(pms);
     CPUPPCState *env = first_cpu->env_ptr;
     int ret = -1;
@@ -464,6 +506,12 @@ static int ppce500_load_device_tree(PPCE500MachineState *pms,
                          soc, mpic, "serial0", 0, true);
     }
 
+    /* i2c */
+    dt_i2c_create(fdt, soc, mpic, "i2c");
+
+    dt_rtc_create(fdt, "i2c", "rtc");
+
+
     gutil = g_strdup_printf("%s/global-utilities@%llx", soc,
                             MPC8544_UTIL_OFFSET);
     qemu_fdt_add_subnode(fdt, gutil);
@@ -546,6 +594,7 @@ done:
         cpu_physical_memory_write(addr, fdt, fdt_size);
     }
     ret = fdt_size;
+    g_free(fdt);
 
 out:
     g_free(pci_map);
@@ -655,9 +704,6 @@ static void ppce500_cpu_reset_sec(void *opaque)
 
     cpu_reset(cs);
 
-    /* Secondary CPU starts in halted state for now. Needs to change when
-       implementing non-kernel boot. */
-    cs->halted = 1;
     cs->exception_index = EXCP_HLT;
 }
 
@@ -685,27 +731,27 @@ static void ppce500_cpu_reset(void *opaque)
 }
 
 static DeviceState *ppce500_init_mpic_qemu(PPCE500MachineState *pms,
-                                           qemu_irq **irqs)
+                                           IrqLines  *irqs)
 {
     DeviceState *dev;
     SysBusDevice *s;
     int i, j, k;
     MachineState *machine = MACHINE(pms);
+    unsigned int smp_cpus = machine->smp.cpus;
     const PPCE500MachineClass *pmc = PPCE500_MACHINE_GET_CLASS(pms);
 
-    dev = qdev_create(NULL, TYPE_OPENPIC);
-    object_property_add_child(OBJECT(machine), "pic", OBJECT(dev),
-                              &error_fatal);
+    dev = qdev_new(TYPE_OPENPIC);
+    object_property_add_child(OBJECT(machine), "pic", OBJECT(dev));
     qdev_prop_set_uint32(dev, "model", pmc->mpic_version);
     qdev_prop_set_uint32(dev, "nb_cpus", smp_cpus);
 
-    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
 
     k = 0;
     for (i = 0; i < smp_cpus; i++) {
         for (j = 0; j < OPENPIC_OUTPUT_NB; j++) {
-            sysbus_connect_irq(s, k++, irqs[i][j]);
+            sysbus_connect_irq(s, k++, irqs[i].irq[j]);
         }
     }
 
@@ -713,18 +759,15 @@ static DeviceState *ppce500_init_mpic_qemu(PPCE500MachineState *pms,
 }
 
 static DeviceState *ppce500_init_mpic_kvm(const PPCE500MachineClass *pmc,
-                                          qemu_irq **irqs, Error **errp)
+                                          IrqLines *irqs, Error **errp)
 {
-    Error *err = NULL;
     DeviceState *dev;
     CPUState *cs;
 
-    dev = qdev_create(NULL, TYPE_KVM_OPENPIC);
+    dev = qdev_new(TYPE_KVM_OPENPIC);
     qdev_prop_set_uint32(dev, "model", pmc->mpic_version);
 
-    object_property_set_bool(OBJECT(dev), true, "realized", &err);
-    if (err) {
-        error_propagate(errp, err);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), errp)) {
         object_unparent(OBJECT(dev));
         return NULL;
     }
@@ -742,9 +785,8 @@ static DeviceState *ppce500_init_mpic_kvm(const PPCE500MachineClass *pmc,
 
 static DeviceState *ppce500_init_mpic(PPCE500MachineState *pms,
                                       MemoryRegion *ccsr,
-                                      qemu_irq **irqs)
+                                      IrqLines *irqs)
 {
-    MachineState *machine = MACHINE(pms);
     const PPCE500MachineClass *pmc = PPCE500_MACHINE_GET_CLASS(pms);
     DeviceState *dev = NULL;
     SysBusDevice *s;
@@ -752,10 +794,10 @@ static DeviceState *ppce500_init_mpic(PPCE500MachineState *pms,
     if (kvm_enabled()) {
         Error *err = NULL;
 
-        if (machine_kernel_irqchip_allowed(machine)) {
+        if (kvm_kernel_irqchip_allowed()) {
             dev = ppce500_init_mpic_kvm(pmc, irqs, &err);
         }
-        if (machine_kernel_irqchip_required(machine) && !dev) {
+        if (kvm_kernel_irqchip_required() && !dev) {
             error_reportf_err(err,
                               "kernel_irqchip requested but unavailable: ");
             exit(1);
@@ -783,7 +825,6 @@ static void ppce500_power_off(void *opaque, int line, int on)
 void ppce500_init(MachineState *machine)
 {
     MemoryRegion *address_space_mem = get_system_memory();
-    MemoryRegion *ram = g_new(MemoryRegion, 1);
     PPCE500MachineState *pms = PPCE500_MACHINE(machine);
     const PPCE500MachineClass *pmc = PPCE500_MACHINE_GET_CLASS(machine);
     PCIBus *pci_bus;
@@ -803,24 +844,25 @@ void ppce500_init(MachineState *machine)
     struct boot_info *boot_info;
     int dt_size;
     int i;
+    unsigned int smp_cpus = machine->smp.cpus;
     /* irq num for pin INTA, INTB, INTC and INTD is 1, 2, 3 and
      * 4 respectively */
     unsigned int pci_irq_nrs[PCI_NUM_PINS] = {1, 2, 3, 4};
-    qemu_irq **irqs;
+    IrqLines *irqs;
     DeviceState *dev, *mpicdev;
     CPUPPCState *firstenv = NULL;
     MemoryRegion *ccsr_addr_space;
     SysBusDevice *s;
     PPCE500CCSRState *ccsr;
+    I2CBus *i2c;
 
-    irqs = g_malloc0(smp_cpus * sizeof(qemu_irq *));
-    irqs[0] = g_malloc0(smp_cpus * sizeof(qemu_irq) * OPENPIC_OUTPUT_NB);
+    irqs = g_new0(IrqLines, smp_cpus);
     for (i = 0; i < smp_cpus; i++) {
         PowerPCCPU *cpu;
         CPUState *cs;
         qemu_irq *input;
 
-        cpu = POWERPC_CPU(cpu_create(machine->cpu_type));
+        cpu = POWERPC_CPU(object_new(machine->cpu_type));
         env = &cpu->env;
         cs = CPU(cpu);
 
@@ -830,14 +872,21 @@ void ppce500_init(MachineState *machine)
             exit(1);
         }
 
+        /*
+         * Secondary CPU starts in halted state for now. Needs to change
+         * when implementing non-kernel boot.
+         */
+        object_property_set_bool(OBJECT(cs), "start-powered-off", i != 0,
+                                 &error_fatal);
+        qdev_realize_and_unref(DEVICE(cs), NULL, &error_fatal);
+
         if (!firstenv) {
             firstenv = env;
         }
 
-        irqs[i] = irqs[0] + (i * OPENPIC_OUTPUT_NB);
         input = (qemu_irq *)env->irq_inputs;
-        irqs[i][OPENPIC_OUTPUT_INT] = input[PPCE500_INPUT_INT];
-        irqs[i][OPENPIC_OUTPUT_CINT] = input[PPCE500_INPUT_CINT];
+        irqs[i].irq[OPENPIC_OUTPUT_INT] = input[PPCE500_INPUT_INT];
+        irqs[i].irq[OPENPIC_OUTPUT_CINT] = input[PPCE500_INPUT_CINT];
         env->spr_cb[SPR_BOOKE_PIR].default_value = cs->cpu_index = i;
         env->mpic_iack = pmc->ccsrbar_base + MPC8544_MPIC_REGS_OFFSET + 0xa0;
 
@@ -858,18 +907,18 @@ void ppce500_init(MachineState *machine)
 
     env = firstenv;
 
-    /* Fixup Memory size on a alignment boundary */
-    ram_size &= ~(RAM_SIZES_ALIGN - 1);
-    machine->ram_size = ram_size;
+    if (!QEMU_IS_ALIGNED(machine->ram_size, RAM_SIZES_ALIGN)) {
+        error_report("RAM size must be multiple of %" PRIu64, RAM_SIZES_ALIGN);
+        exit(EXIT_FAILURE);
+    }
 
     /* Register Memory */
-    memory_region_allocate_system_memory(ram, NULL, "mpc8544ds.ram", ram_size);
-    memory_region_add_subregion(address_space_mem, 0, ram);
+    memory_region_add_subregion(address_space_mem, 0, machine->ram);
 
-    dev = qdev_create(NULL, "e500-ccsr");
+    dev = qdev_new("e500-ccsr");
     object_property_add_child(qdev_get_machine(), "e500-ccsr",
-                              OBJECT(dev), NULL);
-    qdev_init_nofail(dev);
+                              OBJECT(dev));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     ccsr = CCSR(dev);
     ccsr_addr_space = &ccsr->ccsr_space;
     memory_region_add_subregion(address_space_mem, pmc->ccsrbar_base,
@@ -889,22 +938,31 @@ void ppce500_init(MachineState *machine)
                        0, qdev_get_gpio_in(mpicdev, 42), 399193,
                        serial_hd(1), DEVICE_BIG_ENDIAN);
     }
+        /* I2C */
+    dev = qdev_new("mpc-i2c");
+    s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
+    sysbus_connect_irq(s, 0, qdev_get_gpio_in(mpicdev, MPC8544_I2C_IRQ));
+    memory_region_add_subregion(ccsr_addr_space, MPC8544_I2C_REGS_OFFSET,
+                                sysbus_mmio_get_region(s, 0));
+    i2c = (I2CBus *)qdev_get_child_bus(dev, "i2c");
+    i2c_slave_create_simple(i2c, "ds1338", RTC_REGS_OFFSET);
+
 
     /* General Utility device */
-    dev = qdev_create(NULL, "mpc8544-guts");
-    qdev_init_nofail(dev);
+    dev = qdev_new("mpc8544-guts");
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     memory_region_add_subregion(ccsr_addr_space, MPC8544_UTIL_OFFSET,
                                 sysbus_mmio_get_region(s, 0));
 
     /* PCI */
-    dev = qdev_create(NULL, "e500-pcihost");
-    object_property_add_child(qdev_get_machine(), "pci-host", OBJECT(dev),
-                              &error_abort);
+    dev = qdev_new("e500-pcihost");
+    object_property_add_child(qdev_get_machine(), "pci-host", OBJECT(dev));
     qdev_prop_set_uint32(dev, "first_slot", pmc->pci_first_slot);
     qdev_prop_set_uint32(dev, "first_pin_irq", pci_irq_nrs[0]);
-    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     for (i = 0; i < PCI_NUM_PINS; i++) {
         sysbus_connect_irq(s, i, qdev_get_gpio_in(mpicdev, pci_irq_nrs[i]));
     }
@@ -929,9 +987,9 @@ void ppce500_init(MachineState *machine)
     if (pmc->has_mpc8xxx_gpio) {
         qemu_irq poweroff_irq;
 
-        dev = qdev_create(NULL, "mpc8xxx_gpio");
+        dev = qdev_new("mpc8xxx_gpio");
         s = SYS_BUS_DEVICE(dev);
-        qdev_init_nofail(dev);
+        sysbus_realize_and_unref(s, &error_fatal);
         sysbus_connect_irq(s, 0, qdev_get_gpio_in(mpicdev, MPC8XXX_GPIO_IRQ));
         memory_region_add_subregion(ccsr_addr_space, MPC8XXX_GPIO_OFFSET,
                                     sysbus_mmio_get_region(s, 0));
@@ -943,11 +1001,11 @@ void ppce500_init(MachineState *machine)
 
     /* Platform Bus Device */
     if (pmc->has_platform_bus) {
-        dev = qdev_create(NULL, TYPE_PLATFORM_BUS_DEVICE);
+        dev = qdev_new(TYPE_PLATFORM_BUS_DEVICE);
         dev->id = TYPE_PLATFORM_BUS_DEVICE;
         qdev_prop_set_uint32(dev, "num_irqs", pmc->platform_bus_num_irqs);
         qdev_prop_set_uint32(dev, "mmio_size", pmc->platform_bus_size);
-        qdev_init_nofail(dev);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
         pms->pbus_dev = PLATFORM_BUS_DEVICE(dev);
 
         s = SYS_BUS_DEVICE(pms->pbus_dev);
@@ -989,14 +1047,20 @@ void ppce500_init(MachineState *machine)
     }
 
     filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, payload_name);
+    if (!filename) {
+        error_report("could not find firmware/kernel file '%s'", payload_name);
+        exit(1);
+    }
 
-    payload_size = load_elf(filename, NULL, NULL, &bios_entry, &loadaddr, NULL,
+    payload_size = load_elf(filename, NULL, NULL, NULL,
+                            &bios_entry, &loadaddr, NULL, NULL,
                             1, PPC_ELF_MACHINE, 0, 0);
     if (payload_size < 0) {
         /*
          * Hrm. No ELF image? Try a uImage, maybe someone is giving us an
          * ePAPR compliant kernel
          */
+        loadaddr = LOAD_UIMAGE_LOADADDR_INVALID;
         payload_size = load_uimage(filename, &bios_entry, &loadaddr, NULL,
                                    NULL, NULL);
         if (payload_size < 0) {
@@ -1023,7 +1087,7 @@ void ppce500_init(MachineState *machine)
         kernel_base = cur_base;
         kernel_size = load_image_targphys(machine->kernel_filename,
                                           cur_base,
-                                          ram_size - cur_base);
+                                          machine->ram_size - cur_base);
         if (kernel_size < 0) {
             error_report("could not load kernel '%s'",
                          machine->kernel_filename);
@@ -1037,7 +1101,7 @@ void ppce500_init(MachineState *machine)
     if (machine->initrd_filename) {
         initrd_base = (cur_base + INITRD_LOAD_PAD) & ~INITRD_PAD_MASK;
         initrd_size = load_image_targphys(machine->initrd_filename, initrd_base,
-                                          ram_size - initrd_base);
+                                          machine->ram_size - initrd_base);
 
         if (initrd_size < 0) {
             error_report("could not load initial ram disk '%s'",
@@ -1055,7 +1119,7 @@ void ppce500_init(MachineState *machine)
      * ensures enough space between kernel and initrd.
      */
     dt_base = (loadaddr + payload_size + DTC_LOAD_PAD) & ~DTC_PAD_MASK;
-    if (dt_base + DTB_MAX_SIZE > ram_size) {
+    if (dt_base + DTB_MAX_SIZE > machine->ram_size) {
             error_report("not enough memory for device tree");
             exit(1);
     }

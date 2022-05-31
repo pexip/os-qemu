@@ -21,19 +21,21 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qemu/module.h"
 #include "hw/pci/pci_bridge.h"
 #include "hw/pci/pci_ids.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/shpc.h"
 #include "hw/pci/slotid_cap.h"
+#include "hw/qdev-properties.h"
 #include "exec/memory.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/hotplug.h"
+#include "qom/object.h"
 
 #define TYPE_PCI_BRIDGE_DEV      "pci-bridge"
 #define TYPE_PCI_BRIDGE_SEAT_DEV "pci-bridge-seat"
-#define PCI_BRIDGE_DEV(obj) \
-    OBJECT_CHECK(PCIBridgeDev, (obj), TYPE_PCI_BRIDGE_DEV)
+OBJECT_DECLARE_SIMPLE_TYPE(PCIBridgeDev, PCI_BRIDGE_DEV)
 
 struct PCIBridgeDev {
     /*< private >*/
@@ -50,7 +52,6 @@ struct PCIBridgeDev {
     /* additional resources to reserve */
     PCIResReserve res_reserve;
 };
-typedef struct PCIBridgeDev PCIBridgeDev;
 
 static void pci_bridge_dev_realize(PCIDevice *dev, Error **errp)
 {
@@ -206,31 +207,39 @@ static const VMStateDescription pci_bridge_dev_vmstate = {
     }
 };
 
-static void pci_bridge_dev_hotplug_cb(HotplugHandler *hotplug_dev,
+void pci_bridge_dev_plug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
+                            Error **errp)
+{
+    PCIDevice *pci_hotplug_dev = PCI_DEVICE(hotplug_dev);
+
+    if (!shpc_present(pci_hotplug_dev)) {
+        error_setg(errp, "standard hotplug controller has been disabled for "
+                   "this %s", object_get_typename(OBJECT(hotplug_dev)));
+        return;
+    }
+    shpc_device_plug_cb(hotplug_dev, dev, errp);
+}
+
+void pci_bridge_dev_unplug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
+                              Error **errp)
+{
+    PCIDevice *pci_hotplug_dev = PCI_DEVICE(hotplug_dev);
+
+    g_assert(shpc_present(pci_hotplug_dev));
+    shpc_device_unplug_cb(hotplug_dev, dev, errp);
+}
+
+void pci_bridge_dev_unplug_request_cb(HotplugHandler *hotplug_dev,
                                       DeviceState *dev, Error **errp)
 {
     PCIDevice *pci_hotplug_dev = PCI_DEVICE(hotplug_dev);
 
     if (!shpc_present(pci_hotplug_dev)) {
         error_setg(errp, "standard hotplug controller has been disabled for "
-                   "this %s", TYPE_PCI_BRIDGE_DEV);
+                   "this %s", object_get_typename(OBJECT(hotplug_dev)));
         return;
     }
-    shpc_device_hotplug_cb(hotplug_dev, dev, errp);
-}
-
-static void pci_bridge_dev_hot_unplug_request_cb(HotplugHandler *hotplug_dev,
-                                                 DeviceState *dev,
-                                                 Error **errp)
-{
-    PCIDevice *pci_hotplug_dev = PCI_DEVICE(hotplug_dev);
-
-    if (!shpc_present(pci_hotplug_dev)) {
-        error_setg(errp, "standard hotplug controller has been disabled for "
-                   "this %s", TYPE_PCI_BRIDGE_DEV);
-        return;
-    }
-    shpc_device_hot_unplug_request_cb(hotplug_dev, dev, errp);
+    shpc_device_unplug_request_cb(hotplug_dev, dev, errp);
 }
 
 static void pci_bridge_dev_class_init(ObjectClass *klass, void *data)
@@ -245,14 +254,15 @@ static void pci_bridge_dev_class_init(ObjectClass *klass, void *data)
     k->vendor_id = PCI_VENDOR_ID_REDHAT;
     k->device_id = PCI_DEVICE_ID_REDHAT_BRIDGE;
     k->class_id = PCI_CLASS_BRIDGE_PCI;
-    k->is_bridge = 1,
+    k->is_bridge = true;
     dc->desc = "Standard PCI Bridge";
     dc->reset = qdev_pci_bridge_dev_reset;
-    dc->props = pci_bridge_dev_properties;
+    device_class_set_props(dc, pci_bridge_dev_properties);
     dc->vmsd = &pci_bridge_dev_vmstate;
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
-    hc->plug = pci_bridge_dev_hotplug_cb;
-    hc->unplug_request = pci_bridge_dev_hot_unplug_request_cb;
+    hc->plug = pci_bridge_dev_plug_cb;
+    hc->unplug = pci_bridge_dev_unplug_cb;
+    hc->unplug_request = pci_bridge_dev_unplug_request_cb;
 }
 
 static const TypeInfo pci_bridge_dev_info = {

@@ -20,11 +20,16 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "hw/hw.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "qemu/error-report.h"
+#include "qemu/module.h"
 #include "ui/console.h"
 #include "ui/pixel_ops.h"
 #include "trace.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
+#include "qom/object.h"
 
 typedef struct G364State {
     /* hardware */
@@ -473,7 +478,8 @@ static void g364fb_init(DeviceState *dev, G364State *s)
 
     s->con = graphic_console_init(dev, 0, &g364fb_ops, s);
 
-    memory_region_init_io(&s->mem_ctrl, NULL, &g364fb_ctrl_ops, s, "ctrl", 0x180000);
+    memory_region_init_io(&s->mem_ctrl, OBJECT(dev), &g364fb_ctrl_ops, s,
+                          "ctrl", 0x180000);
     memory_region_init_ram_ptr(&s->mem_vram, NULL, "vram",
                                s->vram_size, s->vram);
     vmstate_register_ram(&s->mem_vram, dev);
@@ -481,26 +487,24 @@ static void g364fb_init(DeviceState *dev, G364State *s)
 }
 
 #define TYPE_G364 "sysbus-g364"
-#define G364(obj) OBJECT_CHECK(G364SysBusState, (obj), TYPE_G364)
+OBJECT_DECLARE_SIMPLE_TYPE(G364SysBusState, G364)
 
-typedef struct {
+struct G364SysBusState {
     SysBusDevice parent_obj;
 
     G364State g364;
-} G364SysBusState;
+};
 
-static int g364fb_sysbus_init(SysBusDevice *sbd)
+static void g364fb_sysbus_realize(DeviceState *dev, Error **errp)
 {
-    DeviceState *dev = DEVICE(sbd);
     G364SysBusState *sbs = G364(dev);
     G364State *s = &sbs->g364;
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     g364fb_init(dev, s);
     sysbus_init_irq(sbd, &s->irq);
     sysbus_init_mmio(sbd, &s->mem_ctrl);
     sysbus_init_mmio(sbd, &s->mem_vram);
-
-    return 0;
 }
 
 static void g364fb_sysbus_reset(DeviceState *d)
@@ -518,14 +522,13 @@ static Property g364fb_sysbus_properties[] = {
 static void g364fb_sysbus_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
-    k->init = g364fb_sysbus_init;
+    dc->realize = g364fb_sysbus_realize;
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
     dc->desc = "G364 framebuffer";
     dc->reset = g364fb_sysbus_reset;
     dc->vmsd = &vmstate_g364fb;
-    dc->props = g364fb_sysbus_properties;
+    device_class_set_props(dc, g364fb_sysbus_properties);
 }
 
 static const TypeInfo g364fb_sysbus_info = {

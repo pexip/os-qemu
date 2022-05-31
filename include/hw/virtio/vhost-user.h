@@ -20,9 +20,10 @@ typedef struct VhostUserHostNotifier {
 typedef struct VhostUserState {
     CharBackend *chr;
     VhostUserHostNotifier notifier[VIRTIO_QUEUE_MAX];
+    int memory_slots;
 } VhostUserState;
 
-VhostUserState *vhost_user_init(void);
+bool vhost_user_init(VhostUserState *user, CharBackend *chr, Error **errp);
 void vhost_user_cleanup(VhostUserState *user);
 
 #endif

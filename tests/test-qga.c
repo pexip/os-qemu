@@ -4,7 +4,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#include "libqtest.h"
+#include "qtest/libqos/libqtest.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qlist.h"
 
@@ -61,8 +61,8 @@ fixture_setup(TestFixture *fixture, gconstpointer data, gchar **envp)
 
     path = g_build_filename(fixture->test_dir, "sock", NULL);
     cwd = g_get_current_dir();
-    cmd = g_strdup_printf("%s%cqemu-ga -m unix-listen -t %s -p %s %s %s",
-                          cwd, G_DIR_SEPARATOR,
+    cmd = g_strdup_printf("%s%cqga%cqemu-ga -m unix-listen -t %s -p %s %s %s",
+                          cwd, G_DIR_SEPARATOR, G_DIR_SEPARATOR,
                           fixture->test_dir, path,
                           getenv("QTEST_LOG") ? "-v" : "",
                           extra_arg ?: "");
@@ -143,7 +143,7 @@ static void qmp_assertion_message_error(const char     *domain,
 static void test_qga_sync_delimited(gconstpointer fix)
 {
     const TestFixture *fixture = fix;
-    guint32 v, r = g_random_int();
+    guint32 v, r = g_test_rand_int();
     unsigned char c;
     QDict *ret;
 
@@ -186,7 +186,7 @@ static void test_qga_sync_delimited(gconstpointer fix)
 static void test_qga_sync(gconstpointer fix)
 {
     const TestFixture *fixture = fix;
-    guint32 v, r = g_random_int();
+    guint32 v, r = g_test_rand_int();
     QDict *ret;
 
     /*
@@ -225,18 +225,15 @@ static void test_qga_ping(gconstpointer fix)
     qobject_unref(ret);
 }
 
-static void test_qga_invalid_id(gconstpointer fix)
+static void test_qga_id(gconstpointer fix)
 {
     const TestFixture *fixture = fix;
-    QDict *ret, *error;
-    const char *class;
+    QDict *ret;
 
     ret = qmp_fd(fixture->fd, "{'execute': 'guest-ping', 'id': 1}");
     g_assert_nonnull(ret);
-
-    error = qdict_get_qdict(ret, "error");
-    class = qdict_get_try_str(error, "class");
-    g_assert_cmpstr(class, ==, "GenericError");
+    qmp_assert_no_error(ret);
+    g_assert_cmpint(qdict_get_int(ret, "id"), ==, 1);
 
     qobject_unref(ret);
 }
@@ -249,7 +246,7 @@ static void test_qga_invalid_oob(gconstpointer fix)
     ret = qmp_fd(fixture->fd, "{'exec-oob': 'guest-ping'}");
     g_assert_nonnull(ret);
 
-    qmp_assert_error_class(ret, "GenericError");
+    qmp_expect_error_and_unref(ret, "GenericError");
 }
 
 static void test_qga_invalid_args(gconstpointer fix)
@@ -671,7 +668,7 @@ static void test_qga_blacklist(gconstpointer data)
     error = qdict_get_qdict(ret, "error");
     class = qdict_get_try_str(error, "class");
     desc = qdict_get_try_str(error, "desc");
-    g_assert_cmpstr(class, ==, "GenericError");
+    g_assert_cmpstr(class, ==, "CommandNotFound");
     g_assert_nonnull(g_strstr_len(desc, -1, "has been disabled"));
     qobject_unref(ret);
 
@@ -680,7 +677,7 @@ static void test_qga_blacklist(gconstpointer data)
     error = qdict_get_qdict(ret, "error");
     class = qdict_get_try_str(error, "class");
     desc = qdict_get_try_str(error, "desc");
-    g_assert_cmpstr(class, ==, "GenericError");
+    g_assert_cmpstr(class, ==, "CommandNotFound");
     g_assert_nonnull(g_strstr_len(desc, -1, "has been disabled"));
     qobject_unref(ret);
 
@@ -702,8 +699,8 @@ static void test_qga_config(gconstpointer data)
     GKeyFile *kf;
 
     cwd = g_get_current_dir();
-    cmd = g_strdup_printf("%s%cqemu-ga -D",
-                          cwd, G_DIR_SEPARATOR);
+    cmd = g_strdup_printf("%s%cqga%cqemu-ga -D",
+                          cwd, G_DIR_SEPARATOR, G_DIR_SEPARATOR);
     g_free(cwd);
     g_shell_parse_argv(cmd, NULL, &argv, &error);
     g_free(cmd);
@@ -992,7 +989,7 @@ int main(int argc, char **argv)
     g_test_add_data_func("/qga/file-ops", &fix, test_qga_file_ops);
     g_test_add_data_func("/qga/file-write-read", &fix, test_qga_file_write_read);
     g_test_add_data_func("/qga/get-time", &fix, test_qga_get_time);
-    g_test_add_data_func("/qga/invalid-id", &fix, test_qga_invalid_id);
+    g_test_add_data_func("/qga/id", &fix, test_qga_id);
     g_test_add_data_func("/qga/invalid-oob", &fix, test_qga_invalid_oob);
     g_test_add_data_func("/qga/invalid-cmd", &fix, test_qga_invalid_cmd);
     g_test_add_data_func("/qga/invalid-args", &fix, test_qga_invalid_args);
