@@ -77,8 +77,8 @@ static inline int divs128(int64_t *plow, int64_t *phigh, int64_t divisor)
     }
 }
 #else
-void muls64(uint64_t *phigh, uint64_t *plow, int64_t a, int64_t b);
-void mulu64(uint64_t *phigh, uint64_t *plow, uint64_t a, uint64_t b);
+void muls64(uint64_t *plow, uint64_t *phigh, int64_t a, int64_t b);
+void mulu64(uint64_t *plow, uint64_t *phigh, uint64_t a, uint64_t b);
 int divu128(uint64_t *plow, uint64_t *phigh, uint64_t divisor);
 int divs128(int64_t *plow, int64_t *phigh, int64_t divisor);
 
@@ -207,7 +207,7 @@ static inline int cto64(uint64_t val)
  */
 static inline int clrsb32(uint32_t val)
 {
-#if QEMU_GNUC_PREREQ(4, 7)
+#if __has_builtin(__builtin_clrsb) || !defined(__clang__)
     return __builtin_clrsb(val);
 #else
     return clz32(val ^ ((int32_t)val >> 1)) - 1;
@@ -223,7 +223,7 @@ static inline int clrsb32(uint32_t val)
  */
 static inline int clrsb64(uint64_t val)
 {
-#if QEMU_GNUC_PREREQ(4, 7)
+#if __has_builtin(__builtin_clrsbll) || !defined(__clang__)
     return __builtin_clrsbll(val);
 #else
     return clz64(val ^ ((int64_t)val >> 1)) - 1;

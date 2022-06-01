@@ -11,7 +11,9 @@
 #ifndef HW_S390_TOD_H
 #define HW_S390_TOD_H
 
-#include "hw/qdev.h"
+#include "hw/qdev-core.h"
+#include "target/s390x/s390-tod.h"
+#include "qom/object.h"
 
 typedef struct S390TOD {
     uint8_t high;
@@ -19,45 +21,32 @@ typedef struct S390TOD {
 } S390TOD;
 
 #define TYPE_S390_TOD "s390-tod"
-#define S390_TOD(obj) OBJECT_CHECK(S390TODState, (obj), TYPE_S390_TOD)
-#define S390_TOD_CLASS(oc) OBJECT_CLASS_CHECK(S390TODClass, (oc), \
-                                              TYPE_S390_TOD)
-#define S390_TOD_GET_CLASS(obj) OBJECT_GET_CLASS(S390TODClass, (obj), \
-                                                 TYPE_S390_TOD)
+OBJECT_DECLARE_TYPE(S390TODState, S390TODClass, S390_TOD)
 #define TYPE_KVM_S390_TOD TYPE_S390_TOD "-kvm"
 #define TYPE_QEMU_S390_TOD TYPE_S390_TOD "-qemu"
 
-typedef struct S390TODState {
+struct S390TODState {
     /* private */
     DeviceState parent_obj;
 
-    /* unused by KVM implementation */
+    /*
+     * Used by TCG to remember the time base. Used by KVM to backup the TOD
+     * while the TOD is stopped.
+     */
     S390TOD base;
-} S390TODState;
+    /* Used by KVM to remember if the TOD is stopped and base is valid. */
+    bool stopped;
+};
 
-typedef struct S390TODClass {
+struct S390TODClass {
     /* private */
     DeviceClass parent_class;
+    void (*parent_realize)(DeviceState *dev, Error **errp);
 
     /* public */
     void (*get)(const S390TODState *td, S390TOD *tod, Error **errp);
     void (*set)(S390TODState *td, const S390TOD *tod, Error **errp);
-} S390TODClass;
-
-/* The value of the TOD clock for 1.1.1970. */
-#define TOD_UNIX_EPOCH 0x7d91048bca000000ULL
-
-/* Converts ns to s390's clock format */
-static inline uint64_t time2tod(uint64_t ns)
-{
-    return (ns << 9) / 125 + (((ns & 0xff10000000000000ull) / 125) << 9);
-}
-
-/* Converts s390's clock format to ns */
-static inline uint64_t tod2time(uint64_t t)
-{
-    return ((t >> 9) * 125) + (((t & 0x1ff) * 125) >> 9);
-}
+};
 
 void s390_init_tod(void);
 S390TODState *s390_get_todstate(void);

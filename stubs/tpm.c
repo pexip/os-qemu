@@ -8,9 +8,11 @@
 #include "qemu/osdep.h"
 #include "qapi/qapi-commands-tpm.h"
 #include "sysemu/tpm.h"
+#include "hw/acpi/tpm.h"
 
-void tpm_init(void)
+int tpm_init(void)
 {
+    return 0;
 }
 
 void tpm_cleanup(void)
@@ -30,4 +32,8 @@ TpmTypeList *qmp_query_tpm_types(Error **errp)
 TpmModelList *qmp_query_tpm_models(Error **errp)
 {
     return NULL;
+}
+
+void tpm_build_ppi_acpi(TPMIf *tpm, Aml *dev)
+{
 }

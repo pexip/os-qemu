@@ -12,17 +12,23 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qemu/module.h"
 #include "hw/pci/msix.h"
 #include "hw/pci/pcie_port.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
+#include "qom/object.h"
 
 #define TYPE_GEN_PCIE_ROOT_PORT                "pcie-root-port"
-#define GEN_PCIE_ROOT_PORT(obj) \
-        OBJECT_CHECK(GenPCIERootPort, (obj), TYPE_GEN_PCIE_ROOT_PORT)
+OBJECT_DECLARE_SIMPLE_TYPE(GenPCIERootPort, GEN_PCIE_ROOT_PORT)
 
 #define GEN_PCIE_ROOT_PORT_AER_OFFSET           0x100
+#define GEN_PCIE_ROOT_PORT_ACS_OFFSET \
+        (GEN_PCIE_ROOT_PORT_AER_OFFSET + PCI_ERR_SIZEOF)
+
 #define GEN_PCIE_ROOT_PORT_MSIX_NR_VECTOR       1
 
-typedef struct GenPCIERootPort {
+struct GenPCIERootPort {
     /*< private >*/
     PCIESlot parent_obj;
     /*< public >*/
@@ -31,7 +37,7 @@ typedef struct GenPCIERootPort {
 
     /* additional resources to reserve */
     PCIResReserve res_reserve;
-} GenPCIERootPort;
+};
 
 static uint8_t gen_rp_aer_vector(const PCIDevice *d)
 {
@@ -124,6 +130,10 @@ static Property gen_rp_props[] = {
                      res_reserve.mem_pref_32, -1),
     DEFINE_PROP_SIZE("pref64-reserve", GenPCIERootPort,
                      res_reserve.mem_pref_64, -1),
+    DEFINE_PROP_PCIE_LINK_SPEED("x-speed", PCIESlot,
+                                speed, PCIE_LINK_SPEED_16),
+    DEFINE_PROP_PCIE_LINK_WIDTH("x-width", PCIESlot,
+                                width, PCIE_LINK_WIDTH_32),
     DEFINE_PROP_END_OF_LIST()
 };
 
@@ -137,7 +147,7 @@ static void gen_rp_dev_class_init(ObjectClass *klass, void *data)
     k->device_id = PCI_DEVICE_ID_REDHAT_PCIE_RP;
     dc->desc = "PCI Express Root Port";
     dc->vmsd = &vmstate_rp_dev;
-    dc->props = gen_rp_props;
+    device_class_set_props(dc, gen_rp_props);
 
     device_class_set_parent_realize(dc, gen_rp_realize, &rpc->parent_realize);
 
@@ -145,6 +155,7 @@ static void gen_rp_dev_class_init(ObjectClass *klass, void *data)
     rpc->interrupts_init = gen_rp_interrupts_init;
     rpc->interrupts_uninit = gen_rp_interrupts_uninit;
     rpc->aer_offset = GEN_PCIE_ROOT_PORT_AER_OFFSET;
+    rpc->acs_offset = GEN_PCIE_ROOT_PORT_ACS_OFFSET;
 }
 
 static const TypeInfo gen_rp_dev_info = {

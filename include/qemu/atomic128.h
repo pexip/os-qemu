@@ -13,6 +13,8 @@
 #ifndef QEMU_ATOMIC128_H
 #define QEMU_ATOMIC128_H
 
+#include "qemu/int128.h"
+
 /*
  * GCC is a house divided about supporting large atomic operations.
  *
@@ -42,7 +44,7 @@
 #if defined(CONFIG_ATOMIC128)
 static inline Int128 atomic16_cmpxchg(Int128 *ptr, Int128 cmp, Int128 new)
 {
-    return atomic_cmpxchg__nocheck(ptr, cmp, new);
+    return qatomic_cmpxchg__nocheck(ptr, cmp, new);
 }
 # define HAVE_CMPXCHG128 1
 #elif defined(CONFIG_CMPXCHG128)
@@ -68,7 +70,7 @@ static inline Int128 atomic16_cmpxchg(Int128 *ptr, Int128 cmp, Int128 new)
         "cbnz %w[tmp], 0b\n"
         "1:"
         : [mem] "+m"(*ptr), [tmp] "=&r"(tmp),
-          [oldl] "=&r"(oldl), [oldh] "=r"(oldh)
+          [oldl] "=&r"(oldl), [oldh] "=&r"(oldh)
         : [cmpl] "r"(cmpl), [cmph] "r"(cmph),
           [newl] "r"(newl), [newh] "r"(newh)
         : "memory", "cc");
@@ -87,12 +89,12 @@ Int128 QEMU_ERROR("unsupported atomic")
 #if defined(CONFIG_ATOMIC128)
 static inline Int128 atomic16_read(Int128 *ptr)
 {
-    return atomic_read__nocheck(ptr);
+    return qatomic_read__nocheck(ptr);
 }
 
 static inline void atomic16_set(Int128 *ptr, Int128 val)
 {
-    atomic_set__nocheck(ptr, val);
+    qatomic_set__nocheck(ptr, val);
 }
 
 # define HAVE_ATOMIC128 1
