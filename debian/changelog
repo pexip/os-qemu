@@ -1,3 +1,9 @@
+qemu (1:5.2+dfsg-11+deb11u2pexip1) pexip; urgency=medium
+
+  * Initial bullseye build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Thu, 02 Jun 2022 14:42:53 +0100
+
 qemu (1:5.2+dfsg-11+deb11u2) bullseye-security; urgency=medium
 
   * virtio-net-fix-map-leaking-on-error-during-receive-CVE-2022-26353.patch
