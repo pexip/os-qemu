@@ -1,3 +1,9 @@
+qemu (1:5.2+dfsg-11+deb11u2pexip2) pexip-bullseye; urgency=medium
+
+  * Main bullseye build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Fri, 24 Jun 2022 14:04:40 +0100
+
 qemu (1:5.2+dfsg-11+deb11u2pexip1) pexip; urgency=medium
 
   * Initial bullseye build
