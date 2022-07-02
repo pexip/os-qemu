@@ -24,19 +24,14 @@
  * THE SOFTWARE.
  */
 
-#ifndef HW_PCI_BRIDGE_SIMBA_H
-#define HW_PCI_BRIDGE_SIMBA_H
-
 #include "hw/pci/pci_bridge.h"
-#include "qom/object.h"
 
 
-struct SimbaPCIBridge {
+typedef struct SimbaPCIBridge {
     /*< private >*/
     PCIBridge parent_obj;
-};
+} SimbaPCIBridge;
 
 #define TYPE_SIMBA_PCI_BRIDGE "pbm-bridge"
-OBJECT_DECLARE_SIMPLE_TYPE(SimbaPCIBridge, SIMBA_PCI_BRIDGE)
-
-#endif
+#define SIMBA_PCI_BRIDGE(obj) \
+    OBJECT_CHECK(SimbaPCIBridge, (obj), TYPE_SIMBA_PCI_BRIDGE)

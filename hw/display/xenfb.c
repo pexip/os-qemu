@@ -27,13 +27,15 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 
+#include "hw/hw.h"
 #include "ui/input.h"
 #include "ui/console.h"
-#include "hw/xen/xen-legacy-backend.h"
+#include "hw/xen/xen_backend.h"
 
-#include "hw/xen/interface/io/fbif.h"
-#include "hw/xen/interface/io/kbdif.h"
-#include "hw/xen/interface/io/protocols.h"
+#include <xen/event_channel.h>
+#include <xen/io/fbif.h>
+#include <xen/io/kbdif.h>
+#include <xen/io/protocols.h>
 
 #include "trace.h"
 
@@ -44,7 +46,7 @@
 /* -------------------------------------------------------------------- */
 
 struct common {
-    struct XenLegacyDevice  xendev;  /* must be first */
+    struct XenDevice  xendev;  /* must be first */
     void              *page;
 };
 
@@ -340,14 +342,14 @@ static QemuInputHandler xenfb_rel_mouse = {
     .sync  = xenfb_mouse_sync,
 };
 
-static int input_init(struct XenLegacyDevice *xendev)
+static int input_init(struct XenDevice *xendev)
 {
     xenstore_write_be_int(xendev, "feature-abs-pointer", 1);
     xenstore_write_be_int(xendev, "feature-raw-pointer", 1);
     return 0;
 }
 
-static int input_initialise(struct XenLegacyDevice *xendev)
+static int input_initialise(struct XenDevice *xendev)
 {
     struct XenInput *in = container_of(xendev, struct XenInput, c.xendev);
     int rc;
@@ -359,7 +361,7 @@ static int input_initialise(struct XenLegacyDevice *xendev)
     return 0;
 }
 
-static void input_connected(struct XenLegacyDevice *xendev)
+static void input_connected(struct XenDevice *xendev)
 {
     struct XenInput *in = container_of(xendev, struct XenInput, c.xendev);
 
@@ -393,7 +395,7 @@ static void input_connected(struct XenLegacyDevice *xendev)
     }
 }
 
-static void input_disconnect(struct XenLegacyDevice *xendev)
+static void input_disconnect(struct XenDevice *xendev)
 {
     struct XenInput *in = container_of(xendev, struct XenInput, c.xendev);
 
@@ -408,7 +410,7 @@ static void input_disconnect(struct XenLegacyDevice *xendev)
     common_unbind(&in->c);
 }
 
-static void input_event(struct XenLegacyDevice *xendev)
+static void input_event(struct XenDevice *xendev)
 {
     struct XenInput *xenfb = container_of(xendev, struct XenInput, c.xendev);
     struct xenkbd_page *page = xenfb->c.page;
@@ -865,7 +867,7 @@ static void xenfb_handle_events(struct XenFB *xenfb)
     page->out_cons = cons;
 }
 
-static int fb_init(struct XenLegacyDevice *xendev)
+static int fb_init(struct XenDevice *xendev)
 {
 #ifdef XENFB_TYPE_RESIZE
     xenstore_write_be_int(xendev, "feature-resize", 1);
@@ -873,7 +875,7 @@ static int fb_init(struct XenLegacyDevice *xendev)
     return 0;
 }
 
-static int fb_initialise(struct XenLegacyDevice *xendev)
+static int fb_initialise(struct XenDevice *xendev)
 {
     struct XenFB *fb = container_of(xendev, struct XenFB, c.xendev);
     struct xenfb_page *fb_page;
@@ -910,7 +912,7 @@ static int fb_initialise(struct XenLegacyDevice *xendev)
     return 0;
 }
 
-static void fb_disconnect(struct XenLegacyDevice *xendev)
+static void fb_disconnect(struct XenDevice *xendev)
 {
     struct XenFB *fb = container_of(xendev, struct XenFB, c.xendev);
 
@@ -933,8 +935,7 @@ static void fb_disconnect(struct XenLegacyDevice *xendev)
     fb->bug_trigger    = 0;
 }
 
-static void fb_frontend_changed(struct XenLegacyDevice *xendev,
-                                const char *node)
+static void fb_frontend_changed(struct XenDevice *xendev, const char *node)
 {
     struct XenFB *fb = container_of(xendev, struct XenFB, c.xendev);
 
@@ -952,7 +953,7 @@ static void fb_frontend_changed(struct XenLegacyDevice *xendev,
     }
 }
 
-static void fb_event(struct XenLegacyDevice *xendev)
+static void fb_event(struct XenDevice *xendev)
 {
     struct XenFB *xenfb = container_of(xendev, struct XenFB, c.xendev);
 

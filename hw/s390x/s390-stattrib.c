@@ -11,6 +11,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/units.h"
+#include "hw/boards.h"
 #include "cpu.h"
 #include "migration/qemu-file.h"
 #include "migration/register.h"
@@ -47,10 +48,10 @@ void s390_stattrib_init(void)
     }
 
     object_property_add_child(qdev_get_machine(), TYPE_S390_STATTRIB,
-                              obj);
+                              obj, NULL);
     object_unref(obj);
 
-    qdev_realize(DEVICE(obj), NULL, &error_fatal);
+    qdev_init_nofail(DEVICE(obj));
 }
 
 /* Console commands: */
@@ -352,8 +353,7 @@ static void s390_stattrib_class_init(ObjectClass *oc, void *data)
     dc->realize = s390_stattrib_realize;
 }
 
-static inline bool s390_stattrib_get_migration_enabled(Object *obj,
-                                                       Error **errp)
+static inline bool s390_stattrib_get_migration_enabled(Object *obj, Error **e)
 {
     S390StAttribState *s = S390_STATTRIB(obj);
 
@@ -382,13 +382,13 @@ static void s390_stattrib_instance_init(Object *obj)
 {
     S390StAttribState *sas = S390_STATTRIB(obj);
 
-    register_savevm_live(TYPE_S390_STATTRIB, 0, 0,
+    register_savevm_live(NULL, TYPE_S390_STATTRIB, 0, 0,
                          &savevm_s390_stattrib_handlers, sas);
 
     object_property_add_bool(obj, "migration-enabled",
                              s390_stattrib_get_migration_enabled,
-                             s390_stattrib_set_migration_enabled);
-    object_property_set_bool(obj, "migration-enabled", true, NULL);
+                             s390_stattrib_set_migration_enabled, NULL);
+    object_property_set_bool(obj, true, "migration-enabled", NULL);
     sas->migration_cur_gfn = 0;
 }
 

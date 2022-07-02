@@ -23,6 +23,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 
 #ifdef CONFIG_GETAUXVAL
 /* Don't inline this in qemu/osdep.h, because pulling in <sys/auxv.h> for
@@ -96,16 +97,6 @@ unsigned long qemu_getauxval(unsigned long type)
     }
 
     return 0;
-}
-
-#elif defined(__FreeBSD__)
-#include <sys/auxv.h>
-
-unsigned long qemu_getauxval(unsigned long type)
-{
-    unsigned long aux = 0;
-    elf_aux_info(type, &aux, sizeof(aux));
-    return aux;
 }
 
 #else

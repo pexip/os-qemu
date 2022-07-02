@@ -36,12 +36,9 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/module.h"
 #include "qemu/timer.h"
 #include "hw/sparc/sparc32_dma.h"
-#include "migration/vmstate.h"
 #include "hw/net/lance.h"
-#include "hw/qdev-properties.h"
 #include "trace.h"
 #include "sysemu/sysemu.h"
 
@@ -134,12 +131,11 @@ static void lance_instance_init(Object *obj)
 
     device_add_bootindex_property(obj, &s->conf.bootindex,
                                   "bootindex", "/ethernet-phy@0",
-                                  DEVICE(obj));
+                                  DEVICE(obj), NULL);
 }
 
 static Property lance_properties[] = {
-    DEFINE_PROP_LINK("dma", SysBusPCNetState, state.dma_opaque,
-                     TYPE_DEVICE, DeviceState *),
+    DEFINE_PROP_PTR("dma", SysBusPCNetState, state.dma_opaque),
     DEFINE_NIC_PROPERTIES(SysBusPCNetState, state.conf),
     DEFINE_PROP_END_OF_LIST(),
 };
@@ -153,7 +149,9 @@ static void lance_class_init(ObjectClass *klass, void *data)
     dc->fw_name = "ethernet";
     dc->reset = lance_reset;
     dc->vmsd = &vmstate_lance;
-    device_class_set_props(dc, lance_properties);
+    dc->props = lance_properties;
+    /* Reason: pointer property "dma" */
+    dc->user_creatable = false;
 }
 
 static const TypeInfo lance_info = {

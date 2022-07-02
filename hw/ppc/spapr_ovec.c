@@ -13,7 +13,6 @@
 
 #include "qemu/osdep.h"
 #include "hw/ppc/spapr_ovec.h"
-#include "migration/vmstate.h"
 #include "qemu/bitmap.h"
 #include "exec/address-spaces.h"
 #include "qemu/error-report.h"
@@ -27,7 +26,7 @@
  * allows us to more safely make assumptions about the bitmap size and
  * simplify the calling code somewhat
  */
-struct SpaprOptionVector {
+struct sPAPROptionVector {
     unsigned long *bitmap;
     int32_t bitmap_size; /* only used for migration */
 };
@@ -37,25 +36,25 @@ const VMStateDescription vmstate_spapr_ovec = {
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
-        VMSTATE_BITMAP(bitmap, SpaprOptionVector, 1, bitmap_size),
+        VMSTATE_BITMAP(bitmap, sPAPROptionVector, 1, bitmap_size),
         VMSTATE_END_OF_LIST()
     }
 };
 
-SpaprOptionVector *spapr_ovec_new(void)
+sPAPROptionVector *spapr_ovec_new(void)
 {
-    SpaprOptionVector *ov;
+    sPAPROptionVector *ov;
 
-    ov = g_new0(SpaprOptionVector, 1);
+    ov = g_new0(sPAPROptionVector, 1);
     ov->bitmap = bitmap_new(OV_MAXBITS);
     ov->bitmap_size = OV_MAXBITS;
 
     return ov;
 }
 
-SpaprOptionVector *spapr_ovec_clone(SpaprOptionVector *ov_orig)
+sPAPROptionVector *spapr_ovec_clone(sPAPROptionVector *ov_orig)
 {
-    SpaprOptionVector *ov;
+    sPAPROptionVector *ov;
 
     g_assert(ov_orig);
 
@@ -65,9 +64,9 @@ SpaprOptionVector *spapr_ovec_clone(SpaprOptionVector *ov_orig)
     return ov;
 }
 
-void spapr_ovec_intersect(SpaprOptionVector *ov,
-                          SpaprOptionVector *ov1,
-                          SpaprOptionVector *ov2)
+void spapr_ovec_intersect(sPAPROptionVector *ov,
+                          sPAPROptionVector *ov1,
+                          sPAPROptionVector *ov2)
 {
     g_assert(ov);
     g_assert(ov1);
@@ -76,24 +75,34 @@ void spapr_ovec_intersect(SpaprOptionVector *ov,
     bitmap_and(ov->bitmap, ov1->bitmap, ov2->bitmap, OV_MAXBITS);
 }
 
-/* returns true if ov1 has a subset of bits in ov2 */
-bool spapr_ovec_subset(SpaprOptionVector *ov1, SpaprOptionVector *ov2)
+/* returns true if options bits were removed, false otherwise */
+bool spapr_ovec_diff(sPAPROptionVector *ov,
+                     sPAPROptionVector *ov_old,
+                     sPAPROptionVector *ov_new)
 {
-    unsigned long *tmp = bitmap_new(OV_MAXBITS);
-    bool result;
+    unsigned long *change_mask = bitmap_new(OV_MAXBITS);
+    unsigned long *removed_bits = bitmap_new(OV_MAXBITS);
+    bool bits_were_removed = false;
 
-    g_assert(ov1);
-    g_assert(ov2);
+    g_assert(ov);
+    g_assert(ov_old);
+    g_assert(ov_new);
 
-    bitmap_andnot(tmp, ov1->bitmap, ov2->bitmap, OV_MAXBITS);
-    result = bitmap_empty(tmp, OV_MAXBITS);
+    bitmap_xor(change_mask, ov_old->bitmap, ov_new->bitmap, OV_MAXBITS);
+    bitmap_and(ov->bitmap, ov_new->bitmap, change_mask, OV_MAXBITS);
+    bitmap_and(removed_bits, ov_old->bitmap, change_mask, OV_MAXBITS);
 
-    g_free(tmp);
+    if (!bitmap_empty(removed_bits, OV_MAXBITS)) {
+        bits_were_removed = true;
+    }
 
-    return result;
+    g_free(change_mask);
+    g_free(removed_bits);
+
+    return bits_were_removed;
 }
 
-void spapr_ovec_cleanup(SpaprOptionVector *ov)
+void spapr_ovec_cleanup(sPAPROptionVector *ov)
 {
     if (ov) {
         g_free(ov->bitmap);
@@ -101,7 +110,7 @@ void spapr_ovec_cleanup(SpaprOptionVector *ov)
     }
 }
 
-void spapr_ovec_set(SpaprOptionVector *ov, long bitnr)
+void spapr_ovec_set(sPAPROptionVector *ov, long bitnr)
 {
     g_assert(ov);
     g_assert(bitnr < OV_MAXBITS);
@@ -109,7 +118,7 @@ void spapr_ovec_set(SpaprOptionVector *ov, long bitnr)
     set_bit(bitnr, ov->bitmap);
 }
 
-void spapr_ovec_clear(SpaprOptionVector *ov, long bitnr)
+void spapr_ovec_clear(sPAPROptionVector *ov, long bitnr)
 {
     g_assert(ov);
     g_assert(bitnr < OV_MAXBITS);
@@ -117,7 +126,7 @@ void spapr_ovec_clear(SpaprOptionVector *ov, long bitnr)
     clear_bit(bitnr, ov->bitmap);
 }
 
-bool spapr_ovec_test(SpaprOptionVector *ov, long bitnr)
+bool spapr_ovec_test(sPAPROptionVector *ov, long bitnr)
 {
     g_assert(ov);
     g_assert(bitnr < OV_MAXBITS);
@@ -169,9 +178,9 @@ static target_ulong vector_addr(target_ulong table_addr, int vector)
     return table_addr;
 }
 
-SpaprOptionVector *spapr_ovec_parse_vector(target_ulong table_addr, int vector)
+sPAPROptionVector *spapr_ovec_parse_vector(target_ulong table_addr, int vector)
 {
-    SpaprOptionVector *ov;
+    sPAPROptionVector *ov;
     target_ulong addr;
     uint16_t vector_len;
     int i;
@@ -200,8 +209,8 @@ SpaprOptionVector *spapr_ovec_parse_vector(target_ulong table_addr, int vector)
     return ov;
 }
 
-int spapr_dt_ovec(void *fdt, int fdt_offset,
-                  SpaprOptionVector *ov, const char *name)
+int spapr_ovec_populate_dt(void *fdt, int fdt_offset,
+                           sPAPROptionVector *ov, const char *name)
 {
     uint8_t vec[OV_MAXBYTES + 1];
     uint16_t vec_len;

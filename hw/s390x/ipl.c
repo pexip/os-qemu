@@ -1,11 +1,10 @@
 /*
  * bootloader support
  *
- * Copyright IBM, Corp. 2012, 2020
+ * Copyright IBM, Corp. 2012
  *
  * Authors:
  *  Christian Borntraeger <borntraeger@de.ibm.com>
- *  Janosch Frank <frankja@linux.ibm.com>
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or (at your
  * option) any later version.  See the COPYING file in the top-level directory.
@@ -13,22 +12,15 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qapi/error.h"
-#include "sysemu/reset.h"
-#include "sysemu/runstate.h"
 #include "sysemu/sysemu.h"
-#include "sysemu/tcg.h"
 #include "cpu.h"
 #include "elf.h"
 #include "hw/loader.h"
-#include "hw/qdev-properties.h"
 #include "hw/boards.h"
 #include "hw/s390x/virtio-ccw.h"
-#include "hw/s390x/vfio-ccw.h"
 #include "hw/s390x/css.h"
 #include "hw/s390x/ebcdic.h"
-#include "hw/s390x/pv.h"
 #include "ipl.h"
 #include "qemu/error-report.h"
 #include "qemu/config-file.h"
@@ -117,6 +109,7 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
     uint64_t pentry;
     char *magic;
     int kernel_size;
+    Error *err = NULL;
 
     int bios_size;
     char *bios_filename;
@@ -134,13 +127,12 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
 
         bios_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
         if (bios_filename == NULL) {
-            error_setg(errp, "could not find stage1 bootloader");
-            return;
+            error_setg(&err, "could not find stage1 bootloader");
+            goto error;
         }
 
-        bios_size = load_elf(bios_filename, NULL,
-                             bios_translate_addr, &fwbase,
-                             &ipl->bios_start_addr, NULL, NULL, NULL, 1,
+        bios_size = load_elf(bios_filename, bios_translate_addr, &fwbase,
+                             &ipl->bios_start_addr, NULL, NULL, 1,
                              EM_S390, 0, 0);
         if (bios_size > 0) {
             /* Adjust ELF start address to final location */
@@ -154,8 +146,8 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
         g_free(bios_filename);
 
         if (bios_size == -1) {
-            error_setg(errp, "could not load bootloader '%s'", bios_name);
-            return;
+            error_setg(&err, "could not load bootloader '%s'", bios_name);
+            goto error;
         }
 
         /* default boot target is the bios */
@@ -163,14 +155,13 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
     }
 
     if (ipl->kernel) {
-        kernel_size = load_elf(ipl->kernel, NULL, NULL, NULL,
-                               &pentry, NULL,
-                               NULL, NULL, 1, EM_S390, 0, 0);
+        kernel_size = load_elf(ipl->kernel, NULL, NULL, &pentry, NULL,
+                               NULL, 1, EM_S390, 0, 0);
         if (kernel_size < 0) {
             kernel_size = load_image_targphys(ipl->kernel, 0, ram_size);
             if (kernel_size < 0) {
-                error_setg(errp, "could not load kernel '%s'", ipl->kernel);
-                return;
+                error_setg(&err, "could not load kernel '%s'", ipl->kernel);
+                goto error;
             }
             /* if this is Linux use KERN_IMAGE_START */
             magic = rom_ptr(LINUX_MAGIC_ADDR, 6);
@@ -180,10 +171,10 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
                 /* if not Linux load the address of the (short) IPL PSW */
                 ipl_psw = rom_ptr(4, 4);
                 if (ipl_psw) {
-                    pentry = be32_to_cpu(*ipl_psw) & PSW_MASK_SHORT_ADDR;
+                    pentry = be32_to_cpu(*ipl_psw) & 0x7fffffffUL;
                 } else {
-                    error_setg(errp, "Could not get IPL PSW");
-                    return;
+                    error_setg(&err, "Could not get IPL PSW");
+                    goto error;
                 }
             }
         }
@@ -216,8 +207,8 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
             initrd_size = load_image_targphys(ipl->initrd, initrd_offset,
                                               ram_size - initrd_offset);
             if (initrd_size == -1) {
-                error_setg(errp, "could not load initrd '%s'", ipl->initrd);
-                return;
+                error_setg(&err, "could not load initrd '%s'", ipl->initrd);
+                goto error;
             }
 
             /*
@@ -238,15 +229,9 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
      */
     ipl->compat_start_addr = ipl->start_addr;
     ipl->compat_bios_start_addr = ipl->bios_start_addr;
-    /*
-     * Because this Device is not on any bus in the qbus tree (it is
-     * not a sysbus device and it's not on some other bus like a PCI
-     * bus) it will not be automatically reset by the 'reset the
-     * sysbus' hook registered by vl.c like most devices. So we must
-     * manually register a reset hook for it.
-     * TODO: there should be a better way to do this.
-     */
-    qemu_register_reset(resettable_cold_reset_fn, dev);
+    qemu_register_reset(qdev_reset_all_fn, dev);
+error:
+    error_propagate(errp, err);
 }
 
 static Property s390_ipl_properties[] = {
@@ -265,6 +250,8 @@ static void s390_ipl_set_boot_menu(S390IPLState *ipl)
 {
     QemuOptsList *plist = qemu_find_opts("boot-opts");
     QemuOpts *opts = QTAILQ_FIRST(&plist->head);
+    uint8_t *flags = &ipl->qipl.qipl_flags;
+    uint32_t *timeout = &ipl->qipl.boot_menu_timeout;
     const char *tmp;
     unsigned long splash_time = 0;
 
@@ -280,7 +267,7 @@ static void s390_ipl_set_boot_menu(S390IPLState *ipl)
     case S390_IPL_TYPE_CCW:
         /* In the absence of -boot menu, use zipl parameters */
         if (!qemu_opt_get(opts, "menu")) {
-            ipl->qipl.qipl_flags |= QIPL_FLAG_BM_OPTS_ZIPL;
+            *flags |= QIPL_FLAG_BM_OPTS_ZIPL;
             return;
         }
         break;
@@ -297,55 +284,35 @@ static void s390_ipl_set_boot_menu(S390IPLState *ipl)
         return;
     }
 
-    ipl->qipl.qipl_flags |= QIPL_FLAG_BM_OPTS_CMD;
+    *flags |= QIPL_FLAG_BM_OPTS_CMD;
 
     tmp = qemu_opt_get(opts, "splash-time");
 
     if (tmp && qemu_strtoul(tmp, NULL, 10, &splash_time)) {
         error_report("splash-time is invalid, forcing it to 0");
-        ipl->qipl.boot_menu_timeout = 0;
+        *timeout = 0;
         return;
     }
 
     if (splash_time > 0xffffffff) {
         error_report("splash-time is too large, forcing it to max value");
-        ipl->qipl.boot_menu_timeout = 0xffffffff;
+        *timeout = 0xffffffff;
         return;
     }
 
-    ipl->qipl.boot_menu_timeout = cpu_to_be32(splash_time);
+    *timeout = cpu_to_be32(splash_time);
 }
 
-#define CCW_DEVTYPE_NONE        0x00
-#define CCW_DEVTYPE_VIRTIO      0x01
-#define CCW_DEVTYPE_VIRTIO_NET  0x02
-#define CCW_DEVTYPE_SCSI        0x03
-#define CCW_DEVTYPE_VFIO        0x04
-
-static CcwDevice *s390_get_ccw_device(DeviceState *dev_st, int *devtype)
+static CcwDevice *s390_get_ccw_device(DeviceState *dev_st)
 {
     CcwDevice *ccw_dev = NULL;
-    int tmp_dt = CCW_DEVTYPE_NONE;
 
     if (dev_st) {
-        VirtIONet *virtio_net_dev = (VirtIONet *)
-            object_dynamic_cast(OBJECT(dev_st), TYPE_VIRTIO_NET);
         VirtioCcwDevice *virtio_ccw_dev = (VirtioCcwDevice *)
             object_dynamic_cast(OBJECT(qdev_get_parent_bus(dev_st)->parent),
                                 TYPE_VIRTIO_CCW_DEVICE);
-        VFIOCCWDevice *vfio_ccw_dev = (VFIOCCWDevice *)
-            object_dynamic_cast(OBJECT(dev_st), TYPE_VFIO_CCW);
-
         if (virtio_ccw_dev) {
             ccw_dev = CCW_DEVICE(virtio_ccw_dev);
-            if (virtio_net_dev) {
-                tmp_dt = CCW_DEVTYPE_VIRTIO_NET;
-            } else {
-                tmp_dt = CCW_DEVTYPE_VIRTIO;
-            }
-        } else if (vfio_ccw_dev) {
-            ccw_dev = CCW_DEVICE(vfio_ccw_dev);
-            tmp_dt = CCW_DEVTYPE_VFIO;
         } else {
             SCSIDevice *sd = (SCSIDevice *)
                 object_dynamic_cast(OBJECT(dev_st),
@@ -358,12 +325,8 @@ static CcwDevice *s390_get_ccw_device(DeviceState *dev_st, int *devtype)
 
                 ccw_dev = (CcwDevice *)object_dynamic_cast(OBJECT(scsi_ccw),
                                                            TYPE_CCW_DEVICE);
-                tmp_dt = CCW_DEVTYPE_SCSI;
             }
         }
-    }
-    if (devtype) {
-        *devtype = tmp_dt;
     }
     return ccw_dev;
 }
@@ -372,21 +335,20 @@ static bool s390_gen_initial_iplb(S390IPLState *ipl)
 {
     DeviceState *dev_st;
     CcwDevice *ccw_dev = NULL;
-    SCSIDevice *sd;
-    int devtype;
 
     dev_st = get_boot_device(0);
     if (dev_st) {
-        ccw_dev = s390_get_ccw_device(dev_st, &devtype);
+        ccw_dev = s390_get_ccw_device(dev_st);
     }
 
     /*
      * Currently allow IPL only from CCW devices.
      */
     if (ccw_dev) {
-        switch (devtype) {
-        case CCW_DEVTYPE_SCSI:
-            sd = SCSI_DEVICE(dev_st);
+        SCSIDevice *sd = (SCSIDevice *) object_dynamic_cast(OBJECT(dev_st),
+                                                            TYPE_SCSI_DEVICE);
+
+        if (sd) {
             ipl->iplb.len = cpu_to_be32(S390_IPLB_MIN_QEMU_SCSI_LEN);
             ipl->iplb.blk0_len =
                 cpu_to_be32(S390_IPLB_MIN_QEMU_SCSI_LEN - S390_IPLB_HEADER_LEN);
@@ -396,24 +358,20 @@ static bool s390_gen_initial_iplb(S390IPLState *ipl)
             ipl->iplb.scsi.channel = cpu_to_be16(sd->channel);
             ipl->iplb.scsi.devno = cpu_to_be16(ccw_dev->sch->devno);
             ipl->iplb.scsi.ssid = ccw_dev->sch->ssid & 3;
-            break;
-        case CCW_DEVTYPE_VFIO:
-            ipl->iplb.len = cpu_to_be32(S390_IPLB_MIN_CCW_LEN);
-            ipl->iplb.pbt = S390_IPL_TYPE_CCW;
-            ipl->iplb.ccw.devno = cpu_to_be16(ccw_dev->sch->devno);
-            ipl->iplb.ccw.ssid = ccw_dev->sch->ssid & 3;
-            break;
-        case CCW_DEVTYPE_VIRTIO_NET:
-            ipl->netboot = true;
-            /* Fall through to CCW_DEVTYPE_VIRTIO case */
-        case CCW_DEVTYPE_VIRTIO:
+        } else {
+            VirtIONet *vn = (VirtIONet *) object_dynamic_cast(OBJECT(dev_st),
+                                                              TYPE_VIRTIO_NET);
+
             ipl->iplb.len = cpu_to_be32(S390_IPLB_MIN_CCW_LEN);
             ipl->iplb.blk0_len =
                 cpu_to_be32(S390_IPLB_MIN_CCW_LEN - S390_IPLB_HEADER_LEN);
             ipl->iplb.pbt = S390_IPL_TYPE_CCW;
             ipl->iplb.ccw.devno = cpu_to_be16(ccw_dev->sch->devno);
             ipl->iplb.ccw.ssid = ccw_dev->sch->ssid & 3;
-            break;
+
+            if (vn) {
+                ipl->netboot = true;
+            }
         }
 
         if (!s390_ipl_set_loadparm(ipl->iplb.loadparm)) {
@@ -478,10 +436,8 @@ static int load_netboot_image(Error **errp)
         goto unref_mr;
     }
 
-    img_size = load_elf_ram(netboot_filename, NULL, NULL, NULL,
-                            &ipl->start_addr,
-                            NULL, NULL, NULL, 1, EM_S390, 0, 0, NULL,
-                            false);
+    img_size = load_elf_ram(netboot_filename, NULL, NULL, &ipl->start_addr,
+                            NULL, NULL, 1, EM_S390, 0, 0, NULL, false);
 
     if (img_size < 0) {
         img_size = load_image_size(netboot_filename, ram_ptr, ram_size);
@@ -537,57 +493,13 @@ static bool is_virtio_scsi_device(IplParameterBlock *iplb)
     return is_virtio_ccw_device_of_type(iplb, VIRTIO_ID_SCSI);
 }
 
-static void update_machine_ipl_properties(IplParameterBlock *iplb)
-{
-    Object *machine = qdev_get_machine();
-    Error *err = NULL;
-
-    /* Sync loadparm */
-    if (iplb->flags & DIAG308_FLAGS_LP_VALID) {
-        uint8_t *ebcdic_loadparm = iplb->loadparm;
-        char ascii_loadparm[9];
-        int i;
-
-        for (i = 0; i < 8 && ebcdic_loadparm[i]; i++) {
-            ascii_loadparm[i] = ebcdic2ascii[(uint8_t) ebcdic_loadparm[i]];
-        }
-        ascii_loadparm[i] = 0;
-        object_property_set_str(machine, "loadparm", ascii_loadparm, &err);
-    } else {
-        object_property_set_str(machine, "loadparm", "", &err);
-    }
-    if (err) {
-        warn_report_err(err);
-    }
-}
-
 void s390_ipl_update_diag308(IplParameterBlock *iplb)
 {
     S390IPLState *ipl = get_ipl_device();
 
-    /*
-     * The IPLB set and retrieved by subcodes 8/9 is completely
-     * separate from the one managed via subcodes 5/6.
-     */
-    if (iplb->pbt == S390_IPL_TYPE_PV) {
-        ipl->iplb_pv = *iplb;
-        ipl->iplb_valid_pv = true;
-    } else {
-        ipl->iplb = *iplb;
-        ipl->iplb_valid = true;
-    }
+    ipl->iplb = *iplb;
+    ipl->iplb_valid = true;
     ipl->netboot = is_virtio_net_device(iplb);
-    update_machine_ipl_properties(iplb);
-}
-
-IplParameterBlock *s390_ipl_get_iplb_pv(void)
-{
-    S390IPLState *ipl = get_ipl_device();
-
-    if (!ipl->iplb_valid_pv) {
-        return NULL;
-    }
-    return &ipl->iplb_pv;
 }
 
 IplParameterBlock *s390_ipl_get_iplb(void)
@@ -617,7 +529,7 @@ void s390_ipl_reset_request(CPUState *cs, enum s390_reset reset_type)
         !ipl->netboot &&
         ipl->iplb.pbt == S390_IPL_TYPE_CCW &&
         is_virtio_scsi_device(&ipl->iplb)) {
-        CcwDevice *ccw_dev = s390_get_ccw_device(get_boot_device(0), NULL);
+        CcwDevice *ccw_dev = s390_get_ccw_device(get_boot_device(0));
 
         if (ccw_dev &&
             cpu_to_be16(ccw_dev->sch->devno) == ipl->iplb.ccw.devno &&
@@ -630,8 +542,7 @@ void s390_ipl_reset_request(CPUState *cs, enum s390_reset reset_type)
         }
     }
     if (reset_type == S390_RESET_MODIFIED_CLEAR ||
-        reset_type == S390_RESET_LOAD_NORMAL ||
-        reset_type == S390_RESET_PV) {
+        reset_type == S390_RESET_LOAD_NORMAL) {
         /* ignore -no-reboot, send no event  */
         qemu_system_reset_request(SHUTDOWN_CAUSE_SUBSYSTEM_RESET);
     } else {
@@ -670,45 +581,13 @@ static void s390_ipl_prepare_qipl(S390CPU *cpu)
     uint8_t *addr;
     uint64_t len = 4096;
 
-    addr = cpu_physical_memory_map(cpu->env.psa, &len, true);
+    addr = cpu_physical_memory_map(cpu->env.psa, &len, 1);
     if (!addr || len < QIPL_ADDRESS + sizeof(QemuIplParameters)) {
         error_report("Cannot set QEMU IPL parameters");
         return;
     }
     memcpy(addr + QIPL_ADDRESS, &ipl->qipl, sizeof(QemuIplParameters));
     cpu_physical_memory_unmap(addr, len, 1, len);
-}
-
-int s390_ipl_prepare_pv_header(void)
-{
-    IplParameterBlock *ipib = s390_ipl_get_iplb_pv();
-    IPLBlockPV *ipib_pv = &ipib->pv;
-    void *hdr = g_malloc(ipib_pv->pv_header_len);
-    int rc;
-
-    cpu_physical_memory_read(ipib_pv->pv_header_addr, hdr,
-                             ipib_pv->pv_header_len);
-    rc = s390_pv_set_sec_parms((uintptr_t)hdr,
-                               ipib_pv->pv_header_len);
-    g_free(hdr);
-    return rc;
-}
-
-int s390_ipl_pv_unpack(void)
-{
-    IplParameterBlock *ipib = s390_ipl_get_iplb_pv();
-    IPLBlockPV *ipib_pv = &ipib->pv;
-    int i, rc = 0;
-
-    for (i = 0; i < ipib_pv->num_comp; i++) {
-        rc = s390_pv_unpack(ipib_pv->components[i].addr,
-                            TARGET_PAGE_ALIGN(ipib_pv->components[i].size),
-                            ipib_pv->components[i].tweak_pref);
-        if (rc) {
-            break;
-        }
-    }
-    return rc;
 }
 
 void s390_ipl_prepare_cpu(S390CPU *cpu)
@@ -751,7 +630,7 @@ static void s390_ipl_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = s390_ipl_realize;
-    device_class_set_props(dc, s390_ipl_properties);
+    dc->props = s390_ipl_properties;
     dc->reset = s390_ipl_reset;
     dc->vmsd = &vmstate_ipl;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);

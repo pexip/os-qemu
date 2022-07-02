@@ -2,8 +2,6 @@
 
 test_suite sext
 
-#if XCHAL_HAVE_SEXT
-
 test sext
     movi    a2, 0xffffff5a
     movi    a3, 0x0000005a
@@ -67,7 +65,5 @@ test sext_same_rs
     sext    a2, a2, 7
     assert  eq, a3, a2
 test_end
-
-#endif
 
 test_suite_end

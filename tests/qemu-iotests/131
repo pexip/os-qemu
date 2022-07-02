@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # parallels format validation tests (created by QEMU)
 #

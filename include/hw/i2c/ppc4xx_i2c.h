@@ -27,14 +27,17 @@
 #ifndef PPC4XX_I2C_H
 #define PPC4XX_I2C_H
 
+#include "qemu-common.h"
 #include "hw/sysbus.h"
-#include "hw/i2c/bitbang_i2c.h"
-#include "qom/object.h"
+#include "hw/i2c/i2c.h"
+
+/* from hw/i2c/bitbang_i2c.h */
+typedef struct bitbang_i2c_interface bitbang_i2c_interface;
 
 #define TYPE_PPC4xx_I2C "ppc4xx-i2c"
-OBJECT_DECLARE_SIMPLE_TYPE(PPC4xxI2CState, PPC4xx_I2C)
+#define PPC4xx_I2C(obj) OBJECT_CHECK(PPC4xxI2CState, (obj), TYPE_PPC4xx_I2C)
 
-struct PPC4xxI2CState {
+typedef struct PPC4xxI2CState {
     /*< private >*/
     SysBusDevice parent_obj;
 
@@ -42,7 +45,7 @@ struct PPC4xxI2CState {
     I2CBus *bus;
     qemu_irq irq;
     MemoryRegion iomem;
-    bitbang_i2c_interface bitbang;
+    bitbang_i2c_interface *bitbang;
     int mdidx;
     uint8_t mdata[4];
     uint8_t lmadr;
@@ -58,6 +61,6 @@ struct PPC4xxI2CState {
     uint8_t xfrcnt;
     uint8_t xtcntlss;
     uint8_t directcntl;
-};
+} PPC4xxI2CState;
 
 #endif /* PPC4XX_I2C_H */

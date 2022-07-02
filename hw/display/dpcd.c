@@ -1,5 +1,5 @@
 /*
- * Xilinx Display Port Control Data
+ * dpcd.c
  *
  *  Copyright (C) 2015 : GreenSocs Ltd
  *      http://www.greensocs.com/ , email: info@greensocs.com
@@ -28,11 +28,18 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 #include "hw/misc/auxbus.h"
-#include "migration/vmstate.h"
 #include "hw/display/dpcd.h"
-#include "trace.h"
+
+#ifndef DEBUG_DPCD
+#define DEBUG_DPCD 0
+#endif
+
+#define DPRINTF(fmt, ...) do {                                                 \
+    if (DEBUG_DPCD) {                                                          \
+        qemu_log("dpcd: " fmt, ## __VA_ARGS__);                                \
+    }                                                                          \
+} while (0)
 
 #define DPCD_READABLE_AREA                      0x600
 
@@ -61,8 +68,8 @@ static uint64_t dpcd_read(void *opaque, hwaddr offset, unsigned size)
                                        offset);
         ret = 0;
     }
-    trace_dpcd_read(offset, ret);
 
+    DPRINTF("read 0x%" PRIX8 " @0x%" HWADDR_PRIX "\n", ret, offset);
     return ret;
 }
 
@@ -71,7 +78,8 @@ static void dpcd_write(void *opaque, hwaddr offset, uint64_t value,
 {
     DPCDState *e = DPCD(opaque);
 
-    trace_dpcd_write(offset, value);
+    DPRINTF("write 0x%" PRIX8 " @0x%" HWADDR_PRIX "\n", (uint8_t)value, offset);
+
     if (offset < DPCD_READABLE_AREA) {
         e->dpcd_info[offset] = value;
     } else {
@@ -127,7 +135,7 @@ static void dpcd_init(Object *obj)
 {
     DPCDState *s = DPCD(obj);
 
-    memory_region_init_io(&s->iomem, obj, &aux_ops, s, TYPE_DPCD, 0x80000);
+    memory_region_init_io(&s->iomem, obj, &aux_ops, s, TYPE_DPCD, 0x7FFFF);
     aux_init_mmio(AUX_SLAVE(obj), &s->iomem);
 }
 

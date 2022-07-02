@@ -16,7 +16,7 @@
    along with this program; if not, see <http://www.gnu.org/licenses/>.  */
 
 #include "qemu/osdep.h"
-#include "disas/dis-asm.h"
+#include "disas/bfd.h"
 
 #define DEFINE_TABLE
 
@@ -1963,7 +1963,6 @@ print_insn_sh (bfd_vma memaddr, struct disassemble_info *info)
 		  fprintf_fn (stream, "xd%d", rn & ~1);
 		  break;
 		}
-	      /* fallthrough */
 	    case D_REG_N:
 	      fprintf_fn (stream, "dr%d", rn);
 	      break;
@@ -1973,7 +1972,6 @@ print_insn_sh (bfd_vma memaddr, struct disassemble_info *info)
 		  fprintf_fn (stream, "xd%d", rm & ~1);
 		  break;
 		}
-	      /* fallthrough */
 	    case D_REG_M:
 	      fprintf_fn (stream, "dr%d", rm);
 	      break;

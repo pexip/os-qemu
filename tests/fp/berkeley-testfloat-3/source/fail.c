@@ -41,7 +41,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "platform.h"
 #include "fail.h"
 
-const char *fail_programName = "";
+char *fail_programName = "";
 
 void fail( const char *messagePtr, ... )
 {

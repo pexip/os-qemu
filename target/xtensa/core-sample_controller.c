@@ -28,19 +28,20 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/gdbstub.h"
+#include "qemu-common.h"
 #include "qemu/host-utils.h"
 
 #include "core-sample_controller/core-isa.h"
 #include "overlay_tool.h"
 
 #define xtensa_modules xtensa_modules_sample_controller
-#include "core-sample_controller/xtensa-modules.c.inc"
+#include "core-sample_controller/xtensa-modules.inc.c"
 
 static XtensaConfig sample_controller __attribute__((unused)) = {
     .name = "sample_controller",
     .gdb_regmap = {
         .reg = {
-#include "core-sample_controller/gdb-config.c.inc"
+#include "core-sample_controller/gdb-config.inc.c"
         }
     },
     .isa_internal = &xtensa_modules,

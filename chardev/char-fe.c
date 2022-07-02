@@ -29,7 +29,7 @@
 
 #include "chardev/char-fe.h"
 #include "chardev/char-io.h"
-#include "chardev-internal.h"
+#include "chardev/char-mux.h"
 
 int qemu_chr_fe_write(CharBackend *be, const uint8_t *buf, int len)
 {
@@ -246,15 +246,14 @@ void qemu_chr_fe_deinit(CharBackend *b, bool del)
     }
 }
 
-void qemu_chr_fe_set_handlers_full(CharBackend *b,
-                                   IOCanReadHandler *fd_can_read,
-                                   IOReadHandler *fd_read,
-                                   IOEventHandler *fd_event,
-                                   BackendChangeHandler *be_change,
-                                   void *opaque,
-                                   GMainContext *context,
-                                   bool set_open,
-                                   bool sync_state)
+void qemu_chr_fe_set_handlers(CharBackend *b,
+                              IOCanReadHandler *fd_can_read,
+                              IOReadHandler *fd_read,
+                              IOEventHandler *fd_event,
+                              BackendChangeHandler *be_change,
+                              void *opaque,
+                              GMainContext *context,
+                              bool set_open)
 {
     Chardev *s;
     int fe_open;
@@ -286,24 +285,14 @@ void qemu_chr_fe_set_handlers_full(CharBackend *b,
         qemu_chr_fe_take_focus(b);
         /* We're connecting to an already opened device, so let's make sure we
            also get the open event */
-        if (sync_state && s->be_open) {
+        if (s->be_open) {
             qemu_chr_be_event(s, CHR_EVENT_OPENED);
         }
     }
-}
 
-void qemu_chr_fe_set_handlers(CharBackend *b,
-                              IOCanReadHandler *fd_can_read,
-                              IOReadHandler *fd_read,
-                              IOEventHandler *fd_event,
-                              BackendChangeHandler *be_change,
-                              void *opaque,
-                              GMainContext *context,
-                              bool set_open)
-{
-    qemu_chr_fe_set_handlers_full(b, fd_can_read, fd_read, fd_event, be_change,
-                                  opaque, context, set_open,
-                                  true);
+    if (CHARDEV_IS_MUX(s)) {
+        mux_chr_set_handlers(s, context);
+    }
 }
 
 void qemu_chr_fe_take_focus(CharBackend *b)

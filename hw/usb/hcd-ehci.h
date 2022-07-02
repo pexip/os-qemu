@@ -4,26 +4,27 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or(at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public License
+ * You should have received a copy of the GNU General Public License
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef HW_USB_HCD_EHCI_H
 #define HW_USB_HCD_EHCI_H
 
+#include "hw/hw.h"
 #include "qemu/timer.h"
 #include "hw/usb.h"
 #include "sysemu/dma.h"
+#include "sysemu/sysemu.h"
 #include "hw/pci/pci.h"
 #include "hw/sysbus.h"
-#include "qom/object.h"
 
 #ifndef EHCI_DEBUG
 #define EHCI_DEBUG   0
@@ -246,7 +247,7 @@ struct EHCIQueue {
     uint32_t qtdaddr;      /* address QTD read from                */
     int last_pid;          /* pid of last packet executed          */
     USBDevice *dev;
-    QTAILQ_HEAD(, EHCIPacket) packets;
+    QTAILQ_HEAD(pkts_head, EHCIPacket) packets;
 };
 
 typedef QTAILQ_HEAD(EHCIQueueHead, EHCIQueue) EHCIQueueHead;
@@ -325,41 +326,43 @@ extern const VMStateDescription vmstate_ehci;
 void usb_ehci_init(EHCIState *s, DeviceState *dev);
 void usb_ehci_finalize(EHCIState *s);
 void usb_ehci_realize(EHCIState *s, DeviceState *dev, Error **errp);
-void usb_ehci_unrealize(EHCIState *s, DeviceState *dev);
+void usb_ehci_unrealize(EHCIState *s, DeviceState *dev, Error **errp);
 void ehci_reset(void *opaque);
 
 #define TYPE_PCI_EHCI "pci-ehci-usb"
-OBJECT_DECLARE_SIMPLE_TYPE(EHCIPCIState, PCI_EHCI)
+#define PCI_EHCI(obj) OBJECT_CHECK(EHCIPCIState, (obj), TYPE_PCI_EHCI)
 
-struct EHCIPCIState {
+typedef struct EHCIPCIState {
     /*< private >*/
     PCIDevice pcidev;
     /*< public >*/
 
     EHCIState ehci;
-};
+} EHCIPCIState;
 
 
 #define TYPE_SYS_BUS_EHCI "sysbus-ehci-usb"
-#define TYPE_PLATFORM_EHCI "platform-ehci-usb"
 #define TYPE_EXYNOS4210_EHCI "exynos4210-ehci-usb"
-#define TYPE_AW_H3_EHCI "aw-h3-ehci-usb"
-#define TYPE_NPCM7XX_EHCI "npcm7xx-ehci-usb"
 #define TYPE_TEGRA2_EHCI "tegra2-ehci-usb"
 #define TYPE_PPC4xx_EHCI "ppc4xx-ehci-usb"
 #define TYPE_FUSBH200_EHCI "fusbh200-ehci-usb"
 
-OBJECT_DECLARE_TYPE(EHCISysBusState, SysBusEHCIClass, SYS_BUS_EHCI)
+#define SYS_BUS_EHCI(obj) \
+    OBJECT_CHECK(EHCISysBusState, (obj), TYPE_SYS_BUS_EHCI)
+#define SYS_BUS_EHCI_CLASS(class) \
+    OBJECT_CLASS_CHECK(SysBusEHCIClass, (class), TYPE_SYS_BUS_EHCI)
+#define SYS_BUS_EHCI_GET_CLASS(obj) \
+    OBJECT_GET_CLASS(SysBusEHCIClass, (obj), TYPE_SYS_BUS_EHCI)
 
-struct EHCISysBusState {
+typedef struct EHCISysBusState {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
 
     EHCIState ehci;
-};
+} EHCISysBusState;
 
-struct SysBusEHCIClass {
+typedef struct SysBusEHCIClass {
     /*< private >*/
     SysBusDeviceClass parent_class;
     /*< public >*/
@@ -368,16 +371,17 @@ struct SysBusEHCIClass {
     uint16_t opregbase;
     uint16_t portscbase;
     uint16_t portnr;
-};
+} SysBusEHCIClass;
 
-OBJECT_DECLARE_SIMPLE_TYPE(FUSBH200EHCIState, FUSBH200_EHCI)
+#define FUSBH200_EHCI(obj) \
+    OBJECT_CHECK(FUSBH200EHCIState, (obj), TYPE_FUSBH200_EHCI)
 
-struct FUSBH200EHCIState {
+typedef struct FUSBH200EHCIState {
     /*< private >*/
     EHCISysBusState parent_obj;
     /*< public >*/
 
     MemoryRegion mem_vendor;
-};
+} FUSBH200EHCIState;
 
 #endif

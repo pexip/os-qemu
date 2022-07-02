@@ -7,7 +7,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -27,13 +27,12 @@
 #include "cpu.h"
 #include "disas/disas.h"
 #include "exec/exec-all.h"
-#include "tcg/tcg-op.h"
+#include "tcg-op.h"
 #include "exec/helper-proto.h"
 #include "mmu.h"
 #include "exec/cpu_ldst.h"
 #include "exec/translator.h"
 #include "crisv32-decode.h"
-#include "qemu/qemu-print.h"
 
 #include "exec/helper-gen.h"
 
@@ -1178,11 +1177,12 @@ static inline void t_gen_zext(TCGv d, TCGv s, int size)
 static char memsize_char(int size)
 {
     switch (size) {
-    case 1: return 'b';
-    case 2: return 'w';
-    case 4: return 'd';
+    case 1: return 'b';  break;
+    case 2: return 'w';  break;
+    case 4: return 'd';  break;
     default:
         return 'x';
+        break;
     }
 }
 #endif
@@ -1685,11 +1685,18 @@ static int dec_cmp_r(CPUCRISState *env, DisasContext *dc)
 
 static int dec_abs_r(CPUCRISState *env, DisasContext *dc)
 {
+    TCGv t0;
+
     LOG_DIS("abs $r%u, $r%u\n",
             dc->op1, dc->op2);
     cris_cc_mask(dc, CC_MASK_NZ);
 
-    tcg_gen_abs_tl(cpu_R[dc->op2], cpu_R[dc->op1]);
+    t0 = tcg_temp_new();
+    tcg_gen_sari_tl(t0, cpu_R[dc->op1], 31);
+    tcg_gen_xor_tl(cpu_R[dc->op2], cpu_R[dc->op1], t0);
+    tcg_gen_sub_tl(cpu_R[dc->op2], cpu_R[dc->op2], t0);
+    tcg_temp_free(t0);
+
     cris_alu(dc, CC_OP_MOVE,
             cpu_R[dc->op2], cpu_R[dc->op2], cpu_R[dc->op2], 4);
     return 2;
@@ -3036,7 +3043,7 @@ static unsigned int crisv32_decoder(CPUCRISState *env, DisasContext *dc)
     return insn_len;
 }
 
-#include "translate_v10.c.inc"
+#include "translate_v10.inc.c"
 
 /*
  * Delay slots on QEMU/CRIS.
@@ -3073,7 +3080,7 @@ static unsigned int crisv32_decoder(CPUCRISState *env, DisasContext *dc)
  */
 
 /* generate intermediate code for basic block 'tb'.  */
-void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int max_insns)
+void gen_intermediate_code(CPUState *cs, struct TranslationBlock *tb)
 {
     CPUCRISState *env = cs->env_ptr;
     uint32_t pc_start;
@@ -3083,6 +3090,7 @@ void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int max_insns)
     uint32_t page_start;
     target_ulong npc;
     int num_insns;
+    int max_insns;
 
     if (env->pregs[PR_VR] == 32) {
         dc->decoder = crisv32_decoder;
@@ -3096,7 +3104,7 @@ void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int max_insns)
      * delayslot, like in real hw.
      */
     pc_start = tb->pc & ~1;
-    dc->cpu = env_archcpu(env);
+    dc->cpu = cris_env_get_cpu(env);
     dc->tb = tb;
 
     dc->is_jmp = DISAS_NEXT;
@@ -3128,6 +3136,13 @@ void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int max_insns)
 
     page_start = pc_start & TARGET_PAGE_MASK;
     num_insns = 0;
+    max_insns = tb_cflags(tb) & CF_COUNT_MASK;
+    if (max_insns == 0) {
+        max_insns = CF_COUNT_MASK;
+    }
+    if (max_insns > TCG_MAX_INSNS) {
+        max_insns = TCG_MAX_INSNS;
+    }
 
     gen_tb_start(tb);
     do {
@@ -3224,6 +3239,8 @@ void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int max_insns)
 
     npc = dc->pc;
 
+        if (tb_cflags(tb) & CF_LAST_IO)
+            gen_io_end();
     /* Force an update if the per-tb cpu state has changed.  */
     if (dc->is_jmp == DISAS_NEXT
         && (dc->cpustate_changed || !dc->flagx_known
@@ -3272,17 +3289,18 @@ void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int max_insns)
 #if !DISAS_CRIS
     if (qemu_loglevel_mask(CPU_LOG_TB_IN_ASM)
         && qemu_log_in_addr_range(pc_start)) {
-        FILE *logfile = qemu_log_lock();
+        qemu_log_lock();
         qemu_log("--------------\n");
         qemu_log("IN: %s\n", lookup_symbol(pc_start));
         log_target_disas(cs, pc_start, dc->pc - pc_start);
-        qemu_log_unlock(logfile);
+        qemu_log_unlock();
     }
 #endif
 #endif
 }
 
-void cris_cpu_dump_state(CPUState *cs, FILE *f, int flags)
+void cris_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
+                         int flags)
 {
     CRISCPU *cpu = CRIS_CPU(cs);
     CPUCRISState *env = &cpu->env;
@@ -3290,7 +3308,7 @@ void cris_cpu_dump_state(CPUState *cs, FILE *f, int flags)
     const char **pregnames;
     int i;
 
-    if (!env) {
+    if (!env || !f) {
         return;
     }
     if (env->pregs[PR_VR] < 32) {
@@ -3301,40 +3319,40 @@ void cris_cpu_dump_state(CPUState *cs, FILE *f, int flags)
         regnames = regnames_v32;
     }
 
-    qemu_fprintf(f, "PC=%x CCS=%x btaken=%d btarget=%x\n"
-                 "cc_op=%d cc_src=%d cc_dest=%d cc_result=%x cc_mask=%x\n",
-                 env->pc, env->pregs[PR_CCS], env->btaken, env->btarget,
-                 env->cc_op,
-                 env->cc_src, env->cc_dest, env->cc_result, env->cc_mask);
+    cpu_fprintf(f, "PC=%x CCS=%x btaken=%d btarget=%x\n"
+            "cc_op=%d cc_src=%d cc_dest=%d cc_result=%x cc_mask=%x\n",
+            env->pc, env->pregs[PR_CCS], env->btaken, env->btarget,
+            env->cc_op,
+            env->cc_src, env->cc_dest, env->cc_result, env->cc_mask);
 
 
     for (i = 0; i < 16; i++) {
-        qemu_fprintf(f, "%s=%8.8x ", regnames[i], env->regs[i]);
+        cpu_fprintf(f, "%s=%8.8x ", regnames[i], env->regs[i]);
         if ((i + 1) % 4 == 0) {
-            qemu_fprintf(f, "\n");
+            cpu_fprintf(f, "\n");
         }
     }
-    qemu_fprintf(f, "\nspecial regs:\n");
+    cpu_fprintf(f, "\nspecial regs:\n");
     for (i = 0; i < 16; i++) {
-        qemu_fprintf(f, "%s=%8.8x ", pregnames[i], env->pregs[i]);
+        cpu_fprintf(f, "%s=%8.8x ", pregnames[i], env->pregs[i]);
         if ((i + 1) % 4 == 0) {
-            qemu_fprintf(f, "\n");
+            cpu_fprintf(f, "\n");
         }
     }
     if (env->pregs[PR_VR] >= 32) {
         uint32_t srs = env->pregs[PR_SRS];
-        qemu_fprintf(f, "\nsupport function regs bank %x:\n", srs);
+        cpu_fprintf(f, "\nsupport function regs bank %x:\n", srs);
         if (srs < ARRAY_SIZE(env->sregs)) {
             for (i = 0; i < 16; i++) {
-                qemu_fprintf(f, "s%2.2d=%8.8x ",
-                             i, env->sregs[srs][i]);
+                cpu_fprintf(f, "s%2.2d=%8.8x ",
+                        i, env->sregs[srs][i]);
                 if ((i + 1) % 4 == 0) {
-                    qemu_fprintf(f, "\n");
+                    cpu_fprintf(f, "\n");
                 }
             }
         }
     }
-    qemu_fprintf(f, "\n\n");
+    cpu_fprintf(f, "\n\n");
 
 }
 

@@ -10,10 +10,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/qdev-properties.h"
 #include "hw/virtio/virtio.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
 #include "virtio-ccw.h"
 
 static void virtio_ccw_blk_realize(VirtioCcwDevice *ccw_dev, Error **errp)
@@ -21,7 +19,8 @@ static void virtio_ccw_blk_realize(VirtioCcwDevice *ccw_dev, Error **errp)
     VirtIOBlkCcw *dev = VIRTIO_BLK_CCW(ccw_dev);
     DeviceState *vdev = DEVICE(&dev->vdev);
 
-    qdev_realize(vdev, BUS(&ccw_dev->bus), errp);
+    qdev_set_parent_bus(vdev, BUS(&ccw_dev->bus));
+    object_property_set_bool(OBJECT(vdev), true, "realized", errp);
 }
 
 static void virtio_ccw_blk_instance_init(Object *obj)
@@ -31,7 +30,7 @@ static void virtio_ccw_blk_instance_init(Object *obj)
     virtio_instance_init_common(obj, &dev->vdev, sizeof(dev->vdev),
                                 TYPE_VIRTIO_BLK);
     object_property_add_alias(obj, "bootindex", OBJECT(&dev->vdev),
-                              "bootindex");
+                              "bootindex", &error_abort);
 }
 
 static Property virtio_ccw_blk_properties[] = {
@@ -48,7 +47,7 @@ static void virtio_ccw_blk_class_init(ObjectClass *klass, void *data)
     VirtIOCCWDeviceClass *k = VIRTIO_CCW_DEVICE_CLASS(klass);
 
     k->realize = virtio_ccw_blk_realize;
-    device_class_set_props(dc, virtio_ccw_blk_properties);
+    dc->props = virtio_ccw_blk_properties;
     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
 }
 

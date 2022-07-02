@@ -5,22 +5,17 @@
  *
  * This code is licensed under the GPL
  */
-
 #include "qemu/osdep.h"
-#include "qapi/error.h"
-#include "qemu/module.h"
-#include "qemu/log.h"
+#include "qemu-common.h"
 #include "cpu.h"
 #include "hw/hw.h"
-#include "hw/irq.h"
 #include "hw/sysbus.h"
 #include "hw/m68k/mcf.h"
-#include "qom/object.h"
 
 #define TYPE_MCF_INTC "mcf-intc"
-OBJECT_DECLARE_SIMPLE_TYPE(mcf_intc_state, MCF_INTC)
+#define MCF_INTC(obj) OBJECT_CHECK(mcf_intc_state, (obj), TYPE_MCF_INTC)
 
-struct mcf_intc_state {
+typedef struct {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -31,7 +26,7 @@ struct mcf_intc_state {
     uint8_t icr[64];
     M68kCPU *cpu;
     int active_vector;
-};
+} mcf_intc_state;
 
 static void mcf_intc_update(mcf_intc_state *s)
 {
@@ -83,9 +78,7 @@ static uint64_t mcf_intc_read(void *opaque, hwaddr addr,
     case 0xe1: case 0xe2: case 0xe3: case 0xe4:
     case 0xe5: case 0xe6: case 0xe7:
         /* LnIACK */
-        qemu_log_mask(LOG_UNIMP, "%s: LnIACK not implemented (offset 0x%02x)\n",
-                      __func__, offset);
-        /* fallthru */
+        hw_error("mcf_intc_read: LnIACK not implemented\n");
     default:
         return 0;
     }
@@ -132,9 +125,8 @@ static void mcf_intc_write(void *opaque, hwaddr addr,
         }
         break;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%02x\n",
-                      __func__, offset);
-        return;
+        hw_error("mcf_intc_write: Bad write offset %d\n", offset);
+        break;
     }
     mcf_intc_update(s);
 }
@@ -206,8 +198,8 @@ qemu_irq *mcf_intc_init(MemoryRegion *sysmem,
     DeviceState  *dev;
     mcf_intc_state *s;
 
-    dev = qdev_new(TYPE_MCF_INTC);
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    dev = qdev_create(NULL, TYPE_MCF_INTC);
+    qdev_init_nofail(dev);
 
     s = MCF_INTC(dev);
     s->cpu = cpu;

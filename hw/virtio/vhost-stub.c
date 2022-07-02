@@ -7,9 +7,9 @@ bool vhost_has_free_slot(void)
     return true;
 }
 
-bool vhost_user_init(VhostUserState *user, CharBackend *chr, Error **errp)
+VhostUserState *vhost_user_init(void)
 {
-    return false;
+    return NULL;
 }
 
 void vhost_user_cleanup(VhostUserState *user)

@@ -16,7 +16,6 @@
 #define REPLICATION_H
 
 #include "qapi/qapi-types-block-core.h"
-#include "qemu/module.h"
 #include "qemu/queue.h"
 
 typedef struct ReplicationOps ReplicationOps;

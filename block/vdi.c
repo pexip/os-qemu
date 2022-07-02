@@ -85,8 +85,7 @@
 #define BLOCK_OPT_STATIC "static"
 
 #define SECTOR_SIZE 512
-#define DEFAULT_CLUSTER_SIZE 1048576
-/* Note: can't use 1 * MiB, because it's passed to stringify() */
+#define DEFAULT_CLUSTER_SIZE S_1MiB
 
 #if defined(CONFIG_VDI_DEBUG)
 #define VDI_DEBUG 1
@@ -171,8 +170,6 @@ typedef struct {
     uint64_t unused2[7];
 } QEMU_PACKED VdiHeader;
 
-QEMU_BUILD_BUG_ON(sizeof(VdiHeader) != 512);
-
 typedef struct {
     /* The block map entries are little endian (even in memory). */
     uint32_t *bmap;
@@ -206,10 +203,10 @@ static void vdi_header_to_cpu(VdiHeader *header)
     header->block_extra = le32_to_cpu(header->block_extra);
     header->blocks_in_image = le32_to_cpu(header->blocks_in_image);
     header->blocks_allocated = le32_to_cpu(header->blocks_allocated);
-    header->uuid_image = qemu_uuid_bswap(header->uuid_image);
-    header->uuid_last_snap = qemu_uuid_bswap(header->uuid_last_snap);
-    header->uuid_link = qemu_uuid_bswap(header->uuid_link);
-    header->uuid_parent = qemu_uuid_bswap(header->uuid_parent);
+    qemu_uuid_bswap(&header->uuid_image);
+    qemu_uuid_bswap(&header->uuid_last_snap);
+    qemu_uuid_bswap(&header->uuid_link);
+    qemu_uuid_bswap(&header->uuid_parent);
 }
 
 static void vdi_header_to_le(VdiHeader *header)
@@ -230,16 +227,15 @@ static void vdi_header_to_le(VdiHeader *header)
     header->block_extra = cpu_to_le32(header->block_extra);
     header->blocks_in_image = cpu_to_le32(header->blocks_in_image);
     header->blocks_allocated = cpu_to_le32(header->blocks_allocated);
-    header->uuid_image = qemu_uuid_bswap(header->uuid_image);
-    header->uuid_last_snap = qemu_uuid_bswap(header->uuid_last_snap);
-    header->uuid_link = qemu_uuid_bswap(header->uuid_link);
-    header->uuid_parent = qemu_uuid_bswap(header->uuid_parent);
+    qemu_uuid_bswap(&header->uuid_image);
+    qemu_uuid_bswap(&header->uuid_last_snap);
+    qemu_uuid_bswap(&header->uuid_link);
+    qemu_uuid_bswap(&header->uuid_parent);
 }
 
 static void vdi_header_print(VdiHeader *header)
 {
-    char uuidstr[37];
-    QemuUUID uuid;
+    char uuid[37];
     logout("text        %s", header->text);
     logout("signature   0x%08x\n", header->signature);
     logout("header size 0x%04x\n", header->header_size);
@@ -258,18 +254,14 @@ static void vdi_header_print(VdiHeader *header)
     logout("block extra 0x%04x\n", header->block_extra);
     logout("blocks tot. 0x%04x\n", header->blocks_in_image);
     logout("blocks all. 0x%04x\n", header->blocks_allocated);
-    uuid = header->uuid_image;
-    qemu_uuid_unparse(&uuid, uuidstr);
-    logout("uuid image  %s\n", uuidstr);
-    uuid = header->uuid_last_snap;
-    qemu_uuid_unparse(&uuid, uuidstr);
-    logout("uuid snap   %s\n", uuidstr);
-    uuid = header->uuid_link;
-    qemu_uuid_unparse(&uuid, uuidstr);
-    logout("uuid link   %s\n", uuidstr);
-    uuid = header->uuid_parent;
-    qemu_uuid_unparse(&uuid, uuidstr);
-    logout("uuid parent %s\n", uuidstr);
+    qemu_uuid_unparse(&header->uuid_image, uuid);
+    logout("uuid image  %s\n", uuid);
+    qemu_uuid_unparse(&header->uuid_last_snap, uuid);
+    logout("uuid snap   %s\n", uuid);
+    qemu_uuid_unparse(&header->uuid_link, uuid);
+    logout("uuid link   %s\n", uuid);
+    qemu_uuid_unparse(&header->uuid_parent, uuid);
+    logout("uuid parent %s\n", uuid);
 }
 
 static int coroutine_fn vdi_co_check(BlockDriverState *bs, BdrvCheckResult *res,
@@ -334,6 +326,7 @@ static int vdi_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
     logout("\n");
     bdi->cluster_size = s->block_size;
     bdi->vm_state_offset = 0;
+    bdi->unallocated_blocks_are_zero = true;
     return 0;
 }
 
@@ -374,17 +367,17 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
     VdiHeader header;
     size_t bmap_size;
     int ret;
-    QemuUUID uuid_link, uuid_parent;
+    Error *local_err = NULL;
 
-    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_of_bds,
-                               BDRV_CHILD_IMAGE, false, errp);
+    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_file,
+                               false, errp);
     if (!bs->file) {
         return -EINVAL;
     }
 
     logout("\n");
 
-    ret = bdrv_pread(bs->file, 0, &header, sizeof(header));
+    ret = bdrv_read(bs->file, 0, (uint8_t *)&header, 1);
     if (ret < 0) {
         goto fail;
     }
@@ -401,9 +394,6 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
         ret = -ENOTSUP;
         goto fail;
     }
-
-    uuid_link = header.uuid_link;
-    uuid_parent = header.uuid_parent;
 
     if (header.disk_size % SECTOR_SIZE != 0) {
         /* 'VBoxManage convertfromraw' can create images with odd disk sizes.
@@ -454,11 +444,11 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
                    (uint64_t)header.blocks_in_image * header.block_size);
         ret = -ENOTSUP;
         goto fail;
-    } else if (!qemu_uuid_is_null(&uuid_link)) {
+    } else if (!qemu_uuid_is_null(&header.uuid_link)) {
         error_setg(errp, "unsupported VDI image (non-NULL link UUID)");
         ret = -ENOTSUP;
         goto fail;
-    } else if (!qemu_uuid_is_null(&uuid_parent)) {
+    } else if (!qemu_uuid_is_null(&header.uuid_parent)) {
         error_setg(errp, "unsupported VDI image (non-NULL parent UUID)");
         ret = -ENOTSUP;
         goto fail;
@@ -484,8 +474,8 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
         goto fail;
     }
 
-    ret = bdrv_pread(bs->file, header.offset_bmap, s->bmap,
-                     bmap_size * SECTOR_SIZE);
+    ret = bdrv_read(bs->file, s->bmap_sector, (uint8_t *)s->bmap,
+                    bmap_size);
     if (ret < 0) {
         goto fail_free_bmap;
     }
@@ -494,8 +484,9 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
     error_setg(&s->migration_blocker, "The vdi format used by node '%s' "
                "does not support live migration",
                bdrv_get_device_or_node_name(bs));
-    ret = migrate_add_blocker(s->migration_blocker, errp);
-    if (ret < 0) {
+    ret = migrate_add_blocker(s->migration_blocker, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
         error_free(s->migration_blocker);
         goto fail_free_bmap;
     }
@@ -533,14 +524,13 @@ static int coroutine_fn vdi_co_block_status(BlockDriverState *bs,
     *pnum = MIN(s->block_size - index_in_block, bytes);
     result = VDI_IS_ALLOCATED(bmap_entry);
     if (!result) {
-        return BDRV_BLOCK_ZERO;
+        return 0;
     }
 
     *map = s->header.offset_data + (uint64_t)bmap_entry * s->block_size +
         index_in_block;
     *file = bs->file->bs;
-    return BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID |
-        (s->header.image_type == VDI_TYPE_STATIC ? BDRV_BLOCK_RECURSE : 0);
+    return BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID;
 }
 
 static int coroutine_fn
@@ -704,7 +694,7 @@ nonallocating_write:
         assert(VDI_IS_ALLOCATED(bmap_first));
         *header = s->header;
         vdi_header_to_le(header);
-        ret = bdrv_pwrite(bs->file, 0, block, sizeof(VdiHeader));
+        ret = bdrv_write(bs->file, 0, block, 1);
         g_free(block);
         block = NULL;
 
@@ -722,11 +712,10 @@ nonallocating_write:
         base = ((uint8_t *)&s->bmap[0]) + bmap_first * SECTOR_SIZE;
         logout("will write %u block map sectors starting from entry %u\n",
                n_sectors, bmap_first);
-        ret = bdrv_pwrite(bs->file, offset * SECTOR_SIZE, base,
-                          n_sectors * SECTOR_SIZE);
+        ret = bdrv_write(bs->file, offset, base, n_sectors);
     }
 
-    return ret < 0 ? ret : 0;
+    return ret;
 }
 
 static int coroutine_fn vdi_co_do_create(BlockdevCreateOptions *create_options,
@@ -744,7 +733,6 @@ static int coroutine_fn vdi_co_do_create(BlockdevCreateOptions *create_options,
     BlockDriverState *bs_file = NULL;
     BlockBackend *blk = NULL;
     uint32_t *bmap = NULL;
-    QemuUUID uuid;
 
     assert(create_options->driver == BLOCKDEV_DRIVER_VDI);
     vdi_opts = &create_options->u.vdi;
@@ -801,10 +789,9 @@ static int coroutine_fn vdi_co_do_create(BlockdevCreateOptions *create_options,
         goto exit;
     }
 
-    blk = blk_new_with_bs(bs_file, BLK_PERM_WRITE | BLK_PERM_RESIZE,
-                          BLK_PERM_ALL, errp);
-    if (!blk) {
-        ret = -EPERM;
+    blk = blk_new(BLK_PERM_WRITE | BLK_PERM_RESIZE, BLK_PERM_ALL);
+    ret = blk_insert_bs(blk, bs_file, errp);
+    if (ret < 0) {
         goto exit;
     }
 
@@ -832,10 +819,8 @@ static int coroutine_fn vdi_co_do_create(BlockdevCreateOptions *create_options,
     if (image_type == VDI_TYPE_STATIC) {
         header.blocks_allocated = blocks;
     }
-    qemu_uuid_generate(&uuid);
-    header.uuid_image = uuid;
-    qemu_uuid_generate(&uuid);
-    header.uuid_last_snap = uuid;
+    qemu_uuid_generate(&header.uuid_image);
+    qemu_uuid_generate(&header.uuid_last_snap);
     /* There is no need to set header.uuid_link or header.uuid_parent here. */
     if (VDI_DEBUG) {
         vdi_header_print(&header);
@@ -871,8 +856,8 @@ static int coroutine_fn vdi_co_do_create(BlockdevCreateOptions *create_options,
     }
 
     if (image_type == VDI_TYPE_STATIC) {
-        ret = blk_truncate(blk, offset + blocks * block_size, false,
-                           PREALLOC_MODE_OFF, 0, errp);
+        ret = blk_truncate(blk, offset + blocks * block_size,
+                           PREALLOC_MODE_OFF, errp);
         if (ret < 0) {
             error_prepend(errp, "Failed to statically allocate file");
             goto exit;
@@ -893,9 +878,7 @@ static int coroutine_fn vdi_co_create(BlockdevCreateOptions *create_options,
     return vdi_co_do_create(create_options, DEFAULT_CLUSTER_SIZE, errp);
 }
 
-static int coroutine_fn vdi_co_create_opts(BlockDriver *drv,
-                                           const char *filename,
-                                           QemuOpts *opts,
+static int coroutine_fn vdi_co_create_opts(const char *filename, QemuOpts *opts,
                                            Error **errp)
 {
     QDict *qdict = NULL;
@@ -904,6 +887,7 @@ static int coroutine_fn vdi_co_create_opts(BlockDriver *drv,
     uint64_t block_size = DEFAULT_CLUSTER_SIZE;
     bool is_static = false;
     Visitor *v;
+    Error *local_err = NULL;
     int ret;
 
     /* Parse options and convert legacy syntax.
@@ -954,9 +938,11 @@ static int coroutine_fn vdi_co_create_opts(BlockDriver *drv,
         ret = -EINVAL;
         goto done;
     }
-    visit_type_BlockdevCreateOptions(v, NULL, &create_options, errp);
+    visit_type_BlockdevCreateOptions(v, NULL, &create_options, &local_err);
     visit_free(v);
-    if (!create_options) {
+
+    if (local_err) {
+        error_propagate(errp, local_err);
         ret = -EINVAL;
         goto done;
     }
@@ -983,17 +969,6 @@ static void vdi_close(BlockDriverState *bs)
 
     migrate_del_blocker(s->migration_blocker);
     error_free(s->migration_blocker);
-}
-
-static int vdi_has_zero_init(BlockDriverState *bs)
-{
-    BDRVVdiState *s = bs->opaque;
-
-    if (s->header.image_type == VDI_TYPE_STATIC) {
-        return bdrv_has_zero_init(bs->file->bs);
-    } else {
-        return 1;
-    }
 }
 
 static QemuOptsList vdi_create_opts = {
@@ -1033,10 +1008,10 @@ static BlockDriver bdrv_vdi = {
     .bdrv_open = vdi_open,
     .bdrv_close = vdi_close,
     .bdrv_reopen_prepare = vdi_reopen_prepare,
-    .bdrv_child_perm          = bdrv_default_perms,
+    .bdrv_child_perm          = bdrv_format_default_perms,
     .bdrv_co_create      = vdi_co_create,
     .bdrv_co_create_opts = vdi_co_create_opts,
-    .bdrv_has_zero_init  = vdi_has_zero_init,
+    .bdrv_has_zero_init = bdrv_has_zero_init_1,
     .bdrv_co_block_status = vdi_co_block_status,
     .bdrv_make_empty = vdi_make_empty,
 
@@ -1047,7 +1022,6 @@ static BlockDriver bdrv_vdi = {
 
     .bdrv_get_info = vdi_get_info,
 
-    .is_format = true,
     .create_opts = &vdi_create_opts,
     .bdrv_co_check = vdi_co_check,
 };

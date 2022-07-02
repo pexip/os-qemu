@@ -1,4 +1,5 @@
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "migration/blocker.h"
 
 int migrate_add_blocker(Error *reason, Error **errp)

@@ -15,49 +15,39 @@
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/pci_host.h"
-#include "hw/qdev-properties.h"
 #include "hw/pci/pci_bridge.h"
 #include "qemu/range.h"
 #include "qemu/error-report.h"
-#include "qemu/module.h"
 #include "sysemu/numa.h"
-#include "hw/boards.h"
-#include "qom/object.h"
 
 #define TYPE_PXB_BUS "pxb-bus"
-typedef struct PXBBus PXBBus;
-DECLARE_INSTANCE_CHECKER(PXBBus, PXB_BUS,
-                         TYPE_PXB_BUS)
+#define PXB_BUS(obj) OBJECT_CHECK(PXBBus, (obj), TYPE_PXB_BUS)
 
 #define TYPE_PXB_PCIE_BUS "pxb-pcie-bus"
-DECLARE_INSTANCE_CHECKER(PXBBus, PXB_PCIE_BUS,
-                         TYPE_PXB_PCIE_BUS)
+#define PXB_PCIE_BUS(obj) OBJECT_CHECK(PXBBus, (obj), TYPE_PXB_PCIE_BUS)
 
-struct PXBBus {
+typedef struct PXBBus {
     /*< private >*/
     PCIBus parent_obj;
     /*< public >*/
 
     char bus_path[8];
-};
+} PXBBus;
 
 #define TYPE_PXB_DEVICE "pxb"
-typedef struct PXBDev PXBDev;
-DECLARE_INSTANCE_CHECKER(PXBDev, PXB_DEV,
-                         TYPE_PXB_DEVICE)
+#define PXB_DEV(obj) OBJECT_CHECK(PXBDev, (obj), TYPE_PXB_DEVICE)
 
 #define TYPE_PXB_PCIE_DEVICE "pxb-pcie"
-DECLARE_INSTANCE_CHECKER(PXBDev, PXB_PCIE_DEV,
-                         TYPE_PXB_PCIE_DEVICE)
+#define PXB_PCIE_DEV(obj) OBJECT_CHECK(PXBDev, (obj), TYPE_PXB_PCIE_DEVICE)
 
-struct PXBDev {
+typedef struct PXBDev {
     /*< private >*/
     PCIDevice parent_obj;
     /*< public >*/
 
     uint8_t bus_nr;
     uint16_t numa_node;
-};
+} PXBDev;
 
 static PXBDev *convert_to_pxb(PCIDevice *dev)
 {
@@ -76,6 +66,11 @@ static int pxb_bus_num(PCIBus *bus)
     return pxb->bus_nr;
 }
 
+static bool pxb_is_root(PCIBus *bus)
+{
+    return true; /* by definition */
+}
+
 static uint16_t pxb_bus_numa_node(PCIBus *bus)
 {
     PXBDev *pxb = convert_to_pxb(bus->parent_dev);
@@ -88,6 +83,7 @@ static void pxb_bus_class_init(ObjectClass *class, void *data)
     PCIBusClass *pbc = PCI_BUS_CLASS(class);
 
     pbc->bus_num = pxb_bus_num;
+    pbc->is_root = pxb_is_root;
     pbc->numa_node = pxb_bus_numa_node;
 }
 
@@ -221,15 +217,9 @@ static void pxb_dev_realize_common(PCIDevice *dev, bool pcie, Error **errp)
     PCIBus *bus;
     const char *dev_name = NULL;
     Error *local_err = NULL;
-    MachineState *ms = MACHINE(qdev_get_machine());
-
-    if (ms->numa_state == NULL) {
-        error_setg(errp, "NUMA is not supported by this machine-type");
-        return;
-    }
 
     if (pxb->numa_node != NUMA_NODE_UNASSIGNED &&
-        pxb->numa_node >= ms->numa_state->num_nodes) {
+        pxb->numa_node >= nb_numa_nodes) {
         error_setg(errp, "Illegal numa node %d", pxb->numa_node);
         return;
     }
@@ -238,12 +228,12 @@ static void pxb_dev_realize_common(PCIDevice *dev, bool pcie, Error **errp)
         dev_name = dev->qdev.id;
     }
 
-    ds = qdev_new(TYPE_PXB_HOST);
+    ds = qdev_create(NULL, TYPE_PXB_HOST);
     if (pcie) {
         bus = pci_root_bus_new(ds, dev_name, NULL, NULL, 0, TYPE_PXB_PCIE_BUS);
     } else {
         bus = pci_root_bus_new(ds, "pxb-internal", NULL, NULL, 0, TYPE_PXB_BUS);
-        bds = qdev_new("pci-bridge");
+        bds = qdev_create(BUS(bus), "pci-bridge");
         bds->id = dev_name;
         qdev_prop_set_uint8(bds, PCI_BRIDGE_DEV_PROP_CHASSIS_NR, pxb->bus_nr);
         qdev_prop_set_bit(bds, PCI_BRIDGE_DEV_PROP_SHPC, false);
@@ -262,9 +252,9 @@ static void pxb_dev_realize_common(PCIDevice *dev, bool pcie, Error **errp)
         goto err_register_bus;
     }
 
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(ds), &error_fatal);
+    qdev_init_nofail(ds);
     if (bds) {
-        qdev_realize_and_unref(bds, &bus->qbus, &error_fatal);
+        qdev_init_nofail(bds);
     }
 
     pci_word_test_and_set_mask(dev->config + PCI_STATUS,
@@ -316,7 +306,7 @@ static void pxb_dev_class_init(ObjectClass *klass, void *data)
     k->class_id = PCI_CLASS_BRIDGE_HOST;
 
     dc->desc = "PCI Expander Bridge";
-    device_class_set_props(dc, pxb_dev_properties);
+    dc->props = pxb_dev_properties;
     dc->hotpluggable = false;
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
 }
@@ -354,7 +344,7 @@ static void pxb_pcie_dev_class_init(ObjectClass *klass, void *data)
     k->class_id = PCI_CLASS_BRIDGE_HOST;
 
     dc->desc = "PCI Express Expander Bridge";
-    device_class_set_props(dc, pxb_dev_properties);
+    dc->props = pxb_dev_properties;
     dc->hotpluggable = false;
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
 }

@@ -19,14 +19,12 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/module.h"
+#include "qemu-common.h"
 #include "qapi/error.h"
 
 #include "hw/sysbus.h"
-#include "hw/irq.h"
+#include "sysemu/sysemu.h"
 #include "hw/ptimer.h"
-#include "hw/qdev-properties.h"
-#include "qom/object.h"
 
 #define R_STATUS      0
 #define R_CONTROL     1
@@ -45,16 +43,18 @@
 #define CONTROL_STOP  0x0008
 
 #define TYPE_ALTERA_TIMER "ALTR.timer"
-OBJECT_DECLARE_SIMPLE_TYPE(AlteraTimer, ALTERA_TIMER)
+#define ALTERA_TIMER(obj) \
+    OBJECT_CHECK(AlteraTimer, (obj), TYPE_ALTERA_TIMER)
 
-struct AlteraTimer {
+typedef struct AlteraTimer {
     SysBusDevice  busdev;
     MemoryRegion  mmio;
     qemu_irq      irq;
     uint32_t      freq_hz;
+    QEMUBH       *bh;
     ptimer_state *ptimer;
     uint32_t      regs[R_MAX];
-};
+} AlteraTimer;
 
 static int timer_irq_state(AlteraTimer *t)
 {
@@ -103,7 +103,6 @@ static void timer_write(void *opaque, hwaddr addr,
         break;
 
     case R_CONTROL:
-        ptimer_transaction_begin(t->ptimer);
         t->regs[R_CONTROL] = value & (CONTROL_ITO | CONTROL_CONT);
         if ((value & CONTROL_START) &&
             !(t->regs[R_STATUS] & STATUS_RUN)) {
@@ -114,12 +113,10 @@ static void timer_write(void *opaque, hwaddr addr,
             ptimer_stop(t->ptimer);
             t->regs[R_STATUS] &= ~STATUS_RUN;
         }
-        ptimer_transaction_commit(t->ptimer);
         break;
 
     case R_PERIODL:
     case R_PERIODH:
-        ptimer_transaction_begin(t->ptimer);
         t->regs[addr] = value & 0xFFFF;
         if (t->regs[R_STATUS] & STATUS_RUN) {
             ptimer_stop(t->ptimer);
@@ -127,7 +124,6 @@ static void timer_write(void *opaque, hwaddr addr,
         }
         tvalue = (t->regs[R_PERIODH] << 16) | t->regs[R_PERIODL];
         ptimer_set_limit(t->ptimer, tvalue + 1, 1);
-        ptimer_transaction_commit(t->ptimer);
         break;
 
     case R_SNAPL:
@@ -185,10 +181,9 @@ static void altera_timer_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    t->ptimer = ptimer_init(timer_hit, t, PTIMER_POLICY_DEFAULT);
-    ptimer_transaction_begin(t->ptimer);
+    t->bh = qemu_bh_new(timer_hit, t);
+    t->ptimer = ptimer_init(t->bh, PTIMER_POLICY_DEFAULT);
     ptimer_set_freq(t->ptimer, t->freq_hz);
-    ptimer_transaction_commit(t->ptimer);
 
     memory_region_init_io(&t->mmio, OBJECT(t), &timer_ops, t,
                           TYPE_ALTERA_TIMER, R_MAX * sizeof(uint32_t));
@@ -207,10 +202,8 @@ static void altera_timer_reset(DeviceState *dev)
 {
     AlteraTimer *t = ALTERA_TIMER(dev);
 
-    ptimer_transaction_begin(t->ptimer);
     ptimer_stop(t->ptimer);
     ptimer_set_limit(t->ptimer, 0xffffffff, 1);
-    ptimer_transaction_commit(t->ptimer);
     memset(t->regs, 0, sizeof(t->regs));
 }
 
@@ -224,7 +217,7 @@ static void altera_timer_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = altera_timer_realize;
-    device_class_set_props(dc, altera_timer_properties);
+    dc->props = altera_timer_properties;
     dc->reset = altera_timer_reset;
 }
 

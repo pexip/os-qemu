@@ -11,10 +11,8 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
-
-#ifndef HVF_X86_TASK_H
-#define HVF_X86_TASK_H
-
+#ifndef HVF_TASK
+#define HVF_TASK
 void vmx_handle_task_switch(CPUState *cpu, x68_segment_selector tss_sel,
         int reason, bool gate_valid, uint8_t gate, uint64_t gate_type);
 #endif

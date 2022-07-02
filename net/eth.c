@@ -16,9 +16,9 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/log.h"
 #include "net/eth.h"
 #include "net/checksum.h"
+#include "qemu-common.h"
 #include "net/tap.h"
 
 void eth_setup_vlan_headers_ex(struct eth_header *ehdr, uint16_t vlan_tag,
@@ -72,8 +72,9 @@ eth_get_gso_type(uint16_t l3_proto, uint8_t *l3_hdr, uint8_t l4proto)
             return VIRTIO_NET_HDR_GSO_TCPV6 | ecn_state;
         }
     }
-    qemu_log_mask(LOG_UNIMP, "%s: probably not GSO frame, "
-        "unknown L3 protocol: 0x%04"PRIx16"\n", __func__, l3_proto);
+
+    /* Unsupported offload */
+    g_assert_not_reached();
 
     return VIRTIO_NET_HDR_GSO_NONE | ecn_state;
 }

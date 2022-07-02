@@ -52,6 +52,9 @@ typedef struct IvshmemServerPeer {
     EventNotifier vectors[IVSHMEM_SERVER_MAX_VECTORS]; /**< one per vector */
     unsigned vectors_count;                  /**< number of vectors */
 } IvshmemServerPeer;
+QTAILQ_HEAD(IvshmemServerPeerList, IvshmemServerPeer);
+
+typedef struct IvshmemServerPeerList IvshmemServerPeerList;
 
 /**
  * Structure describing an ivshmem server
@@ -69,7 +72,7 @@ typedef struct IvshmemServer {
     unsigned n_vectors;              /**< number of vectors */
     uint16_t cur_id;                 /**< id to be given to next client */
     bool verbose;                    /**< true in verbose mode */
-    QTAILQ_HEAD(, IvshmemServerPeer) peer_list; /**< list of peers */
+    IvshmemServerPeerList peer_list; /**< list of peers */
 } IvshmemServer;
 
 /**

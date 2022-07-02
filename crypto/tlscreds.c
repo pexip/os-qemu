@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,7 +20,6 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
 #include "tlscredspriv.h"
 #include "trace.h"
 
@@ -226,18 +225,22 @@ qcrypto_tls_creds_class_init(ObjectClass *oc, void *data)
 {
     object_class_property_add_bool(oc, "verify-peer",
                                    qcrypto_tls_creds_prop_get_verify,
-                                   qcrypto_tls_creds_prop_set_verify);
+                                   qcrypto_tls_creds_prop_set_verify,
+                                   NULL);
     object_class_property_add_str(oc, "dir",
                                   qcrypto_tls_creds_prop_get_dir,
-                                  qcrypto_tls_creds_prop_set_dir);
+                                  qcrypto_tls_creds_prop_set_dir,
+                                  NULL);
     object_class_property_add_enum(oc, "endpoint",
                                    "QCryptoTLSCredsEndpoint",
                                    &QCryptoTLSCredsEndpoint_lookup,
                                    qcrypto_tls_creds_prop_get_endpoint,
-                                   qcrypto_tls_creds_prop_set_endpoint);
+                                   qcrypto_tls_creds_prop_set_endpoint,
+                                   NULL);
     object_class_property_add_str(oc, "priority",
                                   qcrypto_tls_creds_prop_get_priority,
-                                  qcrypto_tls_creds_prop_set_priority);
+                                  qcrypto_tls_creds_prop_set_priority,
+                                  NULL);
 }
 
 

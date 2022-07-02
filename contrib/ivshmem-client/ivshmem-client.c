@@ -10,6 +10,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
+#include "qemu-common.h"
 #include "qemu/queue.h"
 
 #include "ivshmem-client.h"

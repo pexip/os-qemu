@@ -48,12 +48,12 @@
 #define siglongjmp(env, val) longjmp(env, val)
 
 /* Missing POSIX functions. Don't use MinGW-w64 macros. */
-#ifndef _POSIX_THREAD_SAFE_FUNCTIONS
+#ifndef CONFIG_LOCALTIME_R
 #undef gmtime_r
 struct tm *gmtime_r(const time_t *timep, struct tm *result);
 #undef localtime_r
 struct tm *localtime_r(const time_t *timep, struct tm *result);
-#endif /* _POSIX_THREAD_SAFE_FUNCTIONS */
+#endif /* CONFIG_LOCALTIME_R */
 
 static inline void os_setup_signal_handling(void) {}
 static inline void os_daemonize(void) {}
@@ -66,6 +66,8 @@ int getpagesize(void);
 #if !defined(EPROTONOSUPPORT)
 # define EPROTONOSUPPORT EINVAL
 #endif
+
+int setenv(const char *name, const char *value, int overwrite);
 
 typedef struct {
     long tv_sec;

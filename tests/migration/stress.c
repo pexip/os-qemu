@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -29,12 +29,10 @@ const char *argv0;
 
 #define PAGE_SIZE 4096
 
-#ifndef CONFIG_GETTID
 static int gettid(void)
 {
     return syscall(SYS_gettid);
 }
-#endif
 
 static __attribute__((noreturn)) void exit_failure(void)
 {
@@ -46,6 +44,19 @@ static __attribute__((noreturn)) void exit_failure(void)
         abort();
     } else {
         exit(1);
+    }
+}
+
+static __attribute__((noreturn)) void exit_success(void)
+{
+    if (getpid() == 1) {
+        sync();
+        reboot(RB_POWER_OFF);
+        fprintf(stderr, "%s (%05d): ERROR: cannot reboot: %s\n",
+                argv0, gettid(), strerror(errno));
+        abort();
+    } else {
+        exit(0);
     }
 }
 
@@ -93,9 +104,9 @@ static int get_command_arg_str(const char *name,
     }
 
     if (end)
-        *val = g_strndup(start, end - start);
+        *val = strndup(start, end - start);
     else
-        *val = g_strdup(start);
+        *val = strdup(start);
     return 1;
 }
 
@@ -115,10 +126,10 @@ static int get_command_arg_ull(const char *name,
     if (errno || *end) {
         fprintf(stderr, "%s (%05d): ERROR: cannot parse %s value %s\n",
                 argv0, gettid(), name, valstr);
-        g_free(valstr);
+        free(valstr);
         return -1;
     }
-    g_free(valstr);
+    free(valstr);
     return 0;
 }
 
@@ -156,26 +167,40 @@ static unsigned long long now(void)
     return (tv.tv_sec * 1000ull) + (tv.tv_usec / 1000ull);
 }
 
-static void stressone(unsigned long long ramsizeMB)
+static int stressone(unsigned long long ramsizeMB)
 {
     size_t pagesPerMB = 1024 * 1024 / PAGE_SIZE;
-    g_autofree char *ram = g_malloc(ramsizeMB * 1024 * 1024);
+    char *ram = malloc(ramsizeMB * 1024 * 1024);
     char *ramptr;
     size_t i, j, k;
-    g_autofree char *data = g_malloc(PAGE_SIZE);
+    char *data = malloc(PAGE_SIZE);
     char *dataptr;
     size_t nMB = 0;
     unsigned long long before, after;
 
+    if (!ram) {
+        fprintf(stderr, "%s (%05d): ERROR: cannot allocate %llu MB of RAM: %s\n",
+                argv0, gettid(), ramsizeMB, strerror(errno));
+        return -1;
+    }
+    if (!data) {
+        fprintf(stderr, "%s (%d): ERROR: cannot allocate %d bytes of RAM: %s\n",
+                argv0, gettid(), PAGE_SIZE, strerror(errno));
+        free(ram);
+        return -1;
+    }
+
     /* We don't care about initial state, but we do want
      * to fault it all into RAM, otherwise the first iter
-     * of the loop below will be quite slow. We can't use
+     * of the loop below will be quite slow. We cna't use
      * 0x0 as the byte as gcc optimizes that away into a
      * calloc instead :-) */
     memset(ram, 0xfe, ramsizeMB * 1024 * 1024);
 
     if (random_bytes(data, PAGE_SIZE) < 0) {
-        return;
+        free(ram);
+        free(data);
+        return -1;
     }
 
     before = now();
@@ -202,6 +227,9 @@ static void stressone(unsigned long long ramsizeMB)
             }
         }
     }
+
+    free(data);
+    free(ram);
 }
 
 
@@ -214,7 +242,7 @@ static void *stressthread(void *arg)
     return NULL;
 }
 
-static void stress(unsigned long long ramsizeGB, int ncpus)
+static int stress(unsigned long long ramsizeGB, int ncpus)
 {
     size_t i;
     unsigned long long ramsizeMB = ramsizeGB * 1024 / ncpus;
@@ -227,6 +255,8 @@ static void stress(unsigned long long ramsizeGB, int ncpus)
     }
 
     stressone(ramsizeMB);
+
+    return 0;
 }
 
 
@@ -322,7 +352,8 @@ int main(int argc, char **argv)
     fprintf(stdout, "%s (%05d): INFO: RAM %llu GiB across %d CPUs\n",
             argv0, gettid(), ramsizeGB, ncpus);
 
-    stress(ramsizeGB, ncpus);
+    if (stress(ramsizeGB, ncpus) < 0)
+        exit_failure();
 
-    exit_failure();
+    exit_success();
 }

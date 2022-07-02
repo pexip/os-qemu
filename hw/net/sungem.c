@@ -9,21 +9,17 @@
 
 #include "qemu/osdep.h"
 #include "hw/pci/pci.h"
-#include "hw/qdev-properties.h"
-#include "migration/vmstate.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 #include "net/net.h"
 #include "net/eth.h"
 #include "net/checksum.h"
 #include "hw/net/mii.h"
 #include "sysemu/sysemu.h"
 #include "trace.h"
-#include "qom/object.h"
 
 #define TYPE_SUNGEM "sungem"
 
-OBJECT_DECLARE_SIMPLE_TYPE(SunGEMState, SUNGEM)
+#define SUNGEM(obj) OBJECT_CHECK(SunGEMState, (obj), TYPE_SUNGEM)
 
 #define MAX_PACKET_SIZE 9016
 
@@ -193,7 +189,7 @@ struct gem_rxd {
 #define RXDCTRL_ALTMAC    0x2000000000000000ULL  /* Matched ALT MAC */
 
 
-struct SunGEMState {
+typedef struct {
     PCIDevice pdev;
 
     MemoryRegion sungem;
@@ -222,7 +218,7 @@ struct SunGEMState {
     uint8_t tx_data[MAX_PACKET_SIZE];
     uint32_t tx_size;
     uint64_t tx_first_ctl;
-};
+} SunGEMState;
 
 
 static void sungem_eval_irq(SunGEMState *s)
@@ -434,7 +430,7 @@ static bool sungem_rx_full(SunGEMState *s, uint32_t kick, uint32_t done)
     return kick == ((done + 1) & s->rx_mask);
 }
 
-static bool sungem_can_receive(NetClientState *nc)
+static int sungem_can_receive(NetClientState *nc)
 {
     SunGEMState *s = qemu_get_nic_opaque(nc);
     uint32_t kick, done, rxdma_cfg, rxmac_cfg;
@@ -446,11 +442,11 @@ static bool sungem_can_receive(NetClientState *nc)
     /* If MAC disabled, can't receive */
     if ((rxmac_cfg & MAC_RXCFG_ENAB) == 0) {
         trace_sungem_rx_mac_disabled();
-        return false;
+        return 0;
     }
     if ((rxdma_cfg & RXDMA_CFG_ENABLE) == 0) {
         trace_sungem_rx_txdma_disabled();
-        return false;
+        return 0;
     }
 
     /* Check RX availability */
@@ -1379,7 +1375,7 @@ static void sungem_instance_init(Object *obj)
 
     device_add_bootindex_property(obj, &s->conf.bootindex,
                                   "bootindex", "/ethernet-phy@0",
-                                  DEVICE(obj));
+                                  DEVICE(obj), NULL);
 }
 
 static Property sungem_properties[] = {
@@ -1430,7 +1426,7 @@ static void sungem_class_init(ObjectClass *klass, void *data)
     k->class_id = PCI_CLASS_NETWORK_ETHERNET;
     dc->vmsd = &vmstate_sungem;
     dc->reset = sungem_reset;
-    device_class_set_props(dc, sungem_properties);
+    dc->props = sungem_properties;
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
 }
 

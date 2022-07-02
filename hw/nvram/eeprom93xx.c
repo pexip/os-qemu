@@ -36,9 +36,8 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/nvram/eeprom93xx.h"
-#include "migration/qemu-file-types.h"
-#include "migration/vmstate.h"
 
 /* Debug EEPROM emulation. */
 //~ #define DEBUG_EEPROM
@@ -86,7 +85,7 @@ struct _eeprom_t {
     uint8_t  addrbits;
     uint16_t size;
     uint16_t data;
-    uint16_t contents[];
+    uint16_t contents[0];
 };
 
 /* Code for saving and restoring of EEPROM state. */
@@ -321,7 +320,7 @@ eeprom_t *eeprom93xx_new(DeviceState *dev, uint16_t nwords)
     /* Output DO is tristate, read results in 1. */
     eeprom->eedo = 1;
     logout("eeprom = 0x%p, nwords = %u\n", eeprom, nwords);
-    vmstate_register(VMSTATE_IF(dev), 0, &vmstate_eeprom, eeprom);
+    vmstate_register(dev, 0, &vmstate_eeprom, eeprom);
     return eeprom;
 }
 
@@ -329,7 +328,7 @@ void eeprom93xx_free(DeviceState *dev, eeprom_t *eeprom)
 {
     /* Destroy EEPROM. */
     logout("eeprom = 0x%p\n", eeprom);
-    vmstate_unregister(VMSTATE_IF(dev), &vmstate_eeprom, eeprom);
+    vmstate_unregister(dev, &vmstate_eeprom, eeprom);
     g_free(eeprom);
 }
 

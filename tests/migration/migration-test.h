@@ -4,9 +4,8 @@
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
  */
-
-#ifndef MIGRATION_TEST_H
-#define MIGRATION_TEST_H
+#ifndef _TEST_MIGRATION_H_
+#define _TEST_MIGRATION_H_
 
 /* Common */
 #define TEST_MEM_PAGE_SIZE 4096
@@ -32,4 +31,4 @@
  */
 #define ARM_TEST_MAX_KERNEL_SIZE (512 * 1024)
 
-#endif /* MIGRATION_TEST_H */
+#endif /* _TEST_MIGRATION_H_ */

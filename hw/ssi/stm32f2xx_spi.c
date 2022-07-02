@@ -24,9 +24,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 #include "hw/ssi/stm32f2xx_spi.h"
-#include "migration/vmstate.h"
 
 #ifndef STM_SPI_ERR_DEBUG
 #define STM_SPI_ERR_DEBUG 0

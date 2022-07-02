@@ -15,10 +15,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 #include "hw/misc/msf2-sysreg.h"
-#include "hw/qdev-properties.h"
-#include "migration/vmstate.h"
 #include "qemu/error-report.h"
 #include "trace.h"
 
@@ -143,7 +140,7 @@ static void msf2_sysreg_class_init(ObjectClass *klass, void *data)
 
     dc->vmsd = &vmstate_msf2_sysreg;
     dc->reset = msf2_sysreg_reset;
-    device_class_set_props(dc, msf2_sysreg_properties);
+    dc->props = msf2_sysreg_properties;
     dc->realize = msf2_sysreg_realize;
 }
 

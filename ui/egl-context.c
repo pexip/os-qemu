@@ -1,4 +1,5 @@
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "ui/egl-context.h"
 
 QEMUGLContext qemu_egl_create_context(DisplayChangeListener *dcl,

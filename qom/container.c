@@ -16,6 +16,7 @@
 
 static const TypeInfo container_info = {
     .name          = "container",
+    .instance_size = sizeof(Object),
     .parent        = TYPE_OBJECT,
 };
 
@@ -27,7 +28,7 @@ static void container_register_types(void)
 Object *container_get(Object *root, const char *path)
 {
     Object *obj, *child;
-    char **parts;
+    gchar **parts;
     int i;
 
     parts = g_strsplit(path, "/", 0);
@@ -38,7 +39,7 @@ Object *container_get(Object *root, const char *path)
         child = object_resolve_path_component(obj, parts[i]);
         if (!child) {
             child = object_new("container");
-            object_property_add_child(obj, parts[i], child);
+            object_property_add_child(obj, parts[i], child, NULL);
             object_unref(child);
         }
     }

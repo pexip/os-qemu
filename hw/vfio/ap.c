@@ -10,34 +10,33 @@
  * directory.
  */
 
-#include "qemu/osdep.h"
 #include <linux/vfio.h>
 #include <sys/ioctl.h>
+#include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "hw/sysbus.h"
 #include "hw/vfio/vfio.h"
 #include "hw/vfio/vfio-common.h"
 #include "hw/s390x/ap-device.h"
 #include "qemu/error-report.h"
-#include "qemu/module.h"
+#include "qemu/queue.h"
 #include "qemu/option.h"
 #include "qemu/config-file.h"
 #include "cpu.h"
 #include "kvm_s390x.h"
-#include "migration/vmstate.h"
-#include "hw/qdev-properties.h"
+#include "sysemu/sysemu.h"
 #include "hw/s390x/ap-bridge.h"
 #include "exec/address-spaces.h"
-#include "qom/object.h"
 
-#define TYPE_VFIO_AP_DEVICE      "vfio-ap"
+#define VFIO_AP_DEVICE_TYPE      "vfio-ap"
 
-struct VFIOAPDevice {
+typedef struct VFIOAPDevice {
     APDevice apdev;
     VFIODevice vdev;
-};
+} VFIOAPDevice;
 
-OBJECT_DECLARE_SIMPLE_TYPE(VFIOAPDevice, VFIO_AP_DEVICE)
+#define VFIO_AP_DEVICE(obj) \
+        OBJECT_CHECK(VFIOAPDevice, (obj), VFIO_AP_DEVICE_TYPE)
 
 static void vfio_ap_compute_needs_reset(VFIODevice *vdev)
 {
@@ -70,8 +69,7 @@ static VFIOGroup *vfio_ap_get_group(VFIOAPDevice *vapdev, Error **errp)
 
     if (!group_path) {
         error_setg(errp, "%s: no iommu_group found for %s: %s",
-                   TYPE_VFIO_AP_DEVICE, vapdev->vdev.sysfsdev, gerror->message);
-        g_error_free(gerror);
+                   VFIO_AP_DEVICE_TYPE, vapdev->vdev.sysfsdev, gerror->message);
         return NULL;
     }
 
@@ -90,13 +88,14 @@ static void vfio_ap_realize(DeviceState *dev, Error **errp)
 {
     int ret;
     char *mdevid;
+    Error *local_err = NULL;
     VFIOGroup *vfio_group;
     APDevice *apdev = AP_DEVICE(dev);
     VFIOAPDevice *vapdev = VFIO_AP_DEVICE(apdev);
 
-    vfio_group = vfio_ap_get_group(vapdev, errp);
+    vfio_group = vfio_ap_get_group(vapdev, &local_err);
     if (!vfio_group) {
-        return;
+        goto out_err;
     }
 
     vapdev->vdev.ops = &vfio_ap_ops;
@@ -105,15 +104,7 @@ static void vfio_ap_realize(DeviceState *dev, Error **errp)
     vapdev->vdev.name = g_strdup_printf("%s", mdevid);
     vapdev->vdev.dev = dev;
 
-    /*
-     * vfio-ap devices operate in a way compatible with discarding of
-     * memory in RAM blocks, as no pages are pinned in the host.
-     * This needs to be set before vfio_get_device() for vfio common to
-     * handle ram_block_discard_disable().
-     */
-    vapdev->vdev.ram_block_discard_allowed = true;
-
-    ret = vfio_get_device(vfio_group, mdevid, &vapdev->vdev, errp);
+    ret = vfio_get_device(vfio_group, mdevid, &vapdev->vdev, &local_err);
     if (ret) {
         goto out_get_dev_err;
     }
@@ -123,9 +114,11 @@ static void vfio_ap_realize(DeviceState *dev, Error **errp)
 out_get_dev_err:
     vfio_ap_put_device(vapdev);
     vfio_put_group(vfio_group);
+out_err:
+    error_propagate(errp, local_err);
 }
 
-static void vfio_ap_unrealize(DeviceState *dev)
+static void vfio_ap_unrealize(DeviceState *dev, Error **errp)
 {
     APDevice *apdev = AP_DEVICE(dev);
     VFIOAPDevice *vapdev = VFIO_AP_DEVICE(apdev);
@@ -154,7 +147,7 @@ static void vfio_ap_reset(DeviceState *dev)
 }
 
 static const VMStateDescription vfio_ap_vmstate = {
-    .name = "vfio-ap",
+    .name = VFIO_AP_DEVICE_TYPE,
     .unmigratable = 1,
 };
 
@@ -162,20 +155,20 @@ static void vfio_ap_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    device_class_set_props(dc, vfio_ap_properties);
+    dc->props = vfio_ap_properties;
     dc->vmsd = &vfio_ap_vmstate;
     dc->desc = "VFIO-based AP device assignment";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->realize = vfio_ap_realize;
     dc->unrealize = vfio_ap_unrealize;
-    dc->hotpluggable = true;
+    dc->hotpluggable = false;
     dc->reset = vfio_ap_reset;
     dc->bus_type = TYPE_AP_BUS;
 }
 
 static const TypeInfo vfio_ap_info = {
-    .name = TYPE_VFIO_AP_DEVICE,
-    .parent = TYPE_AP_DEVICE,
+    .name = VFIO_AP_DEVICE_TYPE,
+    .parent = AP_DEVICE_TYPE,
     .instance_size = sizeof(VFIOAPDevice),
     .class_init = vfio_ap_class_init,
 };

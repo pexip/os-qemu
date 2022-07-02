@@ -42,7 +42,8 @@
 
 typedef struct target_sigaltstack {
     abi_ulong ss_sp;
-    abi_int ss_flags;
+    int32_t ss_flags;
+    int32_t dummy;
     abi_ulong ss_size;
 } target_stack_t;
 

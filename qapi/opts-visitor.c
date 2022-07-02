@@ -24,8 +24,7 @@ enum ListMode
 {
     LM_NONE,             /* not traversing a list of repeated options */
 
-    LM_IN_PROGRESS,      /*
-                          * opts_next_list() ready to be called.
+    LM_IN_PROGRESS,      /* opts_next_list() ready to be called.
                           *
                           * Generating the next list link will consume the most
                           * recently parsed QemuOpt instance of the repeated
@@ -37,8 +36,7 @@ enum ListMode
                           * LM_UNSIGNED_INTERVAL.
                           */
 
-    LM_SIGNED_INTERVAL,  /*
-                          * opts_next_list() has been called.
+    LM_SIGNED_INTERVAL,  /* opts_next_list() has been called.
                           *
                           * Generating the next list link will consume the most
                           * recently stored element from the signed interval,
@@ -50,14 +48,7 @@ enum ListMode
                           * next element of the signed interval.
                           */
 
-    LM_UNSIGNED_INTERVAL, /* Same as above, only for an unsigned interval. */
-
-    LM_TRAVERSED          /*
-                           * opts_next_list() has been called.
-                           *
-                           * No more QemuOpt instance in the list.
-                           * The traversal has been completed.
-                           */
+    LM_UNSIGNED_INTERVAL /* Same as above, only for an unsigned interval. */
 };
 
 typedef enum ListMode ListMode;
@@ -133,7 +124,7 @@ opts_visitor_insert(GHashTable *unprocessed_opts, const QemuOpt *opt)
 }
 
 
-static bool
+static void
 opts_start_struct(Visitor *v, const char *name, void **obj,
                   size_t size, Error **errp)
 {
@@ -144,7 +135,7 @@ opts_start_struct(Visitor *v, const char *name, void **obj,
         *obj = g_malloc0(size);
     }
     if (ov->depth++ > 0) {
-        return true;
+        return;
     }
 
     ov->unprocessed_opts = g_hash_table_new_full(&g_str_hash, &g_str_equal,
@@ -163,11 +154,10 @@ opts_start_struct(Visitor *v, const char *name, void **obj,
         ov->fake_id_opt->str = g_strdup(ov->opts_root->id);
         opts_visitor_insert(ov->unprocessed_opts, ov->fake_id_opt);
     }
-    return true;
 }
 
 
-static bool
+static void
 opts_check_struct(Visitor *v, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -175,7 +165,7 @@ opts_check_struct(Visitor *v, Error **errp)
     GQueue *any;
 
     if (ov->depth > 1) {
-        return true;
+        return;
     }
 
     /* we should have processed all (distinct) QemuOpt instances */
@@ -185,9 +175,7 @@ opts_check_struct(Visitor *v, Error **errp)
 
         first = g_queue_peek_head(any);
         error_setg(errp, QERR_INVALID_PARAMETER, first->name);
-        return false;
     }
-    return true;
 }
 
 
@@ -224,7 +212,7 @@ lookup_distinct(const OptsVisitor *ov, const char *name, Error **errp)
 }
 
 
-static bool
+static void
 opts_start_list(Visitor *v, const char *name, GenericList **list, size_t size,
                 Error **errp)
 {
@@ -235,13 +223,12 @@ opts_start_list(Visitor *v, const char *name, GenericList **list, size_t size,
     /* we don't support visits without a list */
     assert(list);
     ov->repeated_opts = lookup_distinct(ov, name, errp);
-    if (!ov->repeated_opts) {
+    if (ov->repeated_opts) {
+        ov->list_mode = LM_IN_PROGRESS;
+        *list = g_malloc0(size);
+    } else {
         *list = NULL;
-        return false;
     }
-    ov->list_mode = LM_IN_PROGRESS;
-    *list = g_malloc0(size);
-    return true;
 }
 
 
@@ -251,8 +238,6 @@ opts_next_list(Visitor *v, GenericList *tail, size_t size)
     OptsVisitor *ov = to_ov(v);
 
     switch (ov->list_mode) {
-    case LM_TRAVERSED:
-        return NULL;
     case LM_SIGNED_INTERVAL:
     case LM_UNSIGNED_INTERVAL:
         if (ov->list_mode == LM_SIGNED_INTERVAL) {
@@ -273,8 +258,6 @@ opts_next_list(Visitor *v, GenericList *tail, size_t size)
         opt = g_queue_pop_head(ov->repeated_opts);
         if (g_queue_is_empty(ov->repeated_opts)) {
             g_hash_table_remove(ov->unprocessed_opts, opt->name);
-            ov->repeated_opts = NULL;
-            ov->list_mode = LM_TRAVERSED;
             return NULL;
         }
         break;
@@ -289,14 +272,13 @@ opts_next_list(Visitor *v, GenericList *tail, size_t size)
 }
 
 
-static bool
+static void
 opts_check_list(Visitor *v, Error **errp)
 {
     /*
      * Unvisited list elements will be reported later when checking
      * whether unvisited struct members remain.
      */
-    return true;
 }
 
 
@@ -307,8 +289,7 @@ opts_end_list(Visitor *v, void **obj)
 
     assert(ov->list_mode == LM_IN_PROGRESS ||
            ov->list_mode == LM_SIGNED_INTERVAL ||
-           ov->list_mode == LM_UNSIGNED_INTERVAL ||
-           ov->list_mode == LM_TRAVERSED);
+           ov->list_mode == LM_UNSIGNED_INTERVAL);
     ov->repeated_opts = NULL;
     ov->list_mode = LM_NONE;
 }
@@ -324,10 +305,6 @@ lookup_scalar(const OptsVisitor *ov, const char *name, Error **errp)
          */
         list = lookup_distinct(ov, name, errp);
         return list ? g_queue_peek_tail(list) : NULL;
-    }
-    if (ov->list_mode == LM_TRAVERSED) {
-        error_setg(errp, "Fewer list elements than expected");
-        return NULL;
     }
     assert(ov->list_mode == LM_IN_PROGRESS);
     return g_queue_peek_head(ov->repeated_opts);
@@ -346,7 +323,7 @@ processed(OptsVisitor *ov, const char *name)
 }
 
 
-static bool
+static void
 opts_type_str(Visitor *v, const char *name, char **obj, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -355,7 +332,7 @@ opts_type_str(Visitor *v, const char *name, char **obj, Error **errp)
     opt = lookup_scalar(ov, name, errp);
     if (!opt) {
         *obj = NULL;
-        return false;
+        return;
     }
     *obj = g_strdup(opt->str ? opt->str : "");
     /* Note that we consume a string even if this is called as part of
@@ -364,11 +341,11 @@ opts_type_str(Visitor *v, const char *name, char **obj, Error **errp)
      * consumed only matters to visit_end_struct() as the final error
      * check if there were no other failures during the visit.  */
     processed(ov, name);
-    return true;
 }
 
 
-static bool
+/* mimics qemu-option.c::parse_option_bool() */
+static void
 opts_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -376,22 +353,32 @@ opts_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
 
     opt = lookup_scalar(ov, name, errp);
     if (!opt) {
-        return false;
+        return;
     }
+
     if (opt->str) {
-        if (!qapi_bool_parse(opt->name, opt->str, obj, errp)) {
-            return false;
+        if (strcmp(opt->str, "on") == 0 ||
+            strcmp(opt->str, "yes") == 0 ||
+            strcmp(opt->str, "y") == 0) {
+            *obj = true;
+        } else if (strcmp(opt->str, "off") == 0 ||
+            strcmp(opt->str, "no") == 0 ||
+            strcmp(opt->str, "n") == 0) {
+            *obj = false;
+        } else {
+            error_setg(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
+                       "on|yes|y|off|no|n");
+            return;
         }
     } else {
         *obj = true;
     }
 
     processed(ov, name);
-    return true;
 }
 
 
-static bool
+static void
 opts_type_int64(Visitor *v, const char *name, int64_t *obj, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -402,12 +389,12 @@ opts_type_int64(Visitor *v, const char *name, int64_t *obj, Error **errp)
 
     if (ov->list_mode == LM_SIGNED_INTERVAL) {
         *obj = ov->range_next.s;
-        return true;
+        return;
     }
 
     opt = lookup_scalar(ov, name, errp);
     if (!opt) {
-        return false;
+        return;
     }
     str = opt->str ? opt->str : "";
 
@@ -420,7 +407,7 @@ opts_type_int64(Visitor *v, const char *name, int64_t *obj, Error **errp)
         if (*endptr == '\0') {
             *obj = val;
             processed(ov, name);
-            return true;
+            return;
         }
         if (*endptr == '-' && ov->list_mode == LM_IN_PROGRESS) {
             long long val2;
@@ -437,18 +424,17 @@ opts_type_int64(Visitor *v, const char *name, int64_t *obj, Error **errp)
 
                 /* as if entering on the top */
                 *obj = ov->range_next.s;
-                return true;
+                return;
             }
         }
     }
     error_setg(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
                (ov->list_mode == LM_NONE) ? "an int64 value" :
                                             "an int64 value or range");
-    return false;
 }
 
 
-static bool
+static void
 opts_type_uint64(Visitor *v, const char *name, uint64_t *obj, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -459,12 +445,12 @@ opts_type_uint64(Visitor *v, const char *name, uint64_t *obj, Error **errp)
 
     if (ov->list_mode == LM_UNSIGNED_INTERVAL) {
         *obj = ov->range_next.u;
-        return true;
+        return;
     }
 
     opt = lookup_scalar(ov, name, errp);
     if (!opt) {
-        return false;
+        return;
     }
     str = opt->str;
 
@@ -475,7 +461,7 @@ opts_type_uint64(Visitor *v, const char *name, uint64_t *obj, Error **errp)
         if (*endptr == '\0') {
             *obj = val;
             processed(ov, name);
-            return true;
+            return;
         }
         if (*endptr == '-' && ov->list_mode == LM_IN_PROGRESS) {
             unsigned long long val2;
@@ -490,18 +476,17 @@ opts_type_uint64(Visitor *v, const char *name, uint64_t *obj, Error **errp)
 
                 /* as if entering on the top */
                 *obj = ov->range_next.u;
-                return true;
+                return;
             }
         }
     }
     error_setg(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
                (ov->list_mode == LM_NONE) ? "a uint64 value" :
                                             "a uint64 value or range");
-    return false;
 }
 
 
-static bool
+static void
 opts_type_size(Visitor *v, const char *name, uint64_t *obj, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -510,18 +495,17 @@ opts_type_size(Visitor *v, const char *name, uint64_t *obj, Error **errp)
 
     opt = lookup_scalar(ov, name, errp);
     if (!opt) {
-        return false;
+        return;
     }
 
     err = qemu_strtosz(opt->str ? opt->str : "", NULL, obj);
     if (err < 0) {
         error_setg(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
                    "a size value");
-        return false;
+        return;
     }
 
     processed(ov, name);
-    return true;
 }
 
 

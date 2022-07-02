@@ -13,7 +13,6 @@
 
 #ifndef QEMU_VIRTIO_SCSI_H
 #define QEMU_VIRTIO_SCSI_H
-#include "qom/object.h"
 
 /* Override CDB/sense data size: they are dynamic (guest controlled) in QEMU */
 #define VIRTIO_SCSI_CDB_SIZE 0
@@ -26,19 +25,16 @@
 #include "sysemu/iothread.h"
 
 #define TYPE_VIRTIO_SCSI_COMMON "virtio-scsi-common"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIOSCSICommon, VIRTIO_SCSI_COMMON)
+#define VIRTIO_SCSI_COMMON(obj) \
+        OBJECT_CHECK(VirtIOSCSICommon, (obj), TYPE_VIRTIO_SCSI_COMMON)
 
 #define TYPE_VIRTIO_SCSI "virtio-scsi-device"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIOSCSI, VIRTIO_SCSI)
+#define VIRTIO_SCSI(obj) \
+        OBJECT_CHECK(VirtIOSCSI, (obj), TYPE_VIRTIO_SCSI)
 
 #define VIRTIO_SCSI_MAX_CHANNEL 0
 #define VIRTIO_SCSI_MAX_TARGET  255
 #define VIRTIO_SCSI_MAX_LUN     16383
-
-/* Number of virtqueues that are always present */
-#define VIRTIO_SCSI_VQ_NUM_FIXED    2
-
-#define VIRTIO_SCSI_AUTO_NUM_QUEUES UINT32_MAX
 
 typedef struct virtio_scsi_cmd_req VirtIOSCSICmdReq;
 typedef struct virtio_scsi_cmd_resp VirtIOSCSICmdResp;
@@ -52,7 +48,6 @@ typedef struct virtio_scsi_config VirtIOSCSIConfig;
 struct VirtIOSCSIConf {
     uint32_t num_queues;
     uint32_t virtqueue_size;
-    bool seg_max_adjust;
     uint32_t max_sectors;
     uint32_t cmd_per_lun;
 #ifdef CONFIG_VHOST_SCSI
@@ -66,7 +61,7 @@ struct VirtIOSCSIConf {
 
 struct VirtIOSCSI;
 
-struct VirtIOSCSICommon {
+typedef struct VirtIOSCSICommon {
     VirtIODevice parent_obj;
     VirtIOSCSIConf conf;
 
@@ -75,9 +70,9 @@ struct VirtIOSCSICommon {
     VirtQueue *ctrl_vq;
     VirtQueue *event_vq;
     VirtQueue **cmd_vqs;
-};
+} VirtIOSCSICommon;
 
-struct VirtIOSCSI {
+typedef struct VirtIOSCSI {
     VirtIOSCSICommon parent_obj;
 
     SCSIBus bus;
@@ -92,7 +87,7 @@ struct VirtIOSCSI {
     bool dataplane_stopping;
     bool dataplane_fenced;
     uint32_t host_features;
-};
+} VirtIOSCSI;
 
 typedef struct VirtIOSCSIReq {
     /* Note:
@@ -150,7 +145,7 @@ void virtio_scsi_common_realize(DeviceState *dev,
                                 VirtIOHandleOutput cmd,
                                 Error **errp);
 
-void virtio_scsi_common_unrealize(DeviceState *dev);
+void virtio_scsi_common_unrealize(DeviceState *dev, Error **errp);
 bool virtio_scsi_handle_event_vq(VirtIOSCSI *s, VirtQueue *vq);
 bool virtio_scsi_handle_cmd_vq(VirtIOSCSI *s, VirtQueue *vq);
 bool virtio_scsi_handle_ctrl_vq(VirtIOSCSI *s, VirtQueue *vq);

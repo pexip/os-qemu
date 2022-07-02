@@ -17,11 +17,10 @@
 #ifndef FSL_IMX6_H
 #define FSL_IMX6_H
 
-#include "hw/arm/boot.h"
+#include "hw/arm/arm.h"
 #include "hw/cpu/a9mpcore.h"
 #include "hw/misc/imx6_ccm.h"
 #include "hw/misc/imx6_src.h"
-#include "hw/watchdog/wdt_imx2.h"
 #include "hw/char/imx_serial.h"
 #include "hw/timer/imx_gpt.h"
 #include "hw/timer/imx_epit.h"
@@ -30,14 +29,11 @@
 #include "hw/sd/sdhci.h"
 #include "hw/ssi/imx_spi.h"
 #include "hw/net/imx_fec.h"
-#include "hw/usb/chipidea.h"
-#include "hw/usb/imx-usb-phy.h"
 #include "exec/memory.h"
 #include "cpu.h"
-#include "qom/object.h"
 
 #define TYPE_FSL_IMX6 "fsl,imx6"
-OBJECT_DECLARE_SIMPLE_TYPE(FslIMX6State, FSL_IMX6)
+#define FSL_IMX6(obj) OBJECT_CHECK(FslIMX6State, (obj), TYPE_FSL_IMX6)
 
 #define FSL_IMX6_NUM_CPUS 4
 #define FSL_IMX6_NUM_UARTS 5
@@ -46,11 +42,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(FslIMX6State, FSL_IMX6)
 #define FSL_IMX6_NUM_GPIOS 7
 #define FSL_IMX6_NUM_ESDHCS 4
 #define FSL_IMX6_NUM_ECSPIS 5
-#define FSL_IMX6_NUM_WDTS 2
-#define FSL_IMX6_NUM_USB_PHYS 2
-#define FSL_IMX6_NUM_USBS 4
 
-struct FslIMX6State {
+typedef struct FslIMX6State {
     /*< private >*/
     DeviceState parent_obj;
 
@@ -66,16 +59,12 @@ struct FslIMX6State {
     IMXGPIOState   gpio[FSL_IMX6_NUM_GPIOS];
     SDHCIState     esdhc[FSL_IMX6_NUM_ESDHCS];
     IMXSPIState    spi[FSL_IMX6_NUM_ECSPIS];
-    IMX2WdtState   wdt[FSL_IMX6_NUM_WDTS];
-    IMXUSBPHYState usbphy[FSL_IMX6_NUM_USB_PHYS];
-    ChipideaState  usb[FSL_IMX6_NUM_USBS];
     IMXFECState    eth;
     MemoryRegion   rom;
     MemoryRegion   caam;
     MemoryRegion   ocram;
     MemoryRegion   ocram_alias;
-    uint32_t       phy_num;
-};
+} FslIMX6State;
 
 
 #define FSL_IMX6_MMDC_ADDR 0x10000000

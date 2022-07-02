@@ -27,9 +27,8 @@
 #include "crypto/tlssession.h"
 #include "qom/object_interfaces.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
 #include "qemu/sockets.h"
-#include "authz/list.h"
+#include "qemu/acl.h"
 
 #ifdef QCRYPTO_HAVE_TLS_TEST_SUPPORT
 
@@ -230,7 +229,7 @@ static void test_crypto_tls_session_x509(const void *opaque)
     QCryptoTLSCreds *serverCreds;
     QCryptoTLSSession *clientSess = NULL;
     QCryptoTLSSession *serverSess = NULL;
-    QAuthZList *auth;
+    qemu_acl *acl;
     const char * const *wildcards;
     int channel[2];
     bool clientShake = false;
@@ -286,15 +285,11 @@ static void test_crypto_tls_session_x509(const void *opaque)
         SERVER_CERT_DIR);
     g_assert(serverCreds != NULL);
 
-    auth = qauthz_list_new("tlssessionacl",
-                           QAUTHZ_LIST_POLICY_DENY,
-                           &error_abort);
+    acl = qemu_acl_init("tlssessionacl");
+    qemu_acl_reset(acl);
     wildcards = data->wildcards;
     while (wildcards && *wildcards) {
-        qauthz_list_append_rule(auth, *wildcards,
-                                QAUTHZ_LIST_POLICY_ALLOW,
-                                QAUTHZ_LIST_FORMAT_GLOB,
-                                &error_abort);
+        qemu_acl_append(acl, 0, *wildcards);
         wildcards++;
     }
 
@@ -382,7 +377,6 @@ static void test_crypto_tls_session_x509(const void *opaque)
 
     object_unparent(OBJECT(serverCreds));
     object_unparent(OBJECT(clientCreds));
-    object_unparent(OBJECT(auth));
 
     qcrypto_tls_session_free(serverSess);
     qcrypto_tls_session_free(clientSess);
@@ -398,7 +392,7 @@ int main(int argc, char **argv)
 
     module_call_init(MODULE_INIT_QOM);
     g_test_init(&argc, &argv, NULL);
-    g_setenv("GNUTLS_FORCE_FIPS_MODE", "2", 1);
+    setenv("GNUTLS_FORCE_FIPS_MODE", "2", 1);
 
     mkdir(WORKDIR, 0700);
 

@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,10 +20,12 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "trace.h"
+#include "sysemu/sysemu.h"
 #include "exec/log.h"
-#include "sysemu/runstate.h"
 
+#define DEBUG_PCALL
 
+#ifdef DEBUG_PCALL
 static const char * const excp_names[0x80] = {
     [TT_TFAULT] = "Instruction Access Fault",
     [TT_ILL_INSN] = "Illegal Instruction",
@@ -50,19 +52,13 @@ static const char * const excp_names[0x80] = {
     [TT_EXTINT | 0xd] = "External Interrupt 13",
     [TT_EXTINT | 0xe] = "External Interrupt 14",
     [TT_EXTINT | 0xf] = "External Interrupt 15",
+    [TT_TOVF] = "Tag Overflow",
     [TT_CODE_ACCESS] = "Instruction Access Error",
     [TT_DATA_ACCESS] = "Data Access Error",
     [TT_DIV_ZERO] = "Division By Zero",
     [TT_NCP_INSN] = "Coprocessor Disabled",
 };
-
-static const char *excp_name_str(int32_t exception_index)
-{
-    if (exception_index < 0 || exception_index >= ARRAY_SIZE(excp_names)) {
-        return "Unknown";
-    }
-    return excp_names[exception_index];
-}
+#endif
 
 void sparc_cpu_do_interrupt(CPUState *cs)
 {
@@ -75,6 +71,7 @@ void sparc_cpu_do_interrupt(CPUState *cs)
         cpu_get_psr(env);
     }
 
+#ifdef DEBUG_PCALL
     if (qemu_loglevel_mask(CPU_LOG_INT)) {
         static int count;
         const char *name;
@@ -84,7 +81,10 @@ void sparc_cpu_do_interrupt(CPUState *cs)
         } else if (intno >= 0x80) {
             name = "Trap Instruction";
         } else {
-            name = excp_name_str(intno);
+            name = excp_names[intno];
+            if (!name) {
+                name = "Unknown";
+            }
         }
 
         qemu_log("%6d: %s (v=%02x)\n", count, name, intno);
@@ -104,15 +104,15 @@ void sparc_cpu_do_interrupt(CPUState *cs)
 #endif
         count++;
     }
+#endif
 #if !defined(CONFIG_USER_ONLY)
     if (env->psret == 0) {
         if (cs->exception_index == 0x80 &&
             env->def.features & CPU_FEATURE_TA0_SHUTDOWN) {
             qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
         } else {
-            cpu_abort(cs, "Trap 0x%02x (%s) while interrupts disabled, "
-                          "Error state",
-                      cs->exception_index, excp_name_str(cs->exception_index));
+            cpu_abort(cs, "Trap 0x%02x while interrupts disabled, Error state",
+                      cs->exception_index);
         }
         return;
     }

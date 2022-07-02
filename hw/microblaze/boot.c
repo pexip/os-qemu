@@ -31,7 +31,6 @@
 #include "qemu/config-file.h"
 #include "qemu/error-report.h"
 #include "sysemu/device_tree.h"
-#include "sysemu/reset.h"
 #include "sysemu/sysemu.h"
 #include "hw/loader.h"
 #include "elf.h"
@@ -100,7 +99,6 @@ static int microblaze_load_dtb(hwaddr addr,
     }
 
     cpu_physical_memory_write(addr, fdt, fdt_size);
-    g_free(fdt);
     return fdt_size;
 }
 
@@ -135,7 +133,7 @@ void microblaze_load_kernel(MicroBlazeCPU *cpu, hwaddr ddr_base,
 
     if (kernel_filename) {
         int kernel_size;
-        uint64_t entry, high;
+        uint64_t entry, low, high;
         uint32_t base32;
         int big_endian = 0;
 
@@ -144,14 +142,13 @@ void microblaze_load_kernel(MicroBlazeCPU *cpu, hwaddr ddr_base,
 #endif
 
         /* Boots a kernel elf binary.  */
-        kernel_size = load_elf(kernel_filename, NULL, NULL, NULL,
-                               &entry, NULL, &high, NULL,
+        kernel_size = load_elf(kernel_filename, NULL, NULL,
+                               &entry, &low, &high,
                                big_endian, EM_MICROBLAZE, 0, 0);
         base32 = entry;
         if (base32 == 0xc0000000) {
-            kernel_size = load_elf(kernel_filename, NULL,
-                                   translate_kernel_address, NULL,
-                                   &entry, NULL, NULL, NULL,
+            kernel_size = load_elf(kernel_filename, translate_kernel_address,
+                                   NULL, &entry, NULL, NULL,
                                    big_endian, EM_MICROBLAZE, 0, 0);
         }
         /* Always boot into physical ram.  */
@@ -159,7 +156,7 @@ void microblaze_load_kernel(MicroBlazeCPU *cpu, hwaddr ddr_base,
 
         /* If it wasn't an ELF image, try an u-boot image.  */
         if (kernel_size < 0) {
-            hwaddr uentry, loadaddr = LOAD_UIMAGE_LOADADDR_INVALID;
+            hwaddr uentry, loadaddr;
 
             kernel_size = load_uimage(kernel_filename, &uentry, &loadaddr, 0,
                                       NULL, NULL);

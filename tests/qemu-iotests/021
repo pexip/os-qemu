@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Test handling of invalid patterns arguments to qemu-io
 #
@@ -38,6 +38,7 @@ trap "_cleanup; exit \$status" 0 1 2 3 15
 
 _supported_fmt generic
 _supported_proto generic
+_supported_os Linux
 
 
 size=128M

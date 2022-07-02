@@ -38,7 +38,7 @@ uint64_t atoui(const char *str)
     }
 
     while (*str) {
-        if (!isdigit(*(unsigned char *)str)) {
+        if (!isdigit(*str)) {
             break;
         }
         val = val * 10 + *str - '0';

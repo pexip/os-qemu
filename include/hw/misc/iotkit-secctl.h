@@ -40,8 +40,8 @@
  *  + named GPIO outputs ahb_ppcexp{0,1,2,3}_irq_enable
  *  + named GPIO outputs ahb_ppcexp{0,1,2,3}_irq_clear
  *  + named GPIO inputs ahb_ppcexp{0,1,2,3}_irq_status
- * Controlling the (up to) 4 MPCs in the IoTKit/SSE:
- *  + named GPIO inputs mpc_status[0..3]
+ * Controlling the MPC in the IoTKit:
+ *  + named GPIO input mpc_status
  * Controlling each of the 16 expansion MPCs which a system using the IoTKit
  * might provide:
  *  + named GPIO inputs mpcexp_status[0..15]
@@ -56,10 +56,9 @@
 #define IOTKIT_SECCTL_H
 
 #include "hw/sysbus.h"
-#include "qom/object.h"
 
 #define TYPE_IOTKIT_SECCTL "iotkit-secctl"
-OBJECT_DECLARE_SIMPLE_TYPE(IoTKitSecCtl, IOTKIT_SECCTL)
+#define IOTKIT_SECCTL(obj) OBJECT_CHECK(IoTKitSecCtl, (obj), TYPE_IOTKIT_SECCTL)
 
 #define IOTS_APB_PPC0_NUM_PORTS 3
 #define IOTS_APB_PPC1_NUM_PORTS 1
@@ -68,9 +67,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(IoTKitSecCtl, IOTKIT_SECCTL)
 #define IOTS_NUM_APB_EXP_PPC 4
 #define IOTS_NUM_AHB_EXP_PPC 4
 #define IOTS_NUM_EXP_MPC 16
-#define IOTS_NUM_MPC 4
+#define IOTS_NUM_MPC 1
 #define IOTS_NUM_EXP_MSC 16
 
+typedef struct IoTKitSecCtl IoTKitSecCtl;
 
 /* State and IRQ lines relating to a PPC. For the
  * PPCs in the IoTKit not all the IRQ lines are used.

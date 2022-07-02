@@ -11,12 +11,11 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
+#include "hw/hw.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
+#include "sysemu/sysemu.h"
 #include "hw/misc/mips_cmgcr.h"
 #include "hw/misc/mips_cpc.h"
-#include "hw/qdev-properties.h"
 #include "hw/intc/mips_gic.h"
 
 static inline bool is_cpc_connected(MIPSGCRState *s)
@@ -233,7 +232,7 @@ static void mips_gcr_realize(DeviceState *dev, Error **errp)
 static void mips_gcr_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    device_class_set_props(dc, mips_gcr_properties);
+    dc->props = mips_gcr_properties;
     dc->vmsd = &vmstate_mips_gcr;
     dc->reset = mips_gcr_reset;
     dc->realize = mips_gcr_realize;

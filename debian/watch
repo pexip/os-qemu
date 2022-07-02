@@ -1,8 +1,7 @@
 version=4
 
 opts=\
-dversionmangle=auto,\
+dversionmangle=s/\+dfsg.*$//,\
 repacksuffix=+dfsg,\
-uversionmangle=s/-rc/~rc/;s/(\d+)\.(\d+)\.(\d+)/$1.$2/g,\
 compression=xz \
-  https://download.qemu.org/ qemu-@ANY_VERSION@@ARCHIVE_EXT@
+  https://download.qemu.org/ qemu-(.*)\.tar\.(?:gz|bz2|xz)

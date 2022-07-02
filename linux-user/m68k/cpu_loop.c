@@ -18,16 +18,16 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu.h"
 #include "cpu_loop-common.h"
 
 void cpu_loop(CPUM68KState *env)
 {
-    CPUState *cs = env_cpu(env);
+    CPUState *cs = CPU(m68k_env_get_cpu(env));
     int trapnr;
     unsigned int n;
     target_siginfo_t info;
+    TaskState *ts = cs->opaque;
 
     for(;;) {
         cpu_exec_start(cs);
@@ -36,14 +36,26 @@ void cpu_loop(CPUM68KState *env)
         process_queued_cpu_work(cs);
 
         switch(trapnr) {
+        case EXCP_ILLEGAL:
+            {
+                if (ts->sim_syscalls) {
+                    uint16_t nr;
+                    get_user_u16(nr, env->pc + 2);
+                    env->pc += 4;
+                    do_m68k_simcall(env, nr);
+                } else {
+                    goto do_sigill;
+                }
+            }
+            break;
         case EXCP_HALT_INSN:
             /* Semihosing syscall.  */
             env->pc += 4;
             do_m68k_semihosting(env, env->dregs[0]);
             break;
-        case EXCP_ILLEGAL:
         case EXCP_LINEA:
         case EXCP_LINEF:
+        do_sigill:
             info.si_signo = TARGET_SIGILL;
             info.si_errno = 0;
             info.si_code = TARGET_ILL_ILLOPN;
@@ -67,6 +79,7 @@ void cpu_loop(CPUM68KState *env)
         case EXCP_TRAP0:
             {
                 abi_long ret;
+                ts->sim_syscalls = 0;
                 n = env->dregs[0];
                 env->pc += 2;
                 ret = do_syscall(env,
@@ -117,7 +130,7 @@ void cpu_loop(CPUM68KState *env)
 
 void target_cpu_copy_regs(CPUArchState *env, struct target_pt_regs *regs)
 {
-    CPUState *cpu = env_cpu(env);
+    CPUState *cpu = ENV_GET_CPU(env);
     TaskState *ts = cpu->opaque;
     struct image_info *info = ts->info;
 
@@ -140,6 +153,7 @@ void target_cpu_copy_regs(CPUArchState *env, struct target_pt_regs *regs)
     env->aregs[7] = regs->usp;
     env->sr = regs->sr;
 
+    ts->sim_syscalls = 1;
     ts->stack_base = info->start_stack;
     ts->heap_base = info->brk;
     /* This will be filled in on the first SYS_HEAPINFO call.  */

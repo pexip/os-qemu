@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,12 +22,10 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
 #include "trace.h"
 #include "qemu/error-report.h"
-#include "qemu/module.h"
-#include "qom/object.h"
 
 enum {
     R_SYSTEM = 0,
@@ -44,7 +42,8 @@ enum {
 };
 
 #define TYPE_MILKYMIST_HPDMC "milkymist-hpdmc"
-OBJECT_DECLARE_SIMPLE_TYPE(MilkymistHpdmcState, MILKYMIST_HPDMC)
+#define MILKYMIST_HPDMC(obj) \
+    OBJECT_CHECK(MilkymistHpdmcState, (obj), TYPE_MILKYMIST_HPDMC)
 
 struct MilkymistHpdmcState {
     SysBusDevice parent_obj;
@@ -53,6 +52,7 @@ struct MilkymistHpdmcState {
 
     uint32_t regs[R_MAX];
 };
+typedef struct MilkymistHpdmcState MilkymistHpdmcState;
 
 static uint64_t hpdmc_read(void *opaque, hwaddr addr,
                            unsigned size)
@@ -129,13 +129,15 @@ static void milkymist_hpdmc_reset(DeviceState *d)
                          | IODELAY_PLL2_LOCKED;
 }
 
-static void milkymist_hpdmc_realize(DeviceState *dev, Error **errp)
+static int milkymist_hpdmc_init(SysBusDevice *dev)
 {
     MilkymistHpdmcState *s = MILKYMIST_HPDMC(dev);
 
     memory_region_init_io(&s->regs_region, OBJECT(dev), &hpdmc_mmio_ops, s,
             "milkymist-hpdmc", R_MAX * 4);
-    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->regs_region);
+    sysbus_init_mmio(dev, &s->regs_region);
+
+    return 0;
 }
 
 static const VMStateDescription vmstate_milkymist_hpdmc = {
@@ -151,8 +153,9 @@ static const VMStateDescription vmstate_milkymist_hpdmc = {
 static void milkymist_hpdmc_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
-    dc->realize = milkymist_hpdmc_realize;
+    k->init = milkymist_hpdmc_init;
     dc->reset = milkymist_hpdmc_reset;
     dc->vmsd = &vmstate_milkymist_hpdmc;
 }

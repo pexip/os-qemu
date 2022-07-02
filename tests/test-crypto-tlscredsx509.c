@@ -23,7 +23,6 @@
 #include "crypto-tls-x509-helpers.h"
 #include "crypto/tlscredsx509.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
 
 #ifdef QCRYPTO_HAVE_TLS_TEST_SUPPORT
 
@@ -141,7 +140,7 @@ int main(int argc, char **argv)
 
     module_call_init(MODULE_INIT_QOM);
     g_test_init(&argc, &argv, NULL);
-    g_setenv("GNUTLS_FORCE_FIPS_MODE", "2", 1);
+    setenv("GNUTLS_FORCE_FIPS_MODE", "2", 1);
 
     mkdir(WORKDIR, 0700);
 

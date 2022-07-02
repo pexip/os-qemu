@@ -8,7 +8,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -19,19 +19,24 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef HW_USB_HCD_XHCI_H
-#define HW_USB_HCD_XHCI_H
-#include "qom/object.h"
+#define TYPE_XHCI "base-xhci"
+#define TYPE_NEC_XHCI "nec-usb-xhci"
+#define TYPE_QEMU_XHCI "qemu-xhci"
 
-#include "hw/usb.h"
-#include "hw/usb/xhci.h"
-#include "sysemu/dma.h"
+#define XHCI(obj) \
+    OBJECT_CHECK(XHCIState, (obj), TYPE_XHCI)
 
-OBJECT_DECLARE_SIMPLE_TYPE(XHCIState, XHCI)
+#define MAXPORTS_2 15
+#define MAXPORTS_3 15
+
+#define MAXPORTS (MAXPORTS_2 + MAXPORTS_3)
+#define MAXSLOTS 64
+#define MAXINTRS 16
 
 /* Very pessimistic, let's hope it's enough for all cases */
-#define EV_QUEUE (((3 * 24) + 16) * XHCI_MAXSLOTS)
+#define EV_QUEUE (((3 * 24) + 16) * MAXSLOTS)
 
+typedef struct XHCIState XHCIState;
 typedef struct XHCIStreamContext XHCIStreamContext;
 typedef struct XHCIEPContext XHCIEPContext;
 
@@ -135,7 +140,6 @@ typedef struct XHCIPort {
 typedef struct XHCISlot {
     bool enabled;
     bool addressed;
-    uint16_t intr;
     dma_addr_t ctx;
     USBPort *uport;
     XHCIEPContext *eps[31];
@@ -174,13 +178,13 @@ typedef struct XHCIInterrupter {
 
 } XHCIInterrupter;
 
-typedef struct XHCIState {
-    DeviceState parent;
+struct XHCIState {
+    /*< private >*/
+    PCIDevice parent_obj;
+    /*< public >*/
 
     USBBus bus;
     MemoryRegion mem;
-    MemoryRegion *dma_mr;
-    AddressSpace *as;
     MemoryRegion mem_cap;
     MemoryRegion mem_oper;
     MemoryRegion mem_runtime;
@@ -193,9 +197,8 @@ typedef struct XHCIState {
     uint32_t numslots;
     uint32_t flags;
     uint32_t max_pstreams_mask;
-    void (*intr_update)(XHCIState *s, int n, bool enable);
-    void (*intr_raise)(XHCIState *s, int n, bool level);
-    DeviceState *hostOpaque;
+    OnOffAuto msi;
+    OnOffAuto msix;
 
     /* Operational Registers */
     uint32_t usbcmd;
@@ -207,22 +210,17 @@ typedef struct XHCIState {
     uint32_t dcbaap_high;
     uint32_t config;
 
-    USBPort  uports[MAX_CONST(XHCI_MAXPORTS_2, XHCI_MAXPORTS_3)];
-    XHCIPort ports[XHCI_MAXPORTS];
-    XHCISlot slots[XHCI_MAXSLOTS];
+    USBPort  uports[MAX(MAXPORTS_2, MAXPORTS_3)];
+    XHCIPort ports[MAXPORTS];
+    XHCISlot slots[MAXSLOTS];
     uint32_t numports;
 
     /* Runtime Registers */
     int64_t mfindex_start;
     QEMUTimer *mfwrap_timer;
-    XHCIInterrupter intr[XHCI_MAXINTRS];
+    XHCIInterrupter intr[MAXINTRS];
 
     XHCIRing cmd_ring;
 
     bool nec_quirks;
-} XHCIState;
-
-extern const VMStateDescription vmstate_xhci;
-bool xhci_get_flag(XHCIState *xhci, enum xhci_flags bit);
-void xhci_set_flag(XHCIState *xhci, enum xhci_flags bit);
-#endif
+};

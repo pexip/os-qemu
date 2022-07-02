@@ -36,9 +36,9 @@
 #define HWBUF hw->conv_buf
 #endif
 
-static void glue(audio_init_nb_voices_, TYPE)(AudioState *s,
-                                              struct audio_driver *drv)
+static void glue (audio_init_nb_voices_, TYPE) (struct audio_driver *drv)
 {
+    AudioState *s = &glob_audio_state;
     int max_voices = glue (drv->max_voices_, TYPE);
     int voice_size = glue (drv->voice_size_, TYPE);
 
@@ -71,24 +71,20 @@ static void glue(audio_init_nb_voices_, TYPE)(AudioState *s,
 
 static void glue (audio_pcm_hw_free_resources_, TYPE) (HW *hw)
 {
-    g_free(hw->buf_emul);
     g_free (HWBUF);
     HWBUF = NULL;
 }
 
-static void glue(audio_pcm_hw_alloc_resources_, TYPE)(HW *hw)
+static int glue (audio_pcm_hw_alloc_resources_, TYPE) (HW *hw)
 {
-    if (glue(audio_get_pdo_, TYPE)(hw->s->dev)->mixing_engine) {
-        size_t samples = hw->samples;
-        if (audio_bug(__func__, samples == 0)) {
-            dolog("Attempted to allocate empty buffer\n");
-        }
-
-        HWBUF = g_malloc0(sizeof(STSampleBuffer) + sizeof(st_sample) * samples);
-        HWBUF->size = samples;
-    } else {
-        HWBUF = NULL;
+    HWBUF = audio_calloc(__func__, hw->samples, sizeof(struct st_sample));
+    if (!HWBUF) {
+        dolog ("Could not allocate " NAME " buffer (%d samples)\n",
+               hw->samples);
+        return -1;
     }
+
+    return 0;
 }
 
 static void glue (audio_pcm_sw_free_resources_, TYPE) (SW *sw)
@@ -107,11 +103,7 @@ static int glue (audio_pcm_sw_alloc_resources_, TYPE) (SW *sw)
 {
     int samples;
 
-    if (!glue(audio_get_pdo_, TYPE)(sw->s->dev)->mixing_engine) {
-        return 0;
-    }
-
-    samples = ((int64_t) sw->HWBUF->size << 32) / sw->ratio;
+    samples = ((int64_t) sw->hw->samples << 32) / sw->ratio;
 
     sw->buf = audio_calloc(__func__, samples, sizeof(struct st_sample));
     if (!sw->buf) {
@@ -153,23 +145,15 @@ static int glue (audio_pcm_sw_init_, TYPE) (
     sw->ratio = ((int64_t) sw->info.freq << 32) / sw->hw->info.freq;
 #endif
 
-    if (sw->info.is_float) {
 #ifdef DAC
-        sw->conv = mixeng_conv_float[sw->info.nchannels == 2];
+    sw->conv = mixeng_conv
 #else
-        sw->clip = mixeng_clip_float[sw->info.nchannels == 2];
+    sw->clip = mixeng_clip
 #endif
-    } else {
-#ifdef DAC
-        sw->conv = mixeng_conv
-#else
-        sw->clip = mixeng_clip
-#endif
-            [sw->info.nchannels == 2]
-            [sw->info.is_signed]
-            [sw->info.swap_endianness]
-            [audio_bits_to_index(sw->info.bits)];
-    }
+        [sw->info.nchannels == 2]
+        [sw->info.sign]
+        [sw->info.swap_endianness]
+        [audio_bits_to_index (sw->info.bits)];
 
     sw->name = g_strdup (name);
     err = glue (audio_pcm_sw_alloc_resources_, TYPE) (sw);
@@ -199,8 +183,8 @@ static void glue (audio_pcm_hw_del_sw_, TYPE) (SW *sw)
 
 static void glue (audio_pcm_hw_gc_, TYPE) (HW **hwp)
 {
+    AudioState *s = &glob_audio_state;
     HW *hw = *hwp;
-    AudioState *s = hw->s;
 
     if (!hw->sw_head.lh_first) {
 #ifdef DAC
@@ -215,14 +199,15 @@ static void glue (audio_pcm_hw_gc_, TYPE) (HW **hwp)
     }
 }
 
-static HW *glue(audio_pcm_hw_find_any_, TYPE)(AudioState *s, HW *hw)
+static HW *glue (audio_pcm_hw_find_any_, TYPE) (HW *hw)
 {
+    AudioState *s = &glob_audio_state;
     return hw ? hw->entries.le_next : glue (s->hw_head_, TYPE).lh_first;
 }
 
-static HW *glue(audio_pcm_hw_find_any_enabled_, TYPE)(AudioState *s, HW *hw)
+static HW *glue (audio_pcm_hw_find_any_enabled_, TYPE) (HW *hw)
 {
-    while ((hw = glue(audio_pcm_hw_find_any_, TYPE)(s, hw))) {
+    while ((hw = glue (audio_pcm_hw_find_any_, TYPE) (hw))) {
         if (hw->enabled) {
             return hw;
         }
@@ -230,10 +215,12 @@ static HW *glue(audio_pcm_hw_find_any_enabled_, TYPE)(AudioState *s, HW *hw)
     return NULL;
 }
 
-static HW *glue(audio_pcm_hw_find_specific_, TYPE)(AudioState *s, HW *hw,
-                                                   struct audsettings *as)
+static HW *glue (audio_pcm_hw_find_specific_, TYPE) (
+    HW *hw,
+    struct audsettings *as
+    )
 {
-    while ((hw = glue(audio_pcm_hw_find_any_, TYPE)(s, hw))) {
+    while ((hw = glue (audio_pcm_hw_find_any_, TYPE) (hw))) {
         if (audio_pcm_info_eq (&hw->info, as)) {
             return hw;
         }
@@ -241,10 +228,10 @@ static HW *glue(audio_pcm_hw_find_specific_, TYPE)(AudioState *s, HW *hw,
     return NULL;
 }
 
-static HW *glue(audio_pcm_hw_add_new_, TYPE)(AudioState *s,
-                                             struct audsettings *as)
+static HW *glue (audio_pcm_hw_add_new_, TYPE) (struct audsettings *as)
 {
     HW *hw;
+    AudioState *s = &glob_audio_state;
     struct audio_driver *drv = s->drv;
 
     if (!glue (s->nb_hw_voices_, TYPE)) {
@@ -268,8 +255,8 @@ static HW *glue(audio_pcm_hw_add_new_, TYPE)(AudioState *s,
         return NULL;
     }
 
-    hw->s = s;
     hw->pcm_ops = drv->pcm_ops;
+    hw->ctl_caps = drv->ctl_caps;
 
     QLIST_INIT (&hw->sw_head);
 #ifdef DAC
@@ -280,29 +267,23 @@ static HW *glue(audio_pcm_hw_add_new_, TYPE)(AudioState *s,
     }
 
     if (audio_bug(__func__, hw->samples <= 0)) {
-        dolog("hw->samples=%zd\n", hw->samples);
+        dolog ("hw->samples=%d\n", hw->samples);
         goto err1;
     }
 
-    if (hw->info.is_float) {
 #ifdef DAC
-        hw->clip = mixeng_clip_float[hw->info.nchannels == 2];
+    hw->clip = mixeng_clip
 #else
-        hw->conv = mixeng_conv_float[hw->info.nchannels == 2];
+    hw->conv = mixeng_conv
 #endif
-    } else {
-#ifdef DAC
-        hw->clip = mixeng_clip
-#else
-        hw->conv = mixeng_conv
-#endif
-            [hw->info.nchannels == 2]
-            [hw->info.is_signed]
-            [hw->info.swap_endianness]
-            [audio_bits_to_index(hw->info.bits)];
-    }
+        [hw->info.nchannels == 2]
+        [hw->info.sign]
+        [hw->info.swap_endianness]
+        [audio_bits_to_index (hw->info.bits)];
 
-    glue(audio_pcm_hw_alloc_resources_, TYPE)(hw);
+    if (glue (audio_pcm_hw_alloc_resources_, TYPE) (hw)) {
+        goto err1;
+    }
 
     QLIST_INSERT_HEAD (&s->glue (hw_head_, TYPE), hw, entries);
     glue (s->nb_hw_voices_, TYPE) -= 1;
@@ -318,64 +299,31 @@ static HW *glue(audio_pcm_hw_add_new_, TYPE)(AudioState *s,
     return NULL;
 }
 
-AudiodevPerDirectionOptions *glue(audio_get_pdo_, TYPE)(Audiodev *dev)
-{
-    switch (dev->driver) {
-    case AUDIODEV_DRIVER_NONE:
-        return dev->u.none.TYPE;
-    case AUDIODEV_DRIVER_ALSA:
-        return qapi_AudiodevAlsaPerDirectionOptions_base(dev->u.alsa.TYPE);
-    case AUDIODEV_DRIVER_COREAUDIO:
-        return qapi_AudiodevCoreaudioPerDirectionOptions_base(
-            dev->u.coreaudio.TYPE);
-    case AUDIODEV_DRIVER_DSOUND:
-        return dev->u.dsound.TYPE;
-    case AUDIODEV_DRIVER_JACK:
-        return qapi_AudiodevJackPerDirectionOptions_base(dev->u.jack.TYPE);
-    case AUDIODEV_DRIVER_OSS:
-        return qapi_AudiodevOssPerDirectionOptions_base(dev->u.oss.TYPE);
-    case AUDIODEV_DRIVER_PA:
-        return qapi_AudiodevPaPerDirectionOptions_base(dev->u.pa.TYPE);
-    case AUDIODEV_DRIVER_SDL:
-        return dev->u.sdl.TYPE;
-    case AUDIODEV_DRIVER_SPICE:
-        return dev->u.spice.TYPE;
-    case AUDIODEV_DRIVER_WAV:
-        return dev->u.wav.TYPE;
-
-    case AUDIODEV_DRIVER__MAX:
-        break;
-    }
-    abort();
-}
-
-static HW *glue(audio_pcm_hw_add_, TYPE)(AudioState *s, struct audsettings *as)
+static HW *glue (audio_pcm_hw_add_, TYPE) (struct audsettings *as)
 {
     HW *hw;
-    AudiodevPerDirectionOptions *pdo = glue(audio_get_pdo_, TYPE)(s->dev);
 
-    if (!pdo->mixing_engine || pdo->fixed_settings) {
-        hw = glue(audio_pcm_hw_add_new_, TYPE)(s, as);
-        if (!pdo->mixing_engine || hw) {
+    if (glue (conf.fixed_, TYPE).enabled && glue (conf.fixed_, TYPE).greedy) {
+        hw = glue (audio_pcm_hw_add_new_, TYPE) (as);
+        if (hw) {
             return hw;
         }
     }
 
-    hw = glue(audio_pcm_hw_find_specific_, TYPE)(s, NULL, as);
+    hw = glue (audio_pcm_hw_find_specific_, TYPE) (NULL, as);
     if (hw) {
         return hw;
     }
 
-    hw = glue(audio_pcm_hw_add_new_, TYPE)(s, as);
+    hw = glue (audio_pcm_hw_add_new_, TYPE) (as);
     if (hw) {
         return hw;
     }
 
-    return glue(audio_pcm_hw_find_any_, TYPE)(s, NULL);
+    return glue (audio_pcm_hw_find_any_, TYPE) (NULL);
 }
 
-static SW *glue(audio_pcm_create_voice_pair_, TYPE)(
-    AudioState *s,
+static SW *glue (audio_pcm_create_voice_pair_, TYPE) (
     const char *sw_name,
     struct audsettings *as
     )
@@ -383,10 +331,9 @@ static SW *glue(audio_pcm_create_voice_pair_, TYPE)(
     SW *sw;
     HW *hw;
     struct audsettings hw_as;
-    AudiodevPerDirectionOptions *pdo = glue(audio_get_pdo_, TYPE)(s->dev);
 
-    if (pdo->fixed_settings) {
-        hw_as = audiodev_to_audsettings(pdo);
+    if (glue (conf.fixed_, TYPE).enabled) {
+        hw_as = glue (conf.fixed_, TYPE).settings;
     }
     else {
         hw_as = *as;
@@ -398,9 +345,8 @@ static SW *glue(audio_pcm_create_voice_pair_, TYPE)(
                sw_name ? sw_name : "unknown", sizeof (*sw));
         goto err1;
     }
-    sw->s = s;
 
-    hw = glue(audio_pcm_hw_add_, TYPE)(s, &hw_as);
+    hw = glue (audio_pcm_hw_add_, TYPE) (&hw_as);
     if (!hw) {
         goto err2;
     }
@@ -451,17 +397,13 @@ SW *glue (AUD_open_, TYPE) (
     struct audsettings *as
     )
 {
-    AudioState *s;
-    AudiodevPerDirectionOptions *pdo;
+    AudioState *s = &glob_audio_state;
 
     if (audio_bug(__func__, !card || !name || !callback_fn || !as)) {
         dolog ("card=%p name=%p callback_fn=%p as=%p\n",
                card, name, callback_fn, as);
         goto fail;
     }
-
-    s = card->state;
-    pdo = glue(audio_get_pdo_, TYPE)(s->dev);
 
     ldebug ("open %s, freq %d, nchannels %d, fmt %d\n",
             name, as->freq, as->nchannels, as->fmt);
@@ -480,7 +422,7 @@ SW *glue (AUD_open_, TYPE) (
         return sw;
     }
 
-    if (!pdo->fixed_settings && sw) {
+    if (!glue (conf.fixed_, TYPE).enabled && sw) {
         glue (AUD_close_, TYPE) (card, sw);
         sw = NULL;
     }
@@ -500,7 +442,7 @@ SW *glue (AUD_open_, TYPE) (
         }
     }
     else {
-        sw = glue(audio_pcm_create_voice_pair_, TYPE)(s, name, as);
+        sw = glue (audio_pcm_create_voice_pair_, TYPE) (name, as);
         if (!sw) {
             dolog ("Failed to create voice `%s'\n", name);
             return NULL;

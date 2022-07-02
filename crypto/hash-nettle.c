@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -26,18 +26,12 @@
 #include <nettle/sha.h>
 #include <nettle/ripemd160.h>
 
-#if CONFIG_NETTLE_VERSION_MAJOR < 3
-typedef unsigned int     hash_length_t;
-#else
-typedef size_t       hash_length_t;
-#endif
-
 typedef void (*qcrypto_nettle_init)(void *ctx);
 typedef void (*qcrypto_nettle_write)(void *ctx,
-                                     hash_length_t len,
+                                     unsigned int len,
                                      const uint8_t *buf);
 typedef void (*qcrypto_nettle_result)(void *ctx,
-                                      hash_length_t len,
+                                      unsigned int len,
                                       uint8_t *buf);
 
 union qcrypto_hash_ctx {
@@ -118,7 +112,7 @@ qcrypto_nettle_hash_bytesv(QCryptoHashAlgorithm alg,
                            size_t *resultlen,
                            Error **errp)
 {
-    size_t i;
+    int i;
     union qcrypto_hash_ctx ctx;
 
     if (!qcrypto_hash_supports(alg)) {

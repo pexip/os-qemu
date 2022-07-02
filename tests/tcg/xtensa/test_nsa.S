@@ -2,8 +2,6 @@
 
 test_suite nsa
 
-#if XCHAL_HAVE_NSA
-
 test nsa
     movi    a2, 0
     movi    a3, 31
@@ -57,7 +55,5 @@ test nsau
     nsau    a2, a2
     assert  eq, a3, a2
 test_end
-
-#endif
 
 test_suite_end

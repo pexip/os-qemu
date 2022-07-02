@@ -7,11 +7,10 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/iov.h"
-#include "qemu/module.h"
 #include "trace.h"
 
+#include "hw/qdev.h"
 #include "hw/virtio/virtio.h"
-#include "hw/qdev-properties.h"
 #include "hw/virtio/virtio-input.h"
 
 #include "standard-headers/linux/input.h"
@@ -275,18 +274,19 @@ static void virtio_input_finalize(Object *obj)
 
     g_free(vinput->queue);
 }
-
-static void virtio_input_device_unrealize(DeviceState *dev)
+static void virtio_input_device_unrealize(DeviceState *dev, Error **errp)
 {
     VirtIOInputClass *vic = VIRTIO_INPUT_GET_CLASS(dev);
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
-    VirtIOInput *vinput = VIRTIO_INPUT(dev);
+    Error *local_err = NULL;
 
     if (vic->unrealize) {
-        vic->unrealize(dev);
+        vic->unrealize(dev, &local_err);
+        if (local_err) {
+            error_propagate(errp, local_err);
+            return;
+        }
     }
-    virtio_delete_queue(vinput->evt);
-    virtio_delete_queue(vinput->sts);
     virtio_cleanup(vdev);
 }
 
@@ -311,7 +311,7 @@ static void virtio_input_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
 
-    device_class_set_props(dc, virtio_input_properties);
+    dc->props          = virtio_input_properties;
     dc->vmsd           = &vmstate_virtio_input;
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
     vdc->realize      = virtio_input_device_realize;

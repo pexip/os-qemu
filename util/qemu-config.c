@@ -4,6 +4,7 @@
 #include "qapi/qapi-commands-misc.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qlist.h"
+#include "qemu-common.h"
 #include "qemu/error-report.h"
 #include "qemu/option.h"
 #include "qemu/config-file.h"
@@ -339,7 +340,8 @@ int qemu_set_option(const char *str)
         return -1;
     }
 
-    if (!qemu_opt_set(opts, arg, str + offset + 1, &local_err)) {
+    qemu_opt_set(opts, arg, str + offset + 1, &local_err);
+    if (local_err) {
         error_report_err(local_err);
         return -1;
     }
@@ -440,7 +442,8 @@ int qemu_config_parse(FILE *fp, QemuOptsList **lists, const char *fname)
                 error_report("no group defined");
                 goto out;
             }
-            if (!qemu_opt_set(opts, arg, value, &local_err)) {
+            qemu_opt_set(opts, arg, value, &local_err);
+            if (local_err) {
                 error_report_err(local_err);
                 goto out;
             }
@@ -479,6 +482,7 @@ static void config_parse_qdict_section(QDict *options, QemuOptsList *opts,
     QemuOpts *subopts;
     QDict *subqdict;
     QList *list = NULL;
+    Error *local_err = NULL;
     size_t orig_size, enum_size;
     char *prefix;
 
@@ -490,12 +494,15 @@ static void config_parse_qdict_section(QDict *options, QemuOptsList *opts,
         goto out;
     }
 
-    subopts = qemu_opts_create(opts, NULL, 0, errp);
-    if (!subopts) {
+    subopts = qemu_opts_create(opts, NULL, 0, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
         goto out;
     }
 
-    if (!qemu_opts_absorb_qdict(subopts, subqdict, errp)) {
+    qemu_opts_absorb_qdict(subopts, subqdict, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
         goto out;
     }
 
@@ -532,13 +539,16 @@ static void config_parse_qdict_section(QDict *options, QemuOptsList *opts,
             }
 
             opt_name = g_strdup_printf("%s.%u", opts->name, i++);
-            subopts = qemu_opts_create(opts, opt_name, 1, errp);
+            subopts = qemu_opts_create(opts, opt_name, 1, &local_err);
             g_free(opt_name);
-            if (!subopts) {
+            if (local_err) {
+                error_propagate(errp, local_err);
                 goto out;
             }
 
-            if (!qemu_opts_absorb_qdict(subopts, section, errp)) {
+            qemu_opts_absorb_qdict(subopts, section, &local_err);
+            if (local_err) {
+                error_propagate(errp, local_err);
                 qemu_opts_del(subopts);
                 goto out;
             }

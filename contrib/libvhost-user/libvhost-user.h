@@ -19,24 +19,16 @@
 #include <stddef.h>
 #include <sys/poll.h>
 #include <linux/vhost.h>
-#include <pthread.h>
 #include "standard-headers/linux/virtio_ring.h"
 
 /* Based on qemu/hw/virtio/vhost-user.c */
 #define VHOST_USER_F_PROTOCOL_FEATURES 30
 #define VHOST_LOG_PAGE 4096
 
+#define VHOST_MAX_NR_VIRTQUEUE 8
 #define VIRTQUEUE_MAX_SIZE 1024
 
-#define VHOST_MEMORY_BASELINE_NREGIONS 8
-
-/*
- * Set a reasonable maximum number of ram slots, which will be supported by
- * any architecture.
- */
-#define VHOST_USER_MAX_RAM_SLOTS 32
-
-#define VHOST_USER_HDR_SIZE offsetof(VhostUserMsg, payload.u64)
+#define VHOST_MEMORY_MAX_NREGIONS 8
 
 typedef enum VhostSetConfigType {
     VHOST_SET_CONFIG_TYPE_MASTER = 0,
@@ -61,9 +53,6 @@ enum VhostUserProtocolFeature {
     VHOST_USER_PROTOCOL_F_CONFIG = 9,
     VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD = 10,
     VHOST_USER_PROTOCOL_F_HOST_NOTIFIER = 11,
-    VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD = 12,
-    VHOST_USER_PROTOCOL_F_INBAND_NOTIFICATIONS = 14,
-    VHOST_USER_PROTOCOL_F_CONFIGURE_MEM_SLOTS = 15,
 
     VHOST_USER_PROTOCOL_F_MAX
 };
@@ -102,13 +91,6 @@ typedef enum VhostUserRequest {
     VHOST_USER_POSTCOPY_ADVISE  = 28,
     VHOST_USER_POSTCOPY_LISTEN  = 29,
     VHOST_USER_POSTCOPY_END     = 30,
-    VHOST_USER_GET_INFLIGHT_FD = 31,
-    VHOST_USER_SET_INFLIGHT_FD = 32,
-    VHOST_USER_GPU_SET_SOCKET = 33,
-    VHOST_USER_VRING_KICK = 35,
-    VHOST_USER_GET_MAX_MEM_SLOTS = 36,
-    VHOST_USER_ADD_MEM_REG = 37,
-    VHOST_USER_REM_MEM_REG = 38,
     VHOST_USER_MAX
 } VhostUserRequest;
 
@@ -117,8 +99,6 @@ typedef enum VhostUserSlaveRequest {
     VHOST_USER_SLAVE_IOTLB_MSG = 1,
     VHOST_USER_SLAVE_CONFIG_CHANGE_MSG = 2,
     VHOST_USER_SLAVE_VRING_HOST_NOTIFIER_MSG = 3,
-    VHOST_USER_SLAVE_VRING_CALL = 4,
-    VHOST_USER_SLAVE_VRING_ERR = 5,
     VHOST_USER_SLAVE_MAX
 }  VhostUserSlaveRequest;
 
@@ -132,13 +112,8 @@ typedef struct VhostUserMemoryRegion {
 typedef struct VhostUserMemory {
     uint32_t nregions;
     uint32_t padding;
-    VhostUserMemoryRegion regions[VHOST_MEMORY_BASELINE_NREGIONS];
+    VhostUserMemoryRegion regions[VHOST_MEMORY_MAX_NREGIONS];
 } VhostUserMemory;
-
-typedef struct VhostUserMemRegMsg {
-    uint64_t padding;
-    VhostUserMemoryRegion region;
-} VhostUserMemRegMsg;
 
 typedef struct VhostUserLog {
     uint64_t mmap_size;
@@ -163,21 +138,14 @@ typedef struct VhostUserVringArea {
     uint64_t offset;
 } VhostUserVringArea;
 
-typedef struct VhostUserInflight {
-    uint64_t mmap_size;
-    uint64_t mmap_offset;
-    uint16_t num_queues;
-    uint16_t queue_size;
-} VhostUserInflight;
-
-#if defined(_WIN32) && (defined(__x86_64__) || defined(__i386__))
+#if defined(_WIN32)
 # define VU_PACKED __attribute__((gcc_struct, packed))
 #else
 # define VU_PACKED __attribute__((packed))
 #endif
 
 typedef struct VhostUserMsg {
-    int request;
+    VhostUserRequest request;
 
 #define VHOST_USER_VERSION_MASK     (0x3)
 #define VHOST_USER_REPLY_MASK       (0x1 << 2)
@@ -192,14 +160,12 @@ typedef struct VhostUserMsg {
         struct vhost_vring_state state;
         struct vhost_vring_addr addr;
         VhostUserMemory memory;
-        VhostUserMemRegMsg memreg;
         VhostUserLog log;
         VhostUserConfig config;
         VhostUserVringArea area;
-        VhostUserInflight inflight;
     } payload;
 
-    int fds[VHOST_MEMORY_BASELINE_NREGIONS];
+    int fds[VHOST_MEMORY_MAX_NREGIONS];
     int fd_num;
     uint8_t *data;
 } VU_PACKED VhostUserMsg;
@@ -223,7 +189,6 @@ typedef uint64_t (*vu_get_features_cb) (VuDev *dev);
 typedef void (*vu_set_features_cb) (VuDev *dev, uint64_t features);
 typedef int (*vu_process_msg_cb) (VuDev *dev, VhostUserMsg *vmsg,
                                   int *do_reply);
-typedef bool (*vu_read_msg_cb) (VuDev *dev, int sock, VhostUserMsg *vmsg);
 typedef void (*vu_queue_set_started_cb) (VuDev *dev, int qidx, bool started);
 typedef bool (*vu_queue_is_processed_in_order_cb) (VuDev *dev, int qidx);
 typedef int (*vu_get_config_cb) (VuDev *dev, uint8_t *config, uint32_t len);
@@ -269,60 +234,8 @@ typedef struct VuRing {
     uint32_t flags;
 } VuRing;
 
-typedef struct VuDescStateSplit {
-    /* Indicate whether this descriptor is inflight or not.
-     * Only available for head-descriptor. */
-    uint8_t inflight;
-
-    /* Padding */
-    uint8_t padding[5];
-
-    /* Maintain a list for the last batch of used descriptors.
-     * Only available when batching is used for submitting */
-    uint16_t next;
-
-    /* Used to preserve the order of fetching available descriptors.
-     * Only available for head-descriptor. */
-    uint64_t counter;
-} VuDescStateSplit;
-
-typedef struct VuVirtqInflight {
-    /* The feature flags of this region. Now it's initialized to 0. */
-    uint64_t features;
-
-    /* The version of this region. It's 1 currently.
-     * Zero value indicates a vm reset happened. */
-    uint16_t version;
-
-    /* The size of VuDescStateSplit array. It's equal to the virtqueue
-     * size. Slave could get it from queue size field of VhostUserInflight. */
-    uint16_t desc_num;
-
-    /* The head of list that track the last batch of used descriptors. */
-    uint16_t last_batch_head;
-
-    /* Storing the idx value of used ring */
-    uint16_t used_idx;
-
-    /* Used to track the state of each descriptor in descriptor table */
-    VuDescStateSplit desc[];
-} VuVirtqInflight;
-
-typedef struct VuVirtqInflightDesc {
-    uint16_t index;
-    uint64_t counter;
-} VuVirtqInflightDesc;
-
 typedef struct VuVirtq {
     VuRing vring;
-
-    VuVirtqInflight *inflight;
-
-    VuVirtqInflightDesc *resubmit_list;
-
-    uint16_t resubmit_num;
-
-    uint64_t counter;
 
     /* Next head to pop */
     uint16_t last_avail_idx;
@@ -350,9 +263,6 @@ typedef struct VuVirtq {
     int err_fd;
     unsigned int enable;
     bool started;
-
-    /* Guest addresses of our ring */
-    struct vhost_vring_addr vra;
 } VuVirtq;
 
 enum VuWatchCondtion {
@@ -369,60 +279,28 @@ typedef void (*vu_set_watch_cb) (VuDev *dev, int fd, int condition,
                                  vu_watch_cb cb, void *data);
 typedef void (*vu_remove_watch_cb) (VuDev *dev, int fd);
 
-typedef struct VuDevInflightInfo {
-    int fd;
-    void *addr;
-    uint64_t size;
-} VuDevInflightInfo;
-
 struct VuDev {
     int sock;
     uint32_t nregions;
-    VuDevRegion regions[VHOST_USER_MAX_RAM_SLOTS];
-    VuVirtq *vq;
-    VuDevInflightInfo inflight_info;
+    VuDevRegion regions[VHOST_MEMORY_MAX_NREGIONS];
+    VuVirtq vq[VHOST_MAX_NR_VIRTQUEUE];
     int log_call_fd;
-    /* Must be held while using slave_fd */
-    pthread_mutex_t slave_mutex;
     int slave_fd;
     uint64_t log_size;
     uint8_t *log_table;
     uint64_t features;
     uint64_t protocol_features;
     bool broken;
-    uint16_t max_queues;
 
-    /*
-     * @read_msg: custom method to read vhost-user message
-     *
-     * Read data from vhost_user socket fd and fill up
-     * the passed VhostUserMsg *vmsg struct.
-     *
-     * If reading fails, it should close the received set of file
-     * descriptors as socket message's auxiliary data.
-     *
-     * For the details, please refer to vu_message_read in libvhost-user.c
-     * which will be used by default if not custom method is provided when
-     * calling vu_init
-     *
-     * Returns: true if vhost-user message successfully received,
-     *          otherwise return false.
-     *
-     */
-    vu_read_msg_cb read_msg;
-
-    /*
-     * @set_watch: add or update the given fd to the watch set,
-     * call cb when condition is met.
-     */
+    /* @set_watch: add or update the given fd to the watch set,
+     * call cb when condition is met */
     vu_set_watch_cb set_watch;
 
     /* @remove_watch: remove the given fd from the watch set */
     vu_remove_watch_cb remove_watch;
 
-    /*
-     * @panic: encountered an unrecoverable error, you may try to re-initialize
-     */
+    /* @panic: encountered an unrecoverable error, you may try to
+     * re-initialize */
     vu_panic_cb panic;
     const VuDevIface *iface;
 
@@ -442,22 +320,17 @@ typedef struct VuVirtqElement {
 /**
  * vu_init:
  * @dev: a VuDev context
- * @max_queues: maximum number of virtqueues
  * @socket: the socket connected to vhost-user master
  * @panic: a panic callback
  * @set_watch: a set_watch callback
  * @remove_watch: a remove_watch callback
  * @iface: a VuDevIface structure with vhost-user device callbacks
  *
- * Initializes a VuDev vhost-user context.
- *
- * Returns: true on success, false on failure.
+ * Intializes a VuDev vhost-user context.
  **/
-bool vu_init(VuDev *dev,
-             uint16_t max_queues,
+void vu_init(VuDev *dev,
              int socket,
              vu_panic_cb panic,
-             vu_read_msg_cb read_msg,
              vu_set_watch_cb set_watch,
              vu_remove_watch_cb remove_watch,
              const VuDevIface *iface);
@@ -575,16 +448,6 @@ bool vu_queue_empty(VuDev *dev, VuVirtq *vq);
 void vu_queue_notify(VuDev *dev, VuVirtq *vq);
 
 /**
- * vu_queue_notify_sync:
- * @dev: a VuDev context
- * @vq: a VuVirtq queue
- *
- * Request to notify the queue via callfd (skipped if unnecessary)
- * or sync message if possible.
- */
-void vu_queue_notify_sync(VuDev *dev, VuVirtq *vq);
-
-/**
  * vu_queue_pop:
  * @dev: a VuDev context
  * @vq: a VuVirtq queue
@@ -594,20 +457,6 @@ void vu_queue_notify_sync(VuDev *dev, VuVirtq *vq);
  * returned element must be free()-d by the caller.
  */
 void *vu_queue_pop(VuDev *dev, VuVirtq *vq, size_t sz);
-
-
-/**
- * vu_queue_unpop:
- * @dev: a VuDev context
- * @vq: a VuVirtq queue
- * @elem: The #VuVirtqElement
- * @len: number of bytes written
- *
- * Pretend the most recent element wasn't popped from the virtqueue.  The next
- * call to vu_queue_pop() will refetch the element.
- */
-void vu_queue_unpop(VuDev *dev, VuVirtq *vq, VuVirtqElement *elem,
-                    size_t len);
 
 /**
  * vu_queue_rewind:

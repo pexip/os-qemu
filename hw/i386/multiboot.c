@@ -25,6 +25,7 @@
 #include "qemu/osdep.h"
 #include "qemu/option.h"
 #include "cpu.h"
+#include "hw/hw.h"
 #include "hw/nvram/fw_cfg.h"
 #include "multiboot.h"
 #include "hw/loader.h"
@@ -198,8 +199,8 @@ int load_multiboot(FWCfgState *fw_cfg,
             exit(1);
         }
 
-        kernel_size = load_elf(kernel_filename, NULL, NULL, NULL, &elf_entry,
-                               &elf_low, &elf_high, NULL, 0, I386_ELF_MACHINE,
+        kernel_size = load_elf(kernel_filename, NULL, NULL, &elf_entry,
+                               &elf_low, &elf_high, 0, I386_ELF_MACHINE,
                                0, 0);
         if (kernel_size < 0) {
             error_report("Error while loading elf kernel");
@@ -342,11 +343,7 @@ int load_multiboot(FWCfgState *fw_cfg,
             mbs.mb_buf_size = TARGET_PAGE_ALIGN(mb_mod_length + mbs.mb_buf_size);
             mbs.mb_buf = g_realloc(mbs.mb_buf, mbs.mb_buf_size);
 
-            if (load_image_size(one_file, (unsigned char *)mbs.mb_buf + offs,
-                                mbs.mb_buf_size - offs) < 0) {
-                error_report("Error loading file '%s'", one_file);
-                exit(1);
-            }
+            load_image(one_file, (unsigned char *)mbs.mb_buf + offs);
             mb_add_mod(&mbs, mbs.mb_buf_phys + offs,
                        mbs.mb_buf_phys + offs + mb_mod_length, c);
 

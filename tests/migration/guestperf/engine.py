@@ -1,3 +1,4 @@
+from __future__ import print_function
 #
 # Migration test main engine
 #
@@ -6,7 +7,7 @@
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
 # License as published by the Free Software Foundation; either
-# version 2.1 of the License, or (at your option) any later version.
+# version 2 of the License, or (at your option) any later version.
 #
 # This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -23,13 +24,12 @@ import re
 import sys
 import time
 
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'scripts'))
+import qemu
+import qmp.qmp
 from guestperf.progress import Progress, ProgressStats
 from guestperf.report import Report
 from guestperf.timings import TimingRecord, Timings
-
-sys.path.append(os.path.join(os.path.dirname(__file__),
-                             '..', '..', '..', 'python'))
-from qemu.machine import QEMUMachine
 
 
 class Engine(object):
@@ -286,7 +286,7 @@ class Engine(object):
             cmdline = "'" + cmdline + "'"
 
         argv = [
-            "-accel", "kvm",
+            "-machine", "accel=kvm",
             "-cpu", "host",
             "-kernel", self._kernel,
             "-initrd", self._initrd,
@@ -385,17 +385,17 @@ class Engine(object):
             dstmonaddr = "/var/tmp/qemu-dst-%d-monitor.sock" % os.getpid()
         srcmonaddr = "/var/tmp/qemu-src-%d-monitor.sock" % os.getpid()
 
-        src = QEMUMachine(self._binary,
-                          args=self._get_src_args(hardware),
-                          wrapper=self._get_src_wrapper(hardware),
-                          name="qemu-src-%d" % os.getpid(),
-                          monitor_address=srcmonaddr)
+        src = qemu.QEMUMachine(self._binary,
+                               args=self._get_src_args(hardware),
+                               wrapper=self._get_src_wrapper(hardware),
+                               name="qemu-src-%d" % os.getpid(),
+                               monitor_address=srcmonaddr)
 
-        dst = QEMUMachine(self._binary,
-                          args=self._get_dst_args(hardware, uri),
-                          wrapper=self._get_dst_wrapper(hardware),
-                          name="qemu-dst-%d" % os.getpid(),
-                          monitor_address=dstmonaddr)
+        dst = qemu.QEMUMachine(self._binary,
+                               args=self._get_dst_args(hardware, uri),
+                               wrapper=self._get_dst_wrapper(hardware),
+                               name="qemu-dst-%d" % os.getpid(),
+                               monitor_address=dstmonaddr)
 
         try:
             src.launch()

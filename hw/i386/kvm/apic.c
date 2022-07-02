@@ -9,9 +9,8 @@
  * This work is licensed under the terms of the GNU GPL version 2.
  * See the COPYING file in the top-level directory.
  */
-
 #include "qemu/osdep.h"
-#include "qemu/module.h"
+#include "qemu-common.h"
 #include "cpu.h"
 #include "hw/i386/apic_internal.h"
 #include "hw/pci/msi.h"
@@ -225,11 +224,12 @@ static void kvm_apic_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&s->io_memory, OBJECT(s), &kvm_apic_io_ops, s,
                           "kvm-apic-msi", APIC_SPACE_SIZE);
 
-    assert(kvm_has_gsi_routing());
-    msi_nonbroken = true;
+    if (kvm_has_gsi_routing()) {
+        msi_nonbroken = true;
+    }
 }
 
-static void kvm_apic_unrealize(DeviceState *dev)
+static void kvm_apic_unrealize(DeviceState *dev, Error **errp)
 {
 }
 

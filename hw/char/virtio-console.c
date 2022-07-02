@@ -13,25 +13,21 @@
 #include "qemu/osdep.h"
 #include "chardev/char-fe.h"
 #include "qemu/error-report.h"
-#include "qemu/module.h"
 #include "trace.h"
-#include "hw/qdev-properties.h"
 #include "hw/virtio/virtio-serial.h"
 #include "qapi/error.h"
 #include "qapi/qapi-events-char.h"
-#include "qom/object.h"
 
 #define TYPE_VIRTIO_CONSOLE_SERIAL_PORT "virtserialport"
-typedef struct VirtConsole VirtConsole;
-DECLARE_INSTANCE_CHECKER(VirtConsole, VIRTIO_CONSOLE,
-                         TYPE_VIRTIO_CONSOLE_SERIAL_PORT)
+#define VIRTIO_CONSOLE(obj) \
+    OBJECT_CHECK(VirtConsole, (obj), TYPE_VIRTIO_CONSOLE_SERIAL_PORT)
 
-struct VirtConsole {
+typedef struct VirtConsole {
     VirtIOSerialPort parent_obj;
 
     CharBackend chr;
     guint watch;
-};
+} VirtConsole;
 
 /*
  * Callback function that's called from chardevs when backend becomes
@@ -147,7 +143,7 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
     virtio_serial_write(port, buf, size);
 }
 
-static void chr_event(void *opaque, QEMUChrEvent event)
+static void chr_event(void *opaque, int event)
 {
     VirtConsole *vcon = opaque;
     VirtIOSerialPort *port = VIRTIO_SERIAL_PORT(vcon);
@@ -163,11 +159,6 @@ static void chr_event(void *opaque, QEMUChrEvent event)
             vcon->watch = 0;
         }
         virtio_serial_close(port);
-        break;
-    case CHR_EVENT_BREAK:
-    case CHR_EVENT_MUX_IN:
-    case CHR_EVENT_MUX_OUT:
-        /* Ignore */
         break;
     }
 }
@@ -251,7 +242,7 @@ static void virtconsole_realize(DeviceState *dev, Error **errp)
     }
 }
 
-static void virtconsole_unrealize(DeviceState *dev)
+static void virtconsole_unrealize(DeviceState *dev, Error **errp)
 {
     VirtConsole *vcon = VIRTIO_CONSOLE(dev);
 
@@ -289,7 +280,7 @@ static void virtserialport_class_init(ObjectClass *klass, void *data)
     k->set_guest_connected = set_guest_connected;
     k->enable_backend = virtconsole_enable_backend;
     k->guest_writable = guest_writable;
-    device_class_set_props(dc, virtserialport_properties);
+    dc->props = virtserialport_properties;
 }
 
 static const TypeInfo virtserialport_info = {

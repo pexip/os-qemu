@@ -17,11 +17,8 @@
 #define PVRDMA_PVRDMA_H
 
 #include "qemu/units.h"
-#include "qemu/notify.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/msix.h"
-#include "chardev/char-fe.h"
-#include "hw/net/vmxnet3_defs.h"
 
 #include "../rdma_backend_defs.h"
 #include "../rdma_rm_defs.h"
@@ -29,7 +26,6 @@
 #include "standard-headers/drivers/infiniband/hw/vmw_pvrdma/pvrdma_ring.h"
 #include "standard-headers/drivers/infiniband/hw/vmw_pvrdma/pvrdma_dev_api.h"
 #include "pvrdma_dev_ring.h"
-#include "qom/object.h"
 
 /* BARs */
 #define RDMA_MSIX_BAR_IDX    0
@@ -55,7 +51,7 @@
 #define PVRDMA_FW_VERSION    14
 
 /* Some defaults */
-#define PVRDMA_PKEY          0xFFFF
+#define PVRDMA_PKEY          0x7FFF
 
 typedef struct DSRInfo {
     dma_addr_t dma;
@@ -71,15 +67,7 @@ typedef struct DSRInfo {
     PvrdmaRing cq;
 } DSRInfo;
 
-typedef struct PVRDMADevStats {
-    uint64_t commands;
-    uint64_t regs_reads;
-    uint64_t regs_writes;
-    uint64_t uar_writes;
-    uint64_t interrupts;
-} PVRDMADevStats;
-
-struct PVRDMADev {
+typedef struct PVRDMADev {
     PCIDevice parent_obj;
     MemoryRegion msix;
     MemoryRegion regs;
@@ -90,19 +78,13 @@ struct PVRDMADev {
     int interrupt_mask;
     struct ibv_device_attr dev_attr;
     uint64_t node_guid;
-    char *backend_eth_device_name;
     char *backend_device_name;
+    uint8_t backend_gid_idx;
     uint8_t backend_port_num;
     RdmaBackendDev backend_dev;
     RdmaDeviceResources rdma_dev_res;
-    CharBackend mad_chr;
-    VMXNET3State *func0;
-    Notifier shutdown_notifier;
-    PVRDMADevStats stats;
-};
-typedef struct PVRDMADev PVRDMADev;
-DECLARE_INSTANCE_CHECKER(PVRDMADev, PVRDMA_DEV,
-                         PVRDMA_HW_NAME)
+} PVRDMADev;
+#define PVRDMA_DEV(dev) OBJECT_CHECK(PVRDMADev, (dev), PVRDMA_HW_NAME)
 
 static inline int get_reg_val(PVRDMADev *dev, hwaddr addr, uint32_t *val)
 {
@@ -135,11 +117,10 @@ static inline void post_interrupt(PVRDMADev *dev, unsigned vector)
     PCIDevice *pci_dev = PCI_DEVICE(dev);
 
     if (likely(!dev->interrupt_mask)) {
-        dev->stats.interrupts++;
         msix_notify(pci_dev, vector);
     }
 }
 
-int pvrdma_exec_cmd(PVRDMADev *dev);
+int execute_command(PVRDMADev *dev);
 
 #endif

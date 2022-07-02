@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Test case for nested image formats
 #
@@ -38,7 +38,7 @@ trap "_cleanup; exit \$status" 0 1 2 3 15
 
 _supported_fmt vpc vmdk vhdx vdi qed qcow2 qcow
 _supported_proto file
-_unsupported_imgopts "subformat=streamOptimized"
+_supported_os Linux
 
 IMG_SIZE=64M
 

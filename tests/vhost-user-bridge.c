@@ -29,9 +29,8 @@
 
 #define _FILE_OFFSET_BITS 64
 
-#include "qemu/osdep.h"
 #include "qemu/atomic.h"
-#include "qemu/ctype.h"
+#include "qemu/osdep.h"
 #include "qemu/iov.h"
 #include "standard-headers/linux/virtio_net.h"
 #include "contrib/libvhost-user/libvhost-user.h"
@@ -44,10 +43,6 @@
             printf(__VA_ARGS__); \
         } \
     } while (0)
-
-enum {
-    VHOST_USER_BRIDGE_MAX_QUEUES = 8,
-};
 
 typedef void (*CallbackFunc)(int sock, void *ctx);
 
@@ -468,8 +463,8 @@ vubr_queue_set_started(VuDev *dev, int qidx, bool started)
 
     if (started && vubr->notifier.fd >= 0) {
         vu_set_queue_host_notifier(dev, vq, vubr->notifier.fd,
-                                   qemu_real_host_page_size,
-                                   qidx * qemu_real_host_page_size);
+                                   getpagesize(),
+                                   qidx * getpagesize());
     }
 
     if (qidx % 2 == 1) {
@@ -516,17 +511,12 @@ vubr_accept_cb(int sock, void *ctx)
     }
     DPRINT("Got connection from remote peer on sock %d\n", conn_fd);
 
-    if (!vu_init(&dev->vudev,
-                 VHOST_USER_BRIDGE_MAX_QUEUES,
-                 conn_fd,
-                 vubr_panic,
-                 NULL,
-                 vubr_set_watch,
-                 vubr_remove_watch,
-                 &vuiface)) {
-        fprintf(stderr, "Failed to initialize libvhost-user\n");
-        exit(1);
-    }
+    vu_init(&dev->vudev,
+            conn_fd,
+            vubr_panic,
+            vubr_set_watch,
+            vubr_remove_watch,
+            &vuiface);
 
     dispatcher_add(&dev->dispatcher, conn_fd, ctx, vubr_receive_cb);
     dispatcher_remove(&dev->dispatcher, sock);
@@ -569,19 +559,12 @@ vubr_new(const char *path, bool client)
         if (connect(dev->sock, (struct sockaddr *)&un, len) == -1) {
             vubr_die("connect");
         }
-
-        if (!vu_init(&dev->vudev,
-                     VHOST_USER_BRIDGE_MAX_QUEUES,
-                     dev->sock,
-                     vubr_panic,
-                     NULL,
-                     vubr_set_watch,
-                     vubr_remove_watch,
-                     &vuiface)) {
-            fprintf(stderr, "Failed to initialize libvhost-user\n");
-            exit(1);
-        }
-
+        vu_init(&dev->vudev,
+                dev->sock,
+                vubr_panic,
+                vubr_set_watch,
+                vubr_remove_watch,
+                &vuiface);
         cb = vubr_receive_cb;
     }
 
@@ -596,11 +579,11 @@ static void *notifier_thread(void *arg)
 {
     VuDev *dev = (VuDev *)arg;
     VubrDev *vubr = container_of(dev, VubrDev, vudev);
-    int pagesize = qemu_real_host_page_size;
+    int pagesize = getpagesize();
     int qidx;
 
     while (true) {
-        for (qidx = 0; qidx < VHOST_USER_BRIDGE_MAX_QUEUES; qidx++) {
+        for (qidx = 0; qidx < VHOST_MAX_NR_VIRTQUEUE; qidx++) {
             uint16_t *n = vubr->notifier.addr + pagesize * qidx;
 
             if (*n == qidx) {
@@ -632,7 +615,7 @@ vubr_host_notifier_setup(VubrDev *dev)
     void *addr;
     int fd;
 
-    length = qemu_real_host_page_size * VHOST_USER_BRIDGE_MAX_QUEUES;
+    length = getpagesize() * VHOST_MAX_NR_VIRTQUEUE;
 
     fd = mkstemp(template);
     if (fd < 0) {
@@ -662,7 +645,7 @@ vubr_host_notifier_setup(VubrDev *dev)
 static void
 vubr_set_host(struct sockaddr_in *saddr, const char *host)
 {
-    if (qemu_isdigit(host[0])) {
+    if (isdigit(host[0])) {
         if (!inet_aton(host, &saddr->sin_addr)) {
             fprintf(stderr, "inet_aton() failed.\n");
             exit(1);

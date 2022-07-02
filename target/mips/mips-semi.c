@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,8 +22,7 @@
 #include "qemu/log.h"
 #include "exec/helper-proto.h"
 #include "exec/softmmu-semi.h"
-#include "hw/semihosting/semihost.h"
-#include "hw/semihosting/console.h"
+#include "exec/semihost.h"
 
 typedef enum UHIOp {
     UHI_exit = 1,
@@ -218,7 +217,7 @@ static int copy_argn_to_target(CPUMIPSState *env, int arg_num,
         if (!p) {                               \
             gpr[2] = -1;                        \
             gpr[3] = EFAULT;                    \
-            return;                             \
+            goto uhi_done;                      \
         }                                       \
     } while (0)
 
@@ -228,14 +227,14 @@ static int copy_argn_to_target(CPUMIPSState *env, int arg_num,
         if (!p) {                                       \
             gpr[2] = -1;                                \
             gpr[3] = EFAULT;                            \
-            return;                                     \
+            goto uhi_done;                              \
         }                                               \
         p2 = lock_user_string(addr2);                   \
         if (!p2) {                                      \
             unlock_user(p, addr, 0);                    \
             gpr[2] = -1;                                \
             gpr[3] = EFAULT;                            \
-            return;                                     \
+            goto uhi_done;                              \
         }                                               \
     } while (0)
 
@@ -272,7 +271,7 @@ void helper_do_semihosting(CPUMIPSState *env)
         if (gpr[4] < 3) {
             /* ignore closing stdin/stdout/stderr */
             gpr[2] = 0;
-            return;
+            goto uhi_done;
         }
         gpr[2] = close(gpr[4]);
         gpr[3] = errno_mips(errno);
@@ -302,7 +301,7 @@ void helper_do_semihosting(CPUMIPSState *env)
             gpr[2] = fstat(gpr[4], &sbuf);
             gpr[3] = errno_mips(errno);
             if (gpr[2]) {
-                return;
+                goto uhi_done;
             }
             gpr[2] = copy_stat_to_target(env, &sbuf, gpr[5]);
             gpr[3] = errno_mips(errno);
@@ -314,14 +313,14 @@ void helper_do_semihosting(CPUMIPSState *env)
     case UHI_argnlen:
         if (gpr[4] >= semihosting_get_argc()) {
             gpr[2] = -1;
-            return;
+            goto uhi_done;
         }
         gpr[2] = strlen(semihosting_get_arg(gpr[4]));
         break;
     case UHI_argn:
         if (gpr[4] >= semihosting_get_argc()) {
             gpr[2] = -1;
-            return;
+            goto uhi_done;
         }
         gpr[2] = copy_argn_to_target(env, gpr[4], gpr[5]);
         break;
@@ -330,12 +329,13 @@ void helper_do_semihosting(CPUMIPSState *env)
         p2 = strstr(p, "%d");
         if (p2) {
             int char_num = p2 - p;
-            GString *s = g_string_new_len(p, char_num);
-            g_string_append_printf(s, "%d%s", (int)gpr[5], p2 + 2);
-            gpr[2] = qemu_semihosting_log_out(s->str, s->len);
-            g_string_free(s, true);
+            char *buf = g_malloc(char_num + 1);
+            strncpy(buf, p, char_num);
+            buf[char_num] = '\0';
+            gpr[2] = printf("%s%d%s", buf, (int)gpr[5], p2 + 2);
+            g_free(buf);
         } else {
-            gpr[2] = qemu_semihosting_log_out(p, strlen(p));
+            gpr[2] = printf("%s", p);
         }
         FREE_TARGET_STRING(p, gpr[4]);
         break;
@@ -369,5 +369,6 @@ void helper_do_semihosting(CPUMIPSState *env)
         fprintf(stderr, "Unknown UHI operation %d\n", op);
         abort();
     }
+uhi_done:
     return;
 }

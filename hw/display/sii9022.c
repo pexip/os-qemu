@@ -14,12 +14,10 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/module.h"
+#include "qemu-common.h"
 #include "hw/i2c/i2c.h"
-#include "migration/vmstate.h"
-#include "hw/display/i2c-ddc.h"
+#include "hw/i2c/i2c-ddc.h"
 #include "trace.h"
-#include "qom/object.h"
 
 #define SII9022_SYS_CTRL_DATA 0x1a
 #define SII9022_SYS_CTRL_PWR_DWN 0x10
@@ -36,16 +34,16 @@
 #define SII9022_INT_STATUS_PLUGGED 0x04;
 
 #define TYPE_SII9022 "sii9022"
-OBJECT_DECLARE_SIMPLE_TYPE(sii9022_state, SII9022)
+#define SII9022(obj) OBJECT_CHECK(sii9022_state, (obj), TYPE_SII9022)
 
-struct sii9022_state {
+typedef struct sii9022_state {
     I2CSlave parent_obj;
     uint8_t ptr;
     bool addr_byte;
     bool ddc_req;
     bool ddc_skip_finish;
     bool ddc;
-};
+} sii9022_state;
 
 static const VMStateDescription vmstate_sii9022 = {
     .name = "sii9022",
@@ -81,7 +79,7 @@ static int sii9022_event(I2CSlave *i2c, enum i2c_event event)
     return 0;
 }
 
-static uint8_t sii9022_rx(I2CSlave *i2c)
+static int sii9022_rx(I2CSlave *i2c)
 {
     sii9022_state *s = SII9022(i2c);
     uint8_t res = 0x00;
@@ -162,7 +160,7 @@ static void sii9022_realize(DeviceState *dev, Error **errp)
     I2CBus *bus;
 
     bus = I2C_BUS(qdev_get_parent_bus(dev));
-    i2c_slave_create_simple(bus, TYPE_I2CDDC, 0x50);
+    i2c_create_slave(bus, TYPE_I2CDDC, 0x50);
 }
 
 static void sii9022_class_init(ObjectClass *klass, void *data)

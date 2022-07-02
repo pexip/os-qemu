@@ -20,14 +20,11 @@
 
 #include "qemu/osdep.h"
 #include "hw/hw.h"
-#include "hw/qdev-properties.h"
 #include "hw/block/flash.h"
 #include "sysemu/block-backend.h"
-#include "migration/vmstate.h"
+#include "hw/qdev.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
-#include "qemu/module.h"
-#include "qom/object.h"
 
 # define NAND_CMD_READ0		0x00
 # define NAND_CMD_READ1		0x01
@@ -90,7 +87,8 @@ struct NANDFlashState {
 
 #define TYPE_NAND "nand"
 
-OBJECT_DECLARE_SIMPLE_TYPE(NANDFlashState, NAND)
+#define NAND(obj) \
+    OBJECT_CHECK(NANDFlashState, (obj), TYPE_NAND)
 
 static void mem_and(uint8_t *dest, const uint8_t *src, size_t n)
 {
@@ -448,8 +446,7 @@ static void nand_class_init(ObjectClass *klass, void *data)
     dc->realize = nand_realize;
     dc->reset = nand_reset;
     dc->vmsd = &vmstate_nand;
-    device_class_set_props(dc, nand_properties);
-    set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
+    dc->props = nand_properties;
 }
 
 static const TypeInfo nand_info = {
@@ -645,14 +642,14 @@ DeviceState *nand_init(BlockBackend *blk, int manf_id, int chip_id)
     if (nand_flash_ids[chip_id].size == 0) {
         hw_error("%s: Unsupported NAND chip ID.\n", __func__);
     }
-    dev = qdev_new(TYPE_NAND);
+    dev = DEVICE(object_new(TYPE_NAND));
     qdev_prop_set_uint8(dev, "manufacturer_id", manf_id);
     qdev_prop_set_uint8(dev, "chip_id", chip_id);
     if (blk) {
-        qdev_prop_set_drive_err(dev, "drive", blk, &error_fatal);
+        qdev_prop_set_drive(dev, "drive", blk, &error_fatal);
     }
 
-    qdev_realize(dev, NULL, &error_fatal);
+    qdev_init_nofail(dev);
     return dev;
 }
 

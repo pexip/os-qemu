@@ -23,7 +23,6 @@
 
 #include "hw/sysbus.h"
 #include "hw/intc/arm_gicv3_common.h"
-#include "qom/object.h"
 
 #define ITS_CONTROL_SIZE 0x10000
 #define ITS_TRANS_SIZE   0x10000
@@ -65,9 +64,12 @@ typedef struct GICv3ITSState GICv3ITSState;
 void gicv3_its_init_mmio(GICv3ITSState *s, const MemoryRegionOps *ops);
 
 #define TYPE_ARM_GICV3_ITS_COMMON "arm-gicv3-its-common"
-typedef struct GICv3ITSCommonClass GICv3ITSCommonClass;
-DECLARE_OBJ_CHECKERS(GICv3ITSState, GICv3ITSCommonClass,
-                     ARM_GICV3_ITS_COMMON, TYPE_ARM_GICV3_ITS_COMMON)
+#define ARM_GICV3_ITS_COMMON(obj) \
+     OBJECT_CHECK(GICv3ITSState, (obj), TYPE_ARM_GICV3_ITS_COMMON)
+#define ARM_GICV3_ITS_COMMON_CLASS(klass) \
+     OBJECT_CLASS_CHECK(GICv3ITSCommonClass, (klass), TYPE_ARM_GICV3_ITS_COMMON)
+#define ARM_GICV3_ITS_COMMON_GET_CLASS(obj) \
+     OBJECT_GET_CLASS(GICv3ITSCommonClass, (obj), TYPE_ARM_GICV3_ITS_COMMON)
 
 struct GICv3ITSCommonClass {
     /*< private >*/
@@ -79,5 +81,6 @@ struct GICv3ITSCommonClass {
     void (*post_load)(GICv3ITSState *s);
 };
 
+typedef struct GICv3ITSCommonClass GICv3ITSCommonClass;
 
 #endif

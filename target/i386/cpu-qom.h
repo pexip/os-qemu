@@ -20,9 +20,8 @@
 #ifndef QEMU_I386_CPU_QOM_H
 #define QEMU_I386_CPU_QOM_H
 
-#include "hw/core/cpu.h"
+#include "qom/cpu.h"
 #include "qemu/notify.h"
-#include "qom/object.h"
 
 #ifdef TARGET_X86_64
 #define TYPE_X86_CPU "x86_64-cpu"
@@ -30,10 +29,20 @@
 #define TYPE_X86_CPU "i386-cpu"
 #endif
 
-OBJECT_DECLARE_TYPE(X86CPU, X86CPUClass,
-                    X86_CPU)
+#define X86_CPU_CLASS(klass) \
+    OBJECT_CLASS_CHECK(X86CPUClass, (klass), TYPE_X86_CPU)
+#define X86_CPU(obj) \
+    OBJECT_CHECK(X86CPU, (obj), TYPE_X86_CPU)
+#define X86_CPU_GET_CLASS(obj) \
+    OBJECT_GET_CLASS(X86CPUClass, (obj), TYPE_X86_CPU)
 
-typedef struct X86CPUModel X86CPUModel;
+/**
+ * X86CPUDefinition:
+ *
+ * CPU model definition data that was not converted to QOM per-subclass
+ * property defaults yet.
+ */
+typedef struct X86CPUDefinition X86CPUDefinition;
 
 /**
  * X86CPUClass:
@@ -47,7 +56,7 @@ typedef struct X86CPUModel X86CPUModel;
  *
  * An x86 CPU model or family.
  */
-struct X86CPUClass {
+typedef struct X86CPUClass {
     /*< private >*/
     CPUClass parent_class;
     /*< public >*/
@@ -55,7 +64,7 @@ struct X86CPUClass {
     /* CPU definition, automatically loaded by instance_init if not NULL.
      * Should be eventually replaced by subclass-specific property defaults.
      */
-    X86CPUModel *model;
+    X86CPUDefinition *cpu_def;
 
     bool host_cpuid_required;
     int ordering;
@@ -68,8 +77,9 @@ struct X86CPUClass {
 
     DeviceRealize parent_realize;
     DeviceUnrealize parent_unrealize;
-    DeviceReset parent_reset;
-};
+    void (*parent_reset)(CPUState *cpu);
+} X86CPUClass;
 
+typedef struct X86CPU X86CPU;
 
 #endif

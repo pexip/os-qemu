@@ -21,15 +21,12 @@
 #include <libgen.h>
 #include <pthread.h>
 
-#include "qemu-common.h"
 #include "qapi/error.h"
 #include "qemu/cutils.h"
 #include "sysemu/block-backend.h"
-#include "sysemu/runstate.h" /* for qemu_system_killed() prototype */
 #include "block/block_int.h"
 #include "block/nbd.h"
 #include "qemu/main-loop.h"
-#include "qemu/module.h"
 #include "qemu/option.h"
 #include "qemu/error-report.h"
 #include "qemu/config-file.h"
@@ -46,12 +43,6 @@
 #include "trace/control.h"
 #include "qemu-version.h"
 
-#ifdef __linux__
-#define HAVE_NBD_DEVICE 1
-#else
-#define HAVE_NBD_DEVICE 0
-#endif
-
 #define SOCKET_PATH                "/var/lock/qemu-nbd-%s"
 #define QEMU_NBD_OPT_CACHE         256
 #define QEMU_NBD_OPT_AIO           257
@@ -61,28 +52,25 @@
 #define QEMU_NBD_OPT_TLSCREDS      261
 #define QEMU_NBD_OPT_IMAGE_OPTS    262
 #define QEMU_NBD_OPT_FORK          263
-#define QEMU_NBD_OPT_TLSAUTHZ      264
-#define QEMU_NBD_OPT_PID_FILE      265
 
 #define MBR_SIZE 512
 
+static NBDExport *exp;
 static int verbose;
 static char *srcpath;
 static SocketAddress *saddr;
 static int persistent = 0;
-static enum { RUNNING, TERMINATE, TERMINATED } state;
+static enum { RUNNING, TERMINATE, TERMINATING, TERMINATED } state;
 static int shared = 1;
 static int nb_fds;
 static QIONetListener *server;
 static QCryptoTLSCreds *tlscreds;
-static const char *tlsauthz;
 
 static void usage(const char *name)
 {
     (printf) (
 "Usage: %s [OPTIONS] FILE\n"
-"  or:  %s -L [OPTIONS]\n"
-"QEMU Disk Network Block Device Utility\n"
+"QEMU Disk Network Block Device Server\n"
 "\n"
 "  -h, --help                display this help and exit\n"
 "  -V, --version             output version information and exit\n"
@@ -100,26 +88,21 @@ static void usage(const char *name)
 "\n"
 "Exposing part of the image:\n"
 "  -o, --offset=OFFSET       offset into the image\n"
-"  -A, --allocation-depth    expose the allocation depth\n"
-"  -B, --bitmap=NAME         expose a persistent dirty bitmap\n"
+"  -P, --partition=NUM       only expose partition NUM\n"
 "\n"
 "General purpose options:\n"
-"  -L, --list                list exports available from another NBD server\n"
 "  --object type,id=ID,...   define an object such as 'secret' for providing\n"
 "                            passwords and/or encryption keys\n"
 "  --tls-creds=ID            use id of an earlier --object to provide TLS\n"
-"  --tls-authz=ID            use id of an earlier --object to provide\n"
-"                            authorization\n"
 "  -T, --trace [[enable=]<pattern>][,events=<file>][,file=<file>]\n"
 "                            specify tracing options\n"
 "  --fork                    fork off the server process and exit the parent\n"
 "                            once the server is running\n"
-"  --pid-file=PATH           store the server's process ID in the given file\n"
-#if HAVE_NBD_DEVICE
-"\n"
+#ifdef __linux__
 "Kernel NBD client support:\n"
 "  -c, --connect=DEV         connect FILE to the local NBD device DEV\n"
 "  -d, --disconnect          disconnect the specified device\n"
+"\n"
 #endif
 "\n"
 "Block device options:\n"
@@ -135,13 +118,13 @@ static void usage(const char *name)
 "                            '[ID_OR_NAME]'\n"
 "  -n, --nocache             disable host cache\n"
 "      --cache=MODE          set cache mode (none, writeback, ...)\n"
-"      --aio=MODE            set AIO mode (native, io_uring or threads)\n"
+"      --aio=MODE            set AIO mode (native or threads)\n"
 "      --discard=MODE        set discard mode (ignore, unmap)\n"
 "      --detect-zeroes=MODE  set detect-zeroes mode (off, on, unmap)\n"
 "      --image-opts          treat FILE as a full set of image options\n"
 "\n"
 QEMU_HELP_BOTTOM "\n"
-    , name, name, NBD_DEFAULT_PORT, "DEVICE");
+    , name, NBD_DEFAULT_PORT, "DEVICE");
 }
 
 static void version(const char *name)
@@ -156,93 +139,103 @@ QEMU_COPYRIGHT "\n"
     , name);
 }
 
-#ifdef CONFIG_POSIX
-/*
- * The client thread uses SIGTERM to interrupt the server.  A signal
- * handler ensures that "qemu-nbd -v -c" exits with a nice status code.
- */
-void qemu_system_killed(int signum, pid_t pid)
+struct partition_record
 {
-    qatomic_cmpxchg(&state, RUNNING, TERMINATE);
-    qemu_notify_event();
+    uint8_t bootable;
+    uint8_t start_head;
+    uint32_t start_cylinder;
+    uint8_t start_sector;
+    uint8_t system;
+    uint8_t end_head;
+    uint8_t end_cylinder;
+    uint8_t end_sector;
+    uint32_t start_sector_abs;
+    uint32_t nb_sectors_abs;
+};
+
+static void read_partition(uint8_t *p, struct partition_record *r)
+{
+    r->bootable = p[0];
+    r->start_head = p[1];
+    r->start_cylinder = p[3] | ((p[2] << 2) & 0x0300);
+    r->start_sector = p[2] & 0x3f;
+    r->system = p[4];
+    r->end_head = p[5];
+    r->end_cylinder = p[7] | ((p[6] << 2) & 0x300);
+    r->end_sector = p[6] & 0x3f;
+
+    r->start_sector_abs = ldl_le_p(p + 8);
+    r->nb_sectors_abs   = ldl_le_p(p + 12);
 }
-#endif /* CONFIG_POSIX */
 
-static int qemu_nbd_client_list(SocketAddress *saddr, QCryptoTLSCreds *tls,
-                                const char *hostname)
+static int find_partition(BlockBackend *blk, int partition,
+                          off_t *offset, off_t *size)
 {
-    int ret = EXIT_FAILURE;
-    int rc;
-    Error *err = NULL;
-    QIOChannelSocket *sioc;
-    NBDExportInfo *list;
-    int i, j;
+    struct partition_record mbr[4];
+    uint8_t data[MBR_SIZE];
+    int i;
+    int ext_partnum = 4;
+    int ret;
 
-    sioc = qio_channel_socket_new();
-    if (qio_channel_socket_connect_sync(sioc, saddr, &err) < 0) {
-        error_report_err(err);
-        return EXIT_FAILURE;
+    ret = blk_pread(blk, 0, data, sizeof(data));
+    if (ret < 0) {
+        error_report("error while reading: %s", strerror(-ret));
+        exit(EXIT_FAILURE);
     }
-    rc = nbd_receive_export_list(QIO_CHANNEL(sioc), tls, hostname, &list,
-                                 &err);
-    if (rc < 0) {
-        if (err) {
-            error_report_err(err);
-        }
-        goto out;
-    }
-    printf("exports available: %d\n", rc);
-    for (i = 0; i < rc; i++) {
-        printf(" export: '%s'\n", list[i].name);
-        if (list[i].description && *list[i].description) {
-            printf("  description: %s\n", list[i].description);
-        }
-        if (list[i].flags & NBD_FLAG_HAS_FLAGS) {
-            static const char *const flag_names[] = {
-                [NBD_FLAG_READ_ONLY_BIT]            = "readonly",
-                [NBD_FLAG_SEND_FLUSH_BIT]           = "flush",
-                [NBD_FLAG_SEND_FUA_BIT]             = "fua",
-                [NBD_FLAG_ROTATIONAL_BIT]           = "rotational",
-                [NBD_FLAG_SEND_TRIM_BIT]            = "trim",
-                [NBD_FLAG_SEND_WRITE_ZEROES_BIT]    = "zeroes",
-                [NBD_FLAG_SEND_DF_BIT]              = "df",
-                [NBD_FLAG_CAN_MULTI_CONN_BIT]       = "multi",
-                [NBD_FLAG_SEND_RESIZE_BIT]          = "resize",
-                [NBD_FLAG_SEND_CACHE_BIT]           = "cache",
-                [NBD_FLAG_SEND_FAST_ZERO_BIT]       = "fast-zero",
-            };
 
-            printf("  size:  %" PRIu64 "\n", list[i].size);
-            printf("  flags: 0x%x (", list[i].flags);
-            for (size_t bit = 0; bit < ARRAY_SIZE(flag_names); bit++) {
-                if (flag_names[bit] && (list[i].flags & (1 << bit))) {
-                    printf(" %s", flag_names[bit]);
+    if (data[510] != 0x55 || data[511] != 0xaa) {
+        return -EINVAL;
+    }
+
+    for (i = 0; i < 4; i++) {
+        read_partition(&data[446 + 16 * i], &mbr[i]);
+
+        if (!mbr[i].system || !mbr[i].nb_sectors_abs) {
+            continue;
+        }
+
+        if (mbr[i].system == 0xF || mbr[i].system == 0x5) {
+            struct partition_record ext[4];
+            uint8_t data1[MBR_SIZE];
+            int j;
+
+            ret = blk_pread(blk, mbr[i].start_sector_abs * MBR_SIZE,
+                            data1, sizeof(data1));
+            if (ret < 0) {
+                error_report("error while reading: %s", strerror(-ret));
+                exit(EXIT_FAILURE);
+            }
+
+            for (j = 0; j < 4; j++) {
+                read_partition(&data1[446 + 16 * j], &ext[j]);
+                if (!ext[j].system || !ext[j].nb_sectors_abs) {
+                    continue;
+                }
+
+                if ((ext_partnum + j + 1) == partition) {
+                    *offset = (uint64_t)ext[j].start_sector_abs << 9;
+                    *size = (uint64_t)ext[j].nb_sectors_abs << 9;
+                    return 0;
                 }
             }
-            printf(" )\n");
-        }
-        if (list[i].min_block) {
-            printf("  min block: %u\n", list[i].min_block);
-            printf("  opt block: %u\n", list[i].opt_block);
-            printf("  max block: %u\n", list[i].max_block);
-        }
-        if (list[i].n_contexts) {
-            printf("  available meta contexts: %d\n", list[i].n_contexts);
-            for (j = 0; j < list[i].n_contexts; j++) {
-                printf("   %s\n", list[i].contexts[j]);
-            }
+            ext_partnum += 4;
+        } else if ((i + 1) == partition) {
+            *offset = (uint64_t)mbr[i].start_sector_abs << 9;
+            *size = (uint64_t)mbr[i].nb_sectors_abs << 9;
+            return 0;
         }
     }
-    nbd_free_export_list(list, rc);
 
-    ret = EXIT_SUCCESS;
- out:
-    object_unref(OBJECT(sioc));
-    return ret;
+    return -ENOENT;
+}
+
+static void termsig_handler(int signum)
+{
+    atomic_cmpxchg(&state, RUNNING, TERMINATE);
+    qemu_notify_event();
 }
 
 
-#if HAVE_NBD_DEVICE
 static void *show_parts(void *arg)
 {
     char *device = arg;
@@ -263,7 +256,7 @@ static void *show_parts(void *arg)
 static void *nbd_client_thread(void *arg)
 {
     char *device = arg;
-    NBDExportInfo info = { .request_sizes = false, .name = g_strdup("") };
+    NBDExportInfo info = { .request_sizes = false, };
     QIOChannelSocket *sioc;
     int fd;
     int ret;
@@ -278,7 +271,7 @@ static void *nbd_client_thread(void *arg)
         goto out;
     }
 
-    ret = nbd_receive_negotiate(NULL, QIO_CHANNEL(sioc),
+    ret = nbd_receive_negotiate(QIO_CHANNEL(sioc), NULL,
                                 NULL, NULL, NULL, &info, &local_error);
     if (ret < 0) {
         if (local_error) {
@@ -317,7 +310,6 @@ static void *nbd_client_thread(void *arg)
     }
     close(fd);
     object_unref(OBJECT(sioc));
-    g_free(info.name);
     kill(getpid(), SIGTERM);
     return (void *) EXIT_SUCCESS;
 
@@ -326,15 +318,19 @@ out_fd:
 out_socket:
     object_unref(OBJECT(sioc));
 out:
-    g_free(info.name);
     kill(getpid(), SIGTERM);
     return (void *) EXIT_FAILURE;
 }
-#endif /* HAVE_NBD_DEVICE */
 
 static int nbd_can_accept(void)
 {
     return state == RUNNING && nb_fds < shared;
+}
+
+static void nbd_export_closed(NBDExport *exp)
+{
+    assert(state == TERMINATING);
+    state = TERMINATED;
 }
 
 static void nbd_update_server_watch(void);
@@ -358,7 +354,7 @@ static void nbd_accept(QIONetListener *listener, QIOChannelSocket *cioc,
 
     nb_fds++;
     nbd_update_server_watch();
-    nbd_client_new(cioc, tlscreds, tlsauthz, nbd_client_closed);
+    nbd_client_new(cioc, tlscreds, NULL, nbd_client_closed);
 }
 
 static void nbd_update_server_watch(void)
@@ -416,17 +412,9 @@ static QemuOptsList qemu_object_opts = {
     },
 };
 
-static bool qemu_nbd_object_print_help(const char *type, QemuOpts *opts)
-{
-    if (user_creatable_print_help(type, opts)) {
-        exit(0);
-    }
-    return true;
-}
 
 
-static QCryptoTLSCreds *nbd_get_tls_creds(const char *id, bool list,
-                                          Error **errp)
+static QCryptoTLSCreds *nbd_get_tls_creds(const char *id, Error **errp)
 {
     Object *obj;
     QCryptoTLSCreds *creds;
@@ -446,18 +434,10 @@ static QCryptoTLSCreds *nbd_get_tls_creds(const char *id, bool list,
         return NULL;
     }
 
-    if (list) {
-        if (creds->endpoint != QCRYPTO_TLS_CREDS_ENDPOINT_CLIENT) {
-            error_setg(errp,
-                       "Expecting TLS credentials with a client endpoint");
-            return NULL;
-        }
-    } else {
-        if (creds->endpoint != QCRYPTO_TLS_CREDS_ENDPOINT_SERVER) {
-            error_setg(errp,
-                       "Expecting TLS credentials with a server endpoint");
-            return NULL;
-        }
+    if (creds->endpoint != QCRYPTO_TLS_CREDS_ENDPOINT_SERVER) {
+        error_setg(errp,
+                   "Expecting TLS credentials with a server endpoint");
+        return NULL;
     }
     object_ref(obj);
     return creds;
@@ -480,8 +460,7 @@ static void setup_address_and_port(const char **address, const char **port)
 static const char *socket_activation_validate_opts(const char *device,
                                                    const char *sockpath,
                                                    const char *address,
-                                                   const char *port,
-                                                   bool list)
+                                                   const char *port)
 {
     if (device != NULL) {
         return "NBD device can't be set when using socket activation";
@@ -499,10 +478,6 @@ static const char *socket_activation_validate_opts(const char *device,
         return "TCP port number can't be set when using socket activation";
     }
 
-    if (list) {
-        return "List mode is incompatible with socket activation";
-    }
-
     return NULL;
 }
 
@@ -516,16 +491,17 @@ int main(int argc, char **argv)
 {
     BlockBackend *blk;
     BlockDriverState *bs;
-    uint64_t dev_offset = 0;
-    bool readonly = false;
+    off_t dev_offset = 0;
+    uint16_t nbdflags = 0;
     bool disconnect = false;
     const char *bindto = NULL;
     const char *port = NULL;
     char *sockpath = NULL;
     char *device = NULL;
+    off_t fd_size;
     QemuOpts *sn_opts = NULL;
     const char *sn_id_or_name = NULL;
-    const char *sopt = "hVb:o:p:rsnc:dvk:e:f:tl:x:T:D:AB:L";
+    const char *sopt = "hVb:o:p:rsnP:c:dvk:e:f:tl:x:T:D:";
     struct option lopt[] = {
         { "help", no_argument, NULL, 'h' },
         { "version", no_argument, NULL, 'V' },
@@ -534,11 +510,9 @@ int main(int argc, char **argv)
         { "socket", required_argument, NULL, 'k' },
         { "offset", required_argument, NULL, 'o' },
         { "read-only", no_argument, NULL, 'r' },
-        { "allocation-depth", no_argument, NULL, 'A' },
-        { "bitmap", required_argument, NULL, 'B' },
+        { "partition", required_argument, NULL, 'P' },
         { "connect", required_argument, NULL, 'c' },
         { "disconnect", no_argument, NULL, 'd' },
-        { "list", no_argument, NULL, 'L' },
         { "snapshot", no_argument, NULL, 's' },
         { "load-snapshot", required_argument, NULL, 'l' },
         { "nocache", no_argument, NULL, 'n' },
@@ -555,16 +529,16 @@ int main(int argc, char **argv)
         { "export-name", required_argument, NULL, 'x' },
         { "description", required_argument, NULL, 'D' },
         { "tls-creds", required_argument, NULL, QEMU_NBD_OPT_TLSCREDS },
-        { "tls-authz", required_argument, NULL, QEMU_NBD_OPT_TLSAUTHZ },
         { "image-opts", no_argument, NULL, QEMU_NBD_OPT_IMAGE_OPTS },
         { "trace", required_argument, NULL, 'T' },
         { "fork", no_argument, NULL, QEMU_NBD_OPT_FORK },
-        { "pid-file", required_argument, NULL, QEMU_NBD_OPT_PID_FILE },
         { NULL, 0, NULL, 0 }
     };
     int ch;
     int opt_ind = 0;
+    char *end;
     int flags = BDRV_O_RDWR;
+    int partition = -1;
     int ret = 0;
     bool seen_cache = false;
     bool seen_discard = false;
@@ -574,27 +548,28 @@ int main(int argc, char **argv)
     Error *local_err = NULL;
     BlockdevDetectZeroesOptions detect_zeroes = BLOCKDEV_DETECT_ZEROES_OPTIONS_OFF;
     QDict *options = NULL;
-    const char *export_name = NULL; /* defaults to "" later for server mode */
+    const char *export_name = ""; /* Default export name */
     const char *export_description = NULL;
-    strList *bitmaps = NULL;
-    bool alloc_depth = false;
     const char *tlscredsid = NULL;
     bool imageOpts = false;
     bool writethrough = true;
+    char *trace_file = NULL;
     bool fork_process = false;
-    bool list = false;
     int old_stderr = -1;
     unsigned socket_activation;
-    const char *pid_file_name = NULL;
-    BlockExportOptions *export_opts;
+
+    /* The client thread uses SIGTERM to interrupt the server.  A signal
+     * handler ensures that "qemu-nbd -v -c" exits with a nice status code.
+     */
+    struct sigaction sa_sigterm;
+    memset(&sa_sigterm, 0, sizeof(sa_sigterm));
+    sa_sigterm.sa_handler = termsig_handler;
+    sigaction(SIGTERM, &sa_sigterm, NULL);
 
 #ifdef CONFIG_POSIX
-    os_setup_early_signal_handling();
-    os_setup_signal_handling();
+    signal(SIGPIPE, SIG_IGN);
 #endif
 
-    socket_init();
-    error_init(argv[0]);
     module_call_init(MODULE_INIT_TRACE);
     qcrypto_init(&error_fatal);
 
@@ -628,9 +603,13 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
             }
             seen_aio = true;
-            if (bdrv_parse_aio(optarg, &flags) < 0) {
-                error_report("Invalid aio mode '%s'", optarg);
-                exit(EXIT_FAILURE);
+            if (!strcmp(optarg, "native")) {
+                flags |= BDRV_O_NATIVE_AIO;
+            } else if (!strcmp(optarg, "threads")) {
+                /* this is the default */
+            } else {
+               error_report("invalid aio mode `%s'", optarg);
+               exit(EXIT_FAILURE);
             }
             break;
         case QEMU_NBD_OPT_DISCARD:
@@ -669,8 +648,13 @@ int main(int argc, char **argv)
             port = optarg;
             break;
         case 'o':
-            if (qemu_strtou64(optarg, NULL, 0, &dev_offset) < 0) {
-                error_report("Invalid offset '%s'", optarg);
+                dev_offset = strtoll (optarg, &end, 0);
+            if (*end) {
+                error_report("Invalid offset `%s'", optarg);
+                exit(EXIT_FAILURE);
+            }
+            if (dev_offset < 0) {
+                error_report("Offset must be positive `%s'", optarg);
                 exit(EXIT_FAILURE);
             }
             break;
@@ -688,14 +672,19 @@ int main(int argc, char **argv)
             }
             /* fall through */
         case 'r':
-            readonly = true;
+            nbdflags |= NBD_FLAG_READ_ONLY;
             flags &= ~BDRV_O_RDWR;
             break;
-        case 'A':
-            alloc_depth = true;
-            break;
-        case 'B':
-            QAPI_LIST_PREPEND(bitmaps, g_strdup(optarg));
+        case 'P':
+            partition = strtol(optarg, &end, 0);
+            if (*end) {
+                error_report("Invalid partition `%s'", optarg);
+                exit(EXIT_FAILURE);
+            }
+            if (partition < 1 || partition > 8) {
+                error_report("Invalid partition %d", partition);
+                exit(EXIT_FAILURE);
+            }
             break;
         case 'k':
             sockpath = optarg;
@@ -711,9 +700,13 @@ int main(int argc, char **argv)
             device = optarg;
             break;
         case 'e':
-            if (qemu_strtoi(optarg, NULL, 0, &shared) < 0 ||
-                shared < 1) {
+            shared = strtol(optarg, &end, 0);
+            if (*end) {
                 error_report("Invalid shared device number '%s'", optarg);
+                exit(EXIT_FAILURE);
+            }
+            if (shared < 1) {
+                error_report("Shared device number must be greater than 0");
                 exit(EXIT_FAILURE);
             }
             break;
@@ -725,18 +718,9 @@ int main(int argc, char **argv)
             break;
         case 'x':
             export_name = optarg;
-            if (strlen(export_name) > NBD_MAX_STRING_SIZE) {
-                error_report("export name '%s' too long", export_name);
-                exit(EXIT_FAILURE);
-            }
             break;
         case 'D':
             export_description = optarg;
-            if (strlen(export_description) > NBD_MAX_STRING_SIZE) {
-                error_report("export description '%s' too long",
-                             export_description);
-                exit(EXIT_FAILURE);
-            }
             break;
         case 'v':
             verbose = 1;
@@ -767,54 +751,29 @@ int main(int argc, char **argv)
             imageOpts = true;
             break;
         case 'T':
-            trace_opt_parse(optarg);
-            break;
-        case QEMU_NBD_OPT_TLSAUTHZ:
-            tlsauthz = optarg;
+            g_free(trace_file);
+            trace_file = trace_opt_parse(optarg);
             break;
         case QEMU_NBD_OPT_FORK:
             fork_process = true;
             break;
-        case 'L':
-            list = true;
-            break;
-        case QEMU_NBD_OPT_PID_FILE:
-            pid_file_name = optarg;
-            break;
         }
     }
 
-    if (list) {
-        if (argc != optind) {
-            error_report("List mode is incompatible with a file name");
-            exit(EXIT_FAILURE);
-        }
-        if (export_name || export_description || dev_offset ||
-            device || disconnect || fmt || sn_id_or_name || bitmaps ||
-            alloc_depth || seen_aio || seen_discard || seen_cache) {
-            error_report("List mode is incompatible with per-device settings");
-            exit(EXIT_FAILURE);
-        }
-        if (fork_process) {
-            error_report("List mode is incompatible with forking");
-            exit(EXIT_FAILURE);
-        }
-    } else if ((argc - optind) != 1) {
+    if ((argc - optind) != 1) {
         error_report("Invalid number of arguments");
         error_printf("Try `%s --help' for more information.\n", argv[0]);
         exit(EXIT_FAILURE);
-    } else if (!export_name) {
-        export_name = "";
     }
 
     qemu_opts_foreach(&qemu_object_opts,
                       user_creatable_add_opts_foreach,
-                      qemu_nbd_object_print_help, &error_fatal);
+                      NULL, &error_fatal);
 
     if (!trace_init_backends()) {
         exit(1);
     }
-    trace_init_file();
+    trace_init_file(trace_file);
     qemu_set_log(LOG_TRACE);
 
     socket_activation = check_socket_activation();
@@ -823,8 +782,7 @@ int main(int argc, char **argv)
     } else {
         /* Using socket activation - check user didn't use -p etc. */
         const char *err_msg = socket_activation_validate_opts(device, sockpath,
-                                                              bindto, port,
-                                                              list);
+                                                              bindto, port);
         if (err_msg != NULL) {
             error_report("%s", err_msg);
             exit(EXIT_FAILURE);
@@ -847,33 +805,14 @@ int main(int argc, char **argv)
             error_report("TLS is not supported with a host device");
             exit(EXIT_FAILURE);
         }
-        if (tlsauthz && list) {
-            error_report("TLS authorization is incompatible with export list");
-            exit(EXIT_FAILURE);
-        }
-        tlscreds = nbd_get_tls_creds(tlscredsid, list, &local_err);
+        tlscreds = nbd_get_tls_creds(tlscredsid, &local_err);
         if (local_err) {
-            error_reportf_err(local_err, "Failed to get TLS creds: ");
-            exit(EXIT_FAILURE);
-        }
-    } else {
-        if (tlsauthz) {
-            error_report("--tls-authz is not permitted without --tls-creds");
+            error_report("Failed to get TLS creds %s",
+                         error_get_pretty(local_err));
             exit(EXIT_FAILURE);
         }
     }
 
-    if (list) {
-        saddr = nbd_build_socket_address(sockpath, bindto, port);
-        return qemu_nbd_client_list(saddr, tlscreds, bindto);
-    }
-
-#if !HAVE_NBD_DEVICE
-    if (disconnect || device) {
-        error_report("Kernel /dev/nbdN support not available");
-        exit(EXIT_FAILURE);
-    }
-#else /* HAVE_NBD_DEVICE */
     if (disconnect) {
         int nbdfd = open(argv[optind], O_RDWR);
         if (nbdfd < 0) {
@@ -889,10 +828,8 @@ int main(int argc, char **argv)
 
         return 0;
     }
-#endif
 
     if ((device && !verbose) || fork_process) {
-#ifndef WIN32
         int stderr_fd[2];
         pid_t pid;
         int ret;
@@ -912,15 +849,10 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         } else if (pid == 0) {
             close(stderr_fd[0]);
-
-            /* Remember parent's stderr if we will be restoring it. */
-            if (fork_process) {
-                old_stderr = dup(STDERR_FILENO);
-            }
-
             ret = qemu_daemon(1, 0);
 
             /* Temporarily redirect stderr to the parent's pipe...  */
+            old_stderr = dup(STDERR_FILENO);
             dup2(stderr_fd[1], STDERR_FILENO);
             if (ret < 0) {
                 error_report("Failed to daemonize: %s", strerror(errno));
@@ -956,10 +888,6 @@ int main(int argc, char **argv)
              */
             exit(errors);
         }
-#else /* WIN32 */
-        error_report("Unable to fork into background on Windows hosts");
-        exit(EXIT_FAILURE);
-#endif /* WIN32 */
     }
 
     if (device != NULL && sockpath == NULL) {
@@ -970,7 +898,7 @@ int main(int argc, char **argv)
     server = qio_net_listener_new();
     if (socket_activation == 0) {
         saddr = nbd_build_socket_address(sockpath, bindto, port);
-        if (qio_net_listener_open_sync(server, saddr, 1, &local_err) < 0) {
+        if (qio_net_listener_open_sync(server, saddr, &local_err) < 0) {
             object_unref(OBJECT(server));
             error_report_err(local_err);
             exit(EXIT_FAILURE);
@@ -984,8 +912,8 @@ int main(int argc, char **argv)
                                              &local_err);
             if (sioc == NULL) {
                 object_unref(OBJECT(server));
-                error_reportf_err(local_err,
-                                  "Failed to use socket activation: ");
+                error_report("Failed to use socket activation: %s",
+                             error_get_pretty(local_err));
                 exit(EXIT_FAILURE);
             }
             qio_net_listener_add(server, sioc);
@@ -1030,17 +958,6 @@ int main(int argc, char **argv)
     }
     bs = blk_bs(blk);
 
-    if (dev_offset) {
-        QDict *raw_opts = qdict_new();
-        qdict_put_str(raw_opts, "driver", "raw");
-        qdict_put_str(raw_opts, "file", bs->node_name);
-        qdict_put_int(raw_opts, "offset", dev_offset);
-        bs = bdrv_open(NULL, NULL, raw_opts, flags, &error_fatal);
-        blk_remove_bs(blk);
-        blk_insert_bs(blk, bs, &error_fatal);
-        bdrv_unref(bs);
-    }
-
     blk_set_enable_write_cache(blk, !writethrough);
 
     if (sn_opts) {
@@ -1058,34 +975,36 @@ int main(int argc, char **argv)
     }
 
     bs->detect_zeroes = detect_zeroes;
+    fd_size = blk_getlength(blk);
+    if (fd_size < 0) {
+        error_report("Failed to determine the image length: %s",
+                     strerror(-fd_size));
+        exit(EXIT_FAILURE);
+    }
 
-    nbd_server_is_qemu_nbd(true);
+    if (dev_offset >= fd_size) {
+        error_report("Offset (%lld) has to be smaller than the image size "
+                     "(%lld)",
+                     (long long int)dev_offset, (long long int)fd_size);
+        exit(EXIT_FAILURE);
+    }
+    fd_size -= dev_offset;
 
-    export_opts = g_new(BlockExportOptions, 1);
-    *export_opts = (BlockExportOptions) {
-        .type               = BLOCK_EXPORT_TYPE_NBD,
-        .id                 = g_strdup("qemu-nbd-export"),
-        .node_name          = g_strdup(bdrv_get_node_name(bs)),
-        .has_writethrough   = true,
-        .writethrough       = writethrough,
-        .has_writable       = true,
-        .writable           = !readonly,
-        .u.nbd = {
-            .has_name             = true,
-            .name                 = g_strdup(export_name),
-            .has_description      = !!export_description,
-            .description          = g_strdup(export_description),
-            .has_bitmaps          = !!bitmaps,
-            .bitmaps              = bitmaps,
-            .has_allocation_depth = alloc_depth,
-            .allocation_depth     = alloc_depth,
-        },
-    };
-    blk_exp_add(export_opts, &error_fatal);
-    qapi_free_BlockExportOptions(export_opts);
+    if (partition != -1) {
+        ret = find_partition(blk, partition, &dev_offset, &fd_size);
+        if (ret < 0) {
+            error_report("Could not find partition %d: %s", partition,
+                         strerror(-ret));
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    exp = nbd_export_new(bs, dev_offset, fd_size, nbdflags, nbd_export_closed,
+                         writethrough, NULL, &error_fatal);
+    nbd_export_set_name(exp, export_name);
+    nbd_export_set_description(exp, export_description);
 
     if (device) {
-#if HAVE_NBD_DEVICE
         int ret;
 
         ret = pthread_create(&client_thread, NULL, nbd_client_thread, device);
@@ -1093,17 +1012,12 @@ int main(int argc, char **argv)
             error_report("Failed to create client thread: %s", strerror(ret));
             exit(EXIT_FAILURE);
         }
-#endif
     } else {
         /* Shut up GCC warnings.  */
         memset(&client_thread, 0, sizeof(client_thread));
     }
 
     nbd_update_server_watch();
-
-    if (pid_file_name) {
-        qemu_write_pidfile(pid_file_name, &error_fatal);
-    }
 
     /* now when the initialization is (almost) complete, chdir("/")
      * to free any busy filesystems */
@@ -1122,8 +1036,10 @@ int main(int argc, char **argv)
     do {
         main_loop_wait(false);
         if (state == TERMINATE) {
-            blk_exp_close_all();
-            state = TERMINATED;
+            state = TERMINATING;
+            nbd_export_close(exp);
+            nbd_export_put(exp);
+            exp = NULL;
         }
     } while (state != TERMINATED);
 

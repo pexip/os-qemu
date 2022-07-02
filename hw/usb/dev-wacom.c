@@ -25,21 +25,24 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "ui/console.h"
 #include "hw/usb.h"
-#include "hw/usb/hid.h"
-#include "migration/vmstate.h"
-#include "qemu/module.h"
 #include "desc.h"
-#include "qom/object.h"
 
 /* Interface requests */
 #define WACOM_GET_REPORT	0x2101
 #define WACOM_SET_REPORT	0x2109
 
-struct USBWacomState {
+/* HID interface requests */
+#define HID_GET_REPORT		0xa101
+#define HID_GET_IDLE		0xa102
+#define HID_GET_PROTOCOL	0xa103
+#define HID_SET_IDLE		0x210a
+#define HID_SET_PROTOCOL	0x210b
+
+typedef struct USBWacomState {
     USBDevice dev;
     USBEndpoint *intr;
     QEMUPutMouseEntry *eh_entry;
@@ -52,10 +55,10 @@ struct USBWacomState {
     } mode;
     uint8_t idle;
     int changed;
-};
+} USBWacomState;
 
 #define TYPE_USB_WACOM "usb-wacom-tablet"
-OBJECT_DECLARE_SIMPLE_TYPE(USBWacomState, USB_WACOM)
+#define USB_WACOM(obj) OBJECT_CHECK(USBWacomState, (obj), TYPE_USB_WACOM)
 
 enum {
     STR_MANUFACTURER = 1,
@@ -81,11 +84,11 @@ static const USBDescIface desc_iface_wacom = {
             /* HID descriptor */
             .data = (uint8_t[]) {
                 0x09,          /*  u8  bLength */
-                USB_DT_HID,    /*  u8  bDescriptorType */
+                0x21,          /*  u8  bDescriptorType */
                 0x01, 0x10,    /*  u16 HID_class */
                 0x00,          /*  u8  country_code */
                 0x01,          /*  u8  num_descriptors */
-                USB_DT_REPORT, /*  u8  type: Report */
+                0x22,          /*  u8  type: Report */
                 0x6e, 0,       /*  u16 len */
             },
         },
@@ -326,7 +329,7 @@ static void usb_wacom_handle_data(USBDevice *dev, USBPacket *p)
     }
 }
 
-static void usb_wacom_unrealize(USBDevice *dev)
+static void usb_wacom_unrealize(USBDevice *dev, Error **errp)
 {
     USBWacomState *s = (USBWacomState *) dev;
 

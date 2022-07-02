@@ -1,9 +1,10 @@
 #ifndef OPENPIC_H
 #define OPENPIC_H
 
+#include "qemu-common.h"
 #include "hw/sysbus.h"
-#include "hw/core/cpu.h"
-#include "qom/object.h"
+#include "hw/qdev-core.h"
+#include "qom/cpu.h"
 
 #define MAX_CPU     32
 #define MAX_MSI     8
@@ -18,8 +19,6 @@ enum {
     OPENPIC_OUTPUT_RESET,   /* Core reset event          */
     OPENPIC_OUTPUT_NB,
 };
-
-typedef struct IrqLines { qemu_irq irq[OPENPIC_OUTPUT_NB]; } IrqLines;
 
 #define OPENPIC_MODEL_RAVEN       0
 #define OPENPIC_MODEL_FSL_MPIC_20 1
@@ -137,9 +136,9 @@ typedef struct IRQDest {
 } IRQDest;
 
 #define TYPE_OPENPIC "openpic"
-OBJECT_DECLARE_SIMPLE_TYPE(OpenPICState, OPENPIC)
+#define OPENPIC(obj) OBJECT_CHECK(OpenPICState, (obj), TYPE_OPENPIC)
 
-struct OpenPICState {
+typedef struct OpenPICState {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
@@ -184,6 +183,6 @@ struct OpenPICState {
     uint32_t irq_ipi0;
     uint32_t irq_tim0;
     uint32_t irq_msi;
-};
+} OpenPICState;
 
 #endif /* OPENPIC_H */

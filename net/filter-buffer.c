@@ -10,6 +10,7 @@
 #include "net/filter.h"
 #include "net/queue.h"
 #include "qapi/error.h"
+#include "qemu-common.h"
 #include "qemu/timer.h"
 #include "qemu/iov.h"
 #include "qapi/qapi-builtin-visit.h"
@@ -18,15 +19,16 @@
 
 #define TYPE_FILTER_BUFFER "filter-buffer"
 
-OBJECT_DECLARE_SIMPLE_TYPE(FilterBufferState, FILTER_BUFFER)
+#define FILTER_BUFFER(obj) \
+    OBJECT_CHECK(FilterBufferState, (obj), TYPE_FILTER_BUFFER)
 
-struct FilterBufferState {
+typedef struct FilterBufferState {
     NetFilterState parent_obj;
 
     NetQueue *incoming_queue;
     uint32_t interval;
     QEMUTimer release_timer;
-};
+} FilterBufferState;
 
 static void filter_buffer_flush(NetFilterState *nf)
 {
@@ -73,7 +75,7 @@ static ssize_t filter_buffer_receive_iov(NetFilterState *nf,
      * the filter can still accept packets until its internal queue is full.
      * For example:
      *   For some reason, receiver could not receive more packets
-     * (.can_receive() returns false). Without a filter, at most one packet
+     * (.can_receive() returns zero). Without a filter, at most one packet
      * will be queued in incoming queue and sender's poll will be disabled
      * unit its sent_cb() was called. With a filter, it will keep receiving
      * the packets without caring about the receiver. This is suboptimal.
@@ -169,24 +171,29 @@ static void filter_buffer_set_interval(Object *obj, Visitor *v,
                                        Error **errp)
 {
     FilterBufferState *s = FILTER_BUFFER(obj);
+    Error *local_err = NULL;
     uint32_t value;
 
-    if (!visit_type_uint32(v, name, &value, errp)) {
-        return;
+    visit_type_uint32(v, name, &value, &local_err);
+    if (local_err) {
+        goto out;
     }
     if (!value) {
-        error_setg(errp, "Property '%s.%s' requires a positive value",
+        error_setg(&local_err, "Property '%s.%s' requires a positive value",
                    object_get_typename(obj), name);
-        return;
+        goto out;
     }
     s->interval = value;
+
+out:
+    error_propagate(errp, local_err);
 }
 
 static void filter_buffer_init(Object *obj)
 {
     object_property_add(obj, "interval", "uint32",
                         filter_buffer_get_interval,
-                        filter_buffer_set_interval, NULL, NULL);
+                        filter_buffer_set_interval, NULL, NULL, NULL);
 }
 
 static const TypeInfo filter_buffer_info = {

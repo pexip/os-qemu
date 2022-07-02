@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # qcow2 pattern test with various cluster sizes
 #

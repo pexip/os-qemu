@@ -21,19 +21,16 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qemu-common.h"
 #include "chardev/char.h"
-#include "qemu/main-loop.h"
-#include "qemu/module.h"
 #include "qemu/timer.h"
 #include "hw/usb.h"
 #include "ui/console.h"
 #include <brlapi.h>
 #include <brlapi_constants.h>
 #include <brlapi_keycodes.h>
-#include "qom/object.h"
 
 #if 0
 #define DPRINTF(fmt, ...) \
@@ -87,7 +84,7 @@
 
 #define BUF_SIZE 256
 
-struct BaumChardev {
+typedef struct {
     Chardev parent;
 
     brlapi_handle_t *brlapi;
@@ -101,12 +98,10 @@ struct BaumChardev {
     uint8_t out_buf_used, out_buf_ptr;
 
     QEMUTimer *cellCount_timer;
-};
-typedef struct BaumChardev BaumChardev;
+} BaumChardev;
 
 #define TYPE_CHARDEV_BRAILLE "chardev-braille"
-DECLARE_INSTANCE_CHECKER(BaumChardev, BAUM_CHARDEV,
-                         TYPE_CHARDEV_BRAILLE)
+#define BAUM_CHARDEV(obj) OBJECT_CHECK(BaumChardev, (obj), TYPE_CHARDEV_BRAILLE)
 
 /* Let's assume NABCC by default */
 enum way {

@@ -23,14 +23,12 @@
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
 #include "qemu/timer.h"
-#include "qemu/module.h"
+#include "qemu-common.h"
+#include "qemu/main-loop.h"
 #include "hw/ptimer.h"
 
 #include "hw/arm/exynos4210.h"
-#include "hw/irq.h"
-#include "qom/object.h"
 
 //#define DEBUG_PWM
 
@@ -103,9 +101,10 @@ typedef struct {
 } Exynos4210PWM;
 
 #define TYPE_EXYNOS4210_PWM "exynos4210.pwm"
-OBJECT_DECLARE_SIMPLE_TYPE(Exynos4210PWMState, EXYNOS4210_PWM)
+#define EXYNOS4210_PWM(obj) \
+    OBJECT_CHECK(Exynos4210PWMState, (obj), TYPE_EXYNOS4210_PWM)
 
-struct Exynos4210PWMState {
+typedef struct Exynos4210PWMState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -116,7 +115,7 @@ struct Exynos4210PWMState {
 
     Exynos4210PWM timer[EXYNOS4210_PWM_TIMERS_NUM];
 
-};
+} Exynos4210PWMState;
 
 /*** VMState ***/
 static const VMStateDescription vmstate_exynos4210_pwm = {
@@ -149,9 +148,7 @@ static const VMStateDescription vmstate_exynos4210_pwm_state = {
 };
 
 /*
- * PWM update frequency.
- * Must be called within a ptimer_transaction_begin/commit block
- * for s->timer[id].ptimer.
+ * PWM update frequency
  */
 static void exynos4210_pwm_update_freq(Exynos4210PWMState *s, uint32_t id)
 {
@@ -169,7 +166,7 @@ static void exynos4210_pwm_update_freq(Exynos4210PWMState *s, uint32_t id)
 
     if (freq != s->timer[id].freq) {
         ptimer_set_freq(s->timer[id].ptimer, s->timer[id].freq);
-        DPRINTF("freq=%uHz\n", s->timer[id].freq);
+        DPRINTF("freq=%dHz\n", s->timer[id].freq);
     }
 }
 
@@ -183,14 +180,14 @@ static void exynos4210_pwm_tick(void *opaque)
     uint32_t id = s->id;
     bool cmp;
 
-    DPRINTF("timer %u tick\n", id);
+    DPRINTF("timer %d tick\n", id);
 
     /* set irq status */
     p->reg_tint_cstat |= TINT_CSTAT_STATUS(id);
 
     /* raise IRQ */
     if (p->reg_tint_cstat & TINT_CSTAT_ENABLE(id)) {
-        DPRINTF("timer %u IRQ\n", id);
+        DPRINTF("timer %d IRQ\n", id);
         qemu_irq_raise(p->timer[id].irq);
     }
 
@@ -202,7 +199,7 @@ static void exynos4210_pwm_tick(void *opaque)
     }
 
     if (cmp) {
-        DPRINTF("auto reload timer %u count to %x\n", id,
+        DPRINTF("auto reload timer %d count to %x\n", id,
                 p->timer[id].reg_tcntb);
         ptimer_set_count(p->timer[id].ptimer, p->timer[id].reg_tcntb);
         ptimer_run(p->timer[id].ptimer, 1);
@@ -282,15 +279,12 @@ static void exynos4210_pwm_write(void *opaque, hwaddr offset,
 
         /* update timers frequencies */
         for (i = 0; i < EXYNOS4210_PWM_TIMERS_NUM; i++) {
-            ptimer_transaction_begin(s->timer[i].ptimer);
             exynos4210_pwm_update_freq(s, s->timer[i].id);
-            ptimer_transaction_commit(s->timer[i].ptimer);
         }
         break;
 
     case TCON:
         for (i = 0; i < EXYNOS4210_PWM_TIMERS_NUM; i++) {
-            ptimer_transaction_begin(s->timer[i].ptimer);
             if ((value & TCON_TIMER_MANUAL_UPD(i)) >
             (s->reg_tcon & TCON_TIMER_MANUAL_UPD(i))) {
                 /*
@@ -319,7 +313,6 @@ static void exynos4210_pwm_write(void *opaque, hwaddr offset,
                 ptimer_stop(s->timer[i].ptimer);
                 DPRINTF("stop timer %d\n", i);
             }
-            ptimer_transaction_commit(s->timer[i].ptimer);
         }
         s->reg_tcon = value;
         break;
@@ -374,10 +367,8 @@ static void exynos4210_pwm_reset(DeviceState *d)
         s->timer[i].reg_tcmpb = 0;
         s->timer[i].reg_tcntb = 0;
 
-        ptimer_transaction_begin(s->timer[i].ptimer);
         exynos4210_pwm_update_freq(s, s->timer[i].id);
         ptimer_stop(s->timer[i].ptimer);
-        ptimer_transaction_commit(s->timer[i].ptimer);
     }
 }
 
@@ -395,12 +386,12 @@ static void exynos4210_pwm_init(Object *obj)
     Exynos4210PWMState *s = EXYNOS4210_PWM(obj);
     SysBusDevice *dev = SYS_BUS_DEVICE(obj);
     int i;
+    QEMUBH *bh;
 
     for (i = 0; i < EXYNOS4210_PWM_TIMERS_NUM; i++) {
+        bh = qemu_bh_new(exynos4210_pwm_tick, &s->timer[i]);
         sysbus_init_irq(dev, &s->timer[i].irq);
-        s->timer[i].ptimer = ptimer_init(exynos4210_pwm_tick,
-                                         &s->timer[i],
-                                         PTIMER_POLICY_DEFAULT);
+        s->timer[i].ptimer = ptimer_init(bh, PTIMER_POLICY_DEFAULT);
         s->timer[i].id = i;
         s->timer[i].parent = s;
     }

@@ -22,19 +22,15 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/pcmcia.h"
-#include "migration/vmstate.h"
-#include "qapi/error.h"
-#include "qemu/module.h"
 #include "sysemu/dma.h"
 
 #include "hw/ide/internal.h"
-#include "qom/object.h"
 
 #define TYPE_MICRODRIVE "microdrive"
-OBJECT_DECLARE_SIMPLE_TYPE(MicroDriveState, MICRODRIVE)
+#define MICRODRIVE(obj) OBJECT_CHECK(MicroDriveState, (obj), TYPE_MICRODRIVE)
 
 /***********************************************************/
 /* CF-ATA Microdrive */
@@ -43,7 +39,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(MicroDriveState, MICRODRIVE)
 
 /* DSCM-1XXXX Microdrive hard disk with CF+ II / PCMCIA interface.  */
 
-struct MicroDriveState {
+typedef struct MicroDriveState {
     /*< private >*/
     PCMCIACardState parent_obj;
     /*< public >*/
@@ -60,7 +56,7 @@ struct MicroDriveState {
     uint8_t ctrl;
     uint16_t io;
     uint8_t cycle;
-};
+} MicroDriveState;
 
 /* Register bitfields */
 enum md_opt {
@@ -175,7 +171,7 @@ static void md_attr_write(PCMCIACardState *card, uint32_t at, uint8_t value)
     case 0x00:	/* Configuration Option Register */
         s->opt = value & 0xcf;
         if (value & OPT_SRESET) {
-            device_legacy_reset(DEVICE(s));
+            device_reset(DEVICE(s));
         }
         md_interrupt_update(s);
         break;
@@ -318,7 +314,7 @@ static void md_common_write(PCMCIACardState *card, uint32_t at, uint16_t value)
     case 0xe:	/* Device Control */
         s->ctrl = value;
         if (value & CTRL_SRST) {
-            device_legacy_reset(DEVICE(s));
+            device_reset(DEVICE(s));
         }
         md_interrupt_update(s);
         break;
@@ -543,7 +539,7 @@ static int dscm1xxxx_attach(PCMCIACardState *card)
     md->attr_base = pcc->cis[0x74] | (pcc->cis[0x76] << 8);
     md->io_base = 0x0;
 
-    device_legacy_reset(DEVICE(md));
+    device_reset(DEVICE(md));
     md_interrupt_update(md);
 
     return 0;
@@ -553,7 +549,7 @@ static int dscm1xxxx_detach(PCMCIACardState *card)
 {
     MicroDriveState *md = MICRODRIVE(card);
 
-    device_legacy_reset(DEVICE(md));
+    device_reset(DEVICE(md));
     return 0;
 }
 
@@ -562,7 +558,7 @@ PCMCIACardState *dscm1xxxx_init(DriveInfo *dinfo)
     MicroDriveState *md;
 
     md = MICRODRIVE(object_new(TYPE_DSCM1XXXX));
-    qdev_realize(DEVICE(md), NULL, &error_fatal);
+    qdev_init_nofail(DEVICE(md));
 
     if (dinfo != NULL) {
         ide_create_drive(&md->bus, 0, dinfo);

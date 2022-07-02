@@ -22,7 +22,7 @@
  * THE SOFTWARE.
  */
 #include "qemu/osdep.h"
-#include "qemu/option.h"
+#include "qemu-common.h"
 #include "qemu/help_option.h"
 #include "qemu/error-report.h"
 #include "qom/object.h"
@@ -33,7 +33,6 @@
 struct soundhw {
     const char *name;
     const char *descr;
-    const char *typename;
     int enabled;
     int isa;
     union {
@@ -64,17 +63,6 @@ void pci_register_soundhw(const char *name, const char *descr,
     soundhw[soundhw_count].descr = descr;
     soundhw[soundhw_count].isa = 0;
     soundhw[soundhw_count].init.init_pci = init_pci;
-    soundhw_count++;
-}
-
-void deprecated_register_soundhw(const char *name, const char *descr,
-                                 int isa, const char *typename)
-{
-    assert(soundhw_count < ARRAY_SIZE(soundhw) - 1);
-    soundhw[soundhw_count].name = name;
-    soundhw[soundhw_count].descr = descr;
-    soundhw[soundhw_count].isa = isa;
-    soundhw[soundhw_count].typename = typename;
     soundhw_count++;
 }
 
@@ -149,16 +137,7 @@ void soundhw_init(void)
 
     for (c = soundhw; c->name; ++c) {
         if (c->enabled) {
-            if (c->typename) {
-                warn_report("'-soundhw %s' is deprecated, "
-                            "please use '-device %s' instead",
-                            c->name, c->typename);
-                if (c->isa) {
-                    isa_create_simple(isa_bus, c->typename);
-                } else {
-                    pci_create_simple(pci_bus, -1, c->typename);
-                }
-            } else if (c->isa) {
+            if (c->isa) {
                 if (!isa_bus) {
                     error_report("ISA bus not available for %s", c->name);
                     exit(1);

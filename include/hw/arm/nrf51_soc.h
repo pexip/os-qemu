@@ -13,18 +13,12 @@
 #include "hw/sysbus.h"
 #include "hw/arm/armv7m.h"
 #include "hw/char/nrf51_uart.h"
-#include "hw/misc/nrf51_rng.h"
-#include "hw/gpio/nrf51_gpio.h"
-#include "hw/nvram/nrf51_nvm.h"
-#include "hw/timer/nrf51_timer.h"
-#include "qom/object.h"
 
 #define TYPE_NRF51_SOC "nrf51-soc"
-OBJECT_DECLARE_SIMPLE_TYPE(NRF51State, NRF51_SOC)
+#define NRF51_SOC(obj) \
+    OBJECT_CHECK(NRF51State, (obj), TYPE_NRF51_SOC)
 
-#define NRF51_NUM_TIMERS 3
-
-struct NRF51State {
+typedef struct NRF51State {
     /*< private >*/
     SysBusDevice parent_obj;
 
@@ -32,16 +26,10 @@ struct NRF51State {
     ARMv7MState cpu;
 
     NRF51UARTState uart;
-    NRF51RNGState rng;
-    NRF51NVMState nvm;
-    NRF51GPIOState gpio;
-    NRF51TimerState timer[NRF51_NUM_TIMERS];
 
     MemoryRegion iomem;
     MemoryRegion sram;
     MemoryRegion flash;
-    MemoryRegion clock;
-    MemoryRegion twi;
 
     uint32_t sram_size;
     uint32_t flash_size;
@@ -50,6 +38,7 @@ struct NRF51State {
 
     MemoryRegion container;
 
-};
+} NRF51State;
 
 #endif
+

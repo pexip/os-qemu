@@ -16,12 +16,13 @@
  */
 
 #ifndef XLNX_ZYNQMP_H
-#define XLNX_ZYNQMP_H
 
-#include "hw/arm/boot.h"
+#include "qemu-common.h"
+#include "hw/arm/arm.h"
 #include "hw/intc/arm_gic.h"
 #include "hw/net/cadence_gem.h"
 #include "hw/char/cadence_uart.h"
+#include "hw/ide/pci.h"
 #include "hw/ide/ahci.h"
 #include "hw/sd/sdhci.h"
 #include "hw/ssi/xilinx_spips.h"
@@ -29,13 +30,11 @@
 #include "hw/dma/xlnx-zdma.h"
 #include "hw/display/xlnx_dp.h"
 #include "hw/intc/xlnx-zynqmp-ipi.h"
-#include "hw/rtc/xlnx-zynqmp-rtc.h"
-#include "hw/cpu/cluster.h"
-#include "target/arm/cpu.h"
-#include "qom/object.h"
+#include "hw/timer/xlnx-zynqmp-rtc.h"
 
 #define TYPE_XLNX_ZYNQMP "xlnx,zynqmp"
-OBJECT_DECLARE_SIMPLE_TYPE(XlnxZynqMPState, XLNX_ZYNQMP)
+#define XLNX_ZYNQMP(obj) OBJECT_CHECK(XlnxZynqMPState, (obj), \
+                                       TYPE_XLNX_ZYNQMP)
 
 #define XLNX_ZYNQMP_NUM_APU_CPUS 4
 #define XLNX_ZYNQMP_NUM_RPU_CPUS 2
@@ -73,13 +72,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(XlnxZynqMPState, XLNX_ZYNQMP)
 #define XLNX_ZYNQMP_MAX_RAM_SIZE (XLNX_ZYNQMP_MAX_LOW_RAM_SIZE + \
                                   XLNX_ZYNQMP_MAX_HIGH_RAM_SIZE)
 
-struct XlnxZynqMPState {
+typedef struct XlnxZynqMPState {
     /*< private >*/
     DeviceState parent_obj;
 
     /*< public >*/
-    CPUClusterState apu_cluster;
-    CPUClusterState rpu_cluster;
     ARMCPU apu_cpu[XLNX_ZYNQMP_NUM_APU_CPUS];
     ARMCPU rpu_cpu[XLNX_ZYNQMP_NUM_RPU_CPUS];
     GICState gic;
@@ -112,6 +109,7 @@ struct XlnxZynqMPState {
     bool virt;
     /* Has the RPU subsystem?  */
     bool has_rpu;
-};
+}  XlnxZynqMPState;
 
+#define XLNX_ZYNQMP_H
 #endif

@@ -2,12 +2,14 @@
  * Copyright (c) 2018 Virtuozzo International GmbH
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
+ *
  */
 
-#ifndef ELF2DMP_QEMU_ELF_H
-#define ELF2DMP_QEMU_ELF_H
+#ifndef QEMU_ELF_H
+#define QEMU_ELF_H
 
-#include "elf.h"
+#include <stdint.h>
+#include <elf.h>
 
 typedef struct QEMUCPUSegment {
     uint32_t selector;
@@ -32,7 +34,7 @@ typedef struct QEMUCPUState {
 int is_system(QEMUCPUState *s);
 
 typedef struct QEMU_Elf {
-    GMappedFile *gmf;
+    int fd;
     size_t size;
     void *map;
     QEMUCPUState **state;
@@ -46,4 +48,4 @@ void QEMU_Elf_exit(QEMU_Elf *qe);
 Elf64_Phdr *elf64_getphdr(void *map);
 Elf64_Half elf_getphdrnum(void *map);
 
-#endif /* ELF2DMP_QEMU_ELF_H */
+#endif /* QEMU_ELF_H */

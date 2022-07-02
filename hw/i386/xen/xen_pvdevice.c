@@ -31,18 +31,16 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
+#include "hw/hw.h"
 #include "hw/pci/pci.h"
-#include "hw/qdev-properties.h"
-#include "migration/vmstate.h"
 #include "trace.h"
-#include "qom/object.h"
 
 #define TYPE_XEN_PV_DEVICE  "xen-pvdevice"
 
-OBJECT_DECLARE_SIMPLE_TYPE(XenPVDevice, XEN_PV_DEVICE)
+#define XEN_PV_DEVICE(obj) \
+     OBJECT_CHECK(XenPVDevice, (obj), TYPE_XEN_PV_DEVICE)
 
-struct XenPVDevice {
+typedef struct XenPVDevice {
     /*< private >*/
     PCIDevice       parent_obj;
     /*< public >*/
@@ -51,7 +49,7 @@ struct XenPVDevice {
     uint8_t         revision;
     uint32_t        size;
     MemoryRegion    mmio;
-};
+} XenPVDevice;
 
 static uint64_t xen_pv_mmio_read(void *opaque, hwaddr addr,
                                  unsigned size)
@@ -131,7 +129,7 @@ static void xen_pv_class_init(ObjectClass *klass, void *data)
     k->realize = xen_pv_realize;
     k->class_id = PCI_CLASS_SYSTEM_OTHER;
     dc->desc = "Xen PV Device";
-    device_class_set_props(dc, xen_pv_props);
+    dc->props = xen_pv_props;
     dc->vmsd = &vmstate_xen_pvdevice;
 }
 

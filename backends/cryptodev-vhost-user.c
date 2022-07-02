@@ -9,7 +9,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,6 +22,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/boards.h"
 #include "qapi/error.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/error-report.h"
@@ -30,7 +31,6 @@
 #include "sysemu/cryptodev-vhost.h"
 #include "chardev/char-fe.h"
 #include "sysemu/cryptodev-vhost-user.h"
-#include "qom/object.h"
 
 
 /**
@@ -39,18 +39,20 @@
  */
 #define TYPE_CRYPTODEV_BACKEND_VHOST_USER "cryptodev-vhost-user"
 
-OBJECT_DECLARE_SIMPLE_TYPE(CryptoDevBackendVhostUser, CRYPTODEV_BACKEND_VHOST_USER)
+#define CRYPTODEV_BACKEND_VHOST_USER(obj) \
+    OBJECT_CHECK(CryptoDevBackendVhostUser, \
+                 (obj), TYPE_CRYPTODEV_BACKEND_VHOST_USER)
 
 
-struct CryptoDevBackendVhostUser {
+typedef struct CryptoDevBackendVhostUser {
     CryptoDevBackend parent_obj;
 
-    VhostUserState vhost_user;
+    VhostUserState *vhost_user;
     CharBackend chr;
     char *chr_name;
     bool opened;
     CryptoDevBackendVhost *vhost_crypto[MAX_CRYPTO_QUEUE_NUM];
-};
+} CryptoDevBackendVhostUser;
 
 static int
 cryptodev_vhost_user_running(
@@ -102,7 +104,7 @@ cryptodev_vhost_user_start(int queues,
             continue;
         }
 
-        options.opaque = &s->vhost_user;
+        options.opaque = s->vhost_user;
         options.backend_type = VHOST_BACKEND_TYPE_USER;
         options.cc = b->conf.peers.ccs[i];
         s->vhost_crypto[i] = cryptodev_vhost_init(&options);
@@ -151,7 +153,7 @@ cryptodev_vhost_claim_chardev(CryptoDevBackendVhostUser *s,
     return chr;
 }
 
-static void cryptodev_vhost_user_event(void *opaque, QEMUChrEvent event)
+static void cryptodev_vhost_user_event(void *opaque, int event)
 {
     CryptoDevBackendVhostUser *s = opaque;
     CryptoDevBackend *b = CRYPTODEV_BACKEND(s);
@@ -170,11 +172,6 @@ static void cryptodev_vhost_user_event(void *opaque, QEMUChrEvent event)
         b->ready = false;
         cryptodev_vhost_user_stop(queues, s);
         break;
-    case CHR_EVENT_BREAK:
-    case CHR_EVENT_MUX_IN:
-    case CHR_EVENT_MUX_OUT:
-        /* Ignore */
-        break;
     }
 }
 
@@ -185,6 +182,7 @@ static void cryptodev_vhost_user_init(
     size_t i;
     Error *local_err = NULL;
     Chardev *chr;
+    VhostUserState *user;
     CryptoDevBackendClient *cc;
     CryptoDevBackendVhostUser *s =
                       CRYPTODEV_BACKEND_VHOST_USER(backend);
@@ -208,15 +206,21 @@ static void cryptodev_vhost_user_init(
         backend->conf.peers.ccs[i] = cc;
 
         if (i == 0) {
-            if (!qemu_chr_fe_init(&s->chr, chr, errp)) {
+            if (!qemu_chr_fe_init(&s->chr, chr, &local_err)) {
+                error_propagate(errp, local_err);
                 return;
             }
         }
     }
 
-    if (!vhost_user_init(&s->vhost_user, &s->chr, errp)) {
+    user = vhost_user_init();
+    if (!user) {
+        error_setg(errp, "Failed to init vhost_user");
         return;
     }
+
+    user->chr = &s->chr;
+    s->vhost_user = user;
 
     qemu_chr_fe_set_handlers(&s->chr, NULL, NULL,
                      cryptodev_vhost_user_event, NULL, s, NULL, true);
@@ -303,7 +307,11 @@ static void cryptodev_vhost_user_cleanup(
         }
     }
 
-    vhost_user_cleanup(&s->vhost_user);
+    if (s->vhost_user) {
+        vhost_user_cleanup(s->vhost_user);
+        g_free(s->vhost_user);
+        s->vhost_user = NULL;
+    }
 }
 
 static void cryptodev_vhost_user_set_chardev(Object *obj,
@@ -334,6 +342,14 @@ cryptodev_vhost_user_get_chardev(Object *obj, Error **errp)
     return NULL;
 }
 
+static void cryptodev_vhost_user_instance_int(Object *obj)
+{
+    object_property_add_str(obj, "chardev",
+                            cryptodev_vhost_user_get_chardev,
+                            cryptodev_vhost_user_set_chardev,
+                            NULL);
+}
+
 static void cryptodev_vhost_user_finalize(Object *obj)
 {
     CryptoDevBackendVhostUser *s =
@@ -354,17 +370,13 @@ cryptodev_vhost_user_class_init(ObjectClass *oc, void *data)
     bc->create_session = cryptodev_vhost_user_sym_create_session;
     bc->close_session = cryptodev_vhost_user_sym_close_session;
     bc->do_sym_op = NULL;
-
-    object_class_property_add_str(oc, "chardev",
-                                  cryptodev_vhost_user_get_chardev,
-                                  cryptodev_vhost_user_set_chardev);
-
 }
 
 static const TypeInfo cryptodev_vhost_user_info = {
     .name = TYPE_CRYPTODEV_BACKEND_VHOST_USER,
     .parent = TYPE_CRYPTODEV_BACKEND,
     .class_init = cryptodev_vhost_user_class_init,
+    .instance_init = cryptodev_vhost_user_instance_int,
     .instance_finalize = cryptodev_vhost_user_finalize,
     .instance_size = sizeof(CryptoDevBackendVhostUser),
 };

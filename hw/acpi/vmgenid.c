@@ -12,15 +12,12 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qapi/qapi-commands-machine.h"
-#include "qemu/module.h"
+#include "qapi/qapi-commands-misc.h"
 #include "hw/acpi/acpi.h"
 #include "hw/acpi/aml-build.h"
 #include "hw/acpi/vmgenid.h"
 #include "hw/nvram/fw_cfg.h"
-#include "hw/qdev-properties.h"
-#include "migration/vmstate.h"
-#include "sysemu/reset.h"
+#include "sysemu/sysemu.h"
 
 void vmgenid_build_acpi(VmGenIdState *vms, GArray *table_data, GArray *guid,
                         BIOSLinker *linker)
@@ -33,7 +30,8 @@ void vmgenid_build_acpi(VmGenIdState *vms, GArray *table_data, GArray *guid,
      * first, since that's what the guest expects
      */
     g_array_set_size(guid, VMGENID_FW_CFG_SIZE - ARRAY_SIZE(guid_le.data));
-    guid_le = qemu_uuid_bswap(vms->guid);
+    guid_le = vms->guid;
+    qemu_uuid_bswap(&guid_le);
     /* The GUID is written at a fixed offset into the fw_cfg file
      * in order to implement the "OVMF SDT Header probe suppressor"
      * see docs/specs/vmgenid.txt for more details
@@ -151,7 +149,8 @@ static void vmgenid_update_guest(VmGenIdState *vms)
              * however, will expect the fields to be little-endian.
              * Perform a byte swap immediately before writing.
              */
-            guid_le = qemu_uuid_bswap(vms->guid);
+            guid_le = vms->guid;
+            qemu_uuid_bswap(&guid_le);
             /* The GUID is written at a fixed offset into the fw_cfg file
              * in order to implement the "OVMF SDT Header probe suppressor"
              * see docs/specs/vmgenid.txt for more details.
@@ -198,7 +197,7 @@ static void vmgenid_realize(DeviceState *dev, Error **errp)
 
     if (!bios_linker_loader_can_write_pointer()) {
         error_setg(errp, "%s requires DMA write support in fw_cfg, "
-                   "which this machine type does not provide", TYPE_VMGENID);
+                   "which this machine type does not provide", VMGENID_DEVICE);
         return;
     }
 
@@ -206,7 +205,7 @@ static void vmgenid_realize(DeviceState *dev, Error **errp)
      * device. Check if there are several.
      */
     if (!find_vmgenid_dev()) {
-        error_setg(errp, "at most one %s device is permitted", TYPE_VMGENID);
+        error_setg(errp, "at most one %s device is permitted", VMGENID_DEVICE);
         return;
     }
 
@@ -226,13 +225,13 @@ static void vmgenid_device_class_init(ObjectClass *klass, void *data)
 
     dc->vmsd = &vmstate_vmgenid;
     dc->realize = vmgenid_realize;
-    device_class_set_props(dc, vmgenid_device_properties);
+    dc->props = vmgenid_device_properties;
     dc->hotpluggable = false;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 
 static const TypeInfo vmgenid_device_info = {
-    .name          = TYPE_VMGENID,
+    .name          = VMGENID_DEVICE,
     .parent        = TYPE_DEVICE,
     .instance_size = sizeof(VmGenIdState),
     .class_init    = vmgenid_device_class_init,

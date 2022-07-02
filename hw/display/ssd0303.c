@@ -10,13 +10,9 @@
 /* The controller can support a variety of different displays, but we only
    implement one.  Most of the commends relating to brightness and geometry
    setup are ignored. */
-
 #include "qemu/osdep.h"
 #include "hw/i2c/i2c.h"
-#include "migration/vmstate.h"
-#include "qemu/module.h"
 #include "ui/console.h"
-#include "qom/object.h"
 
 //#define DEBUG_SSD0303 1
 
@@ -47,9 +43,9 @@ enum ssd0303_cmd {
 };
 
 #define TYPE_SSD0303 "ssd0303"
-OBJECT_DECLARE_SIMPLE_TYPE(ssd0303_state, SSD0303)
+#define SSD0303(obj) OBJECT_CHECK(ssd0303_state, (obj), TYPE_SSD0303)
 
-struct ssd0303_state {
+typedef struct {
     I2CSlave parent_obj;
 
     QemuConsole *con;
@@ -64,12 +60,12 @@ struct ssd0303_state {
     enum ssd0303_mode mode;
     enum ssd0303_cmd cmd_state;
     uint8_t framebuffer[132*8];
-};
+} ssd0303_state;
 
-static uint8_t ssd0303_recv(I2CSlave *i2c)
+static int ssd0303_recv(I2CSlave *i2c)
 {
     BADF("Reads not implemented\n");
-    return 0xff;
+    return -1;
 }
 
 static int ssd0303_send(I2CSlave *i2c, uint8_t data)

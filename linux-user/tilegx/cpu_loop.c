@@ -18,7 +18,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu.h"
 #include "cpu_loop-common.h"
 
@@ -207,7 +206,7 @@ static void do_fetch(CPUTLGState *env, int trapnr, bool quad)
 
 void cpu_loop(CPUTLGState *env)
 {
-    CPUState *cs = env_cpu(env);
+    CPUState *cs = CPU(tilegx_env_get_cpu(env));
     int trapnr;
 
     while (1) {

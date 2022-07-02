@@ -2,7 +2,7 @@
  * QEMU emulation of an AMD IOMMU (AMD-Vi)
  *
  * Copyright (C) 2011 Eduard - Gabriel Munteanu
- * Copyright (C) 2015, 2016 David Kiarie Kahurani
+ * Copyright (C) 2015 David Kiarie, <davidkiarie4@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,12 +18,12 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef AMD_IOMMU_H
-#define AMD_IOMMU_H
+#ifndef AMD_IOMMU_H_
+#define AMD_IOMMU_H_
 
+#include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "hw/i386/x86-iommu.h"
-#include "qom/object.h"
 
 /* Capability registers */
 #define AMDVI_CAPAB_BAR_LOW           0x04
@@ -297,7 +297,8 @@ struct irte_ga {
 };
 
 #define TYPE_AMD_IOMMU_DEVICE "amd-iommu"
-OBJECT_DECLARE_SIMPLE_TYPE(AMDVIState, AMD_IOMMU_DEVICE)
+#define AMD_IOMMU_DEVICE(obj)\
+    OBJECT_CHECK(AMDVIState, (obj), TYPE_AMD_IOMMU_DEVICE)
 
 #define TYPE_AMD_IOMMU_PCI "AMDVI-PCI"
 
@@ -310,7 +311,7 @@ typedef struct AMDVIPCIState {
     PCIDevice dev;               /* The PCI device itself        */
 } AMDVIPCIState;
 
-struct AMDVIState {
+typedef struct AMDVIState {
     X86IOMMUState iommu;        /* IOMMU bus device             */
     AMDVIPCIState pci;          /* IOMMU PCI device             */
 
@@ -367,6 +368,6 @@ struct AMDVIState {
 
     /* Interrupt remapping */
     bool ga_enabled;
-};
+} AMDVIState;
 
 #endif

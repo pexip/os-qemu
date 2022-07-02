@@ -2,8 +2,6 @@
 
 test_suite max
 
-#if XCHAL_HAVE_MINMAX
-
 test max
     movi    a2, 0xffffffff
     movi    a3, 1
@@ -79,7 +77,5 @@ test maxu
     maxu    a3, a2, a3
     assert  eq, a3, a4
 test_end
-
-#endif
 
 test_suite_end

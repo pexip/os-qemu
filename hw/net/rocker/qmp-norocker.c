@@ -16,6 +16,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-rocker.h"
 #include "qapi/qmp/qerror.h"

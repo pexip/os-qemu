@@ -19,7 +19,6 @@
  */
 
 #include "qemu/osdep.h"
-
 #include "pdb.h"
 #include "err.h"
 
@@ -67,7 +66,7 @@ uint64_t pdb_find_public_v3_symbol(struct pdb_reader *r, const char *name)
             uint32_t sect_rva = segment->dword[1];
             uint64_t rva = sect_rva + sym->public_v3.offset;
 
-            printf("%s: 0x%016x(%d:\'%.8s\') + 0x%08x = 0x%09"PRIx64"\n", name,
+            printf("%s: 0x%016x(%d:\'%.8s\') + 0x%08x = 0x%09lx\n", name,
                     sect_rva, sym->public_v3.segment,
                     ((char *)segment - 8), sym->public_v3.offset, rva);
             return rva;
@@ -278,18 +277,28 @@ static void pdb_reader_exit(struct pdb_reader *r)
 
 int pdb_init_from_file(const char *name, struct pdb_reader *reader)
 {
-    GError *gerr = NULL;
     int err = 0;
+    int fd;
     void *map;
+    struct stat st;
 
-    reader->gmf = g_mapped_file_new(name, TRUE, &gerr);
-    if (gerr) {
-        eprintf("Failed to map PDB file \'%s\'\n", name);
+    fd = open(name, O_RDONLY, 0);
+    if (fd == -1) {
+        eprintf("Failed to open PDB file \'%s\'\n", name);
         return 1;
     }
+    reader->fd = fd;
 
-    reader->file_size = g_mapped_file_get_length(reader->gmf);
-    map = g_mapped_file_get_contents(reader->gmf);
+    fstat(fd, &st);
+    reader->file_size = st.st_size;
+
+    map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) {
+        eprintf("Failed to map PDB file\n");
+        err = 1;
+        goto out_fd;
+    }
+
     if (pdb_reader_init(reader, map)) {
         err = 1;
         goto out_unmap;
@@ -298,13 +307,16 @@ int pdb_init_from_file(const char *name, struct pdb_reader *reader)
     return 0;
 
 out_unmap:
-    g_mapped_file_unref(reader->gmf);
+    munmap(map, st.st_size);
+out_fd:
+    close(fd);
 
     return err;
 }
 
 void pdb_exit(struct pdb_reader *reader)
 {
-    g_mapped_file_unref(reader->gmf);
+    munmap(reader->ds.header, reader->file_size);
+    close(reader->fd);
     pdb_reader_exit(reader);
 }

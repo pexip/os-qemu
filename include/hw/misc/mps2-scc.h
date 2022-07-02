@@ -13,21 +13,18 @@
 #define MPS2_SCC_H
 
 #include "hw/sysbus.h"
-#include "hw/misc/led.h"
-#include "qom/object.h"
 
 #define TYPE_MPS2_SCC "mps2-scc"
-OBJECT_DECLARE_SIMPLE_TYPE(MPS2SCC, MPS2_SCC)
+#define MPS2_SCC(obj) OBJECT_CHECK(MPS2SCC, (obj), TYPE_MPS2_SCC)
 
 #define NUM_OSCCLK 3
 
-struct MPS2SCC {
+typedef struct {
     /*< private >*/
     SysBusDevice parent_obj;
 
     /*< public >*/
     MemoryRegion iomem;
-    LEDState *led[8];
 
     uint32_t cfg0;
     uint32_t cfg1;
@@ -41,6 +38,6 @@ struct MPS2SCC {
     uint32_t id;
     uint32_t oscclk[NUM_OSCCLK];
     uint32_t oscclk_reset[NUM_OSCCLK];
-};
+} MPS2SCC;
 
 #endif

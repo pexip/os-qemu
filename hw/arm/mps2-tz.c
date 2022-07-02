@@ -15,7 +15,6 @@
  * as seen by the guest depend significantly on the FPGA image.
  * This source file covers the following FPGA images, for TrustZone cores:
  *  "mps2-an505" -- Cortex-M33 as documented in ARM Application Note AN505
- *  "mps2-an521" -- Dual Cortex-M33 as documented in Application Note AN521
  *
  * Links to the TRM for the board itself and to the various Application
  * Notes which document the FPGA images can be found here:
@@ -25,24 +24,16 @@
  * http://infocenter.arm.com/help/topic/com.arm.doc.100112_0200_06_en/versatile_express_cortex_m_prototyping_systems_v2m_mps2_and_v2m_mps2plus_technical_reference_100112_0200_06_en.pdf
  * Application Note AN505:
  * http://infocenter.arm.com/help/topic/com.arm.doc.dai0505b/index.html
- * Application Note AN521:
- * http://infocenter.arm.com/help/topic/com.arm.doc.dai0521c/index.html
  *
  * The AN505 defers to the Cortex-M33 processor ARMv8M IoT Kit FVP User Guide
  * (ARM ECM0601256) for the details of some of the device layout:
  *   http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.ecm0601256/index.html
- * Similarly, the AN521 uses the SSE-200, and the SSE-200 TRM defines
- * most of the device layout:
- *  http://infocenter.arm.com/help/topic/com.arm.doc.101104_0100_00_en/corelink_sse200_subsystem_for_embedded_technical_reference_manual_101104_0100_00_en.pdf
- *
  */
 
 #include "qemu/osdep.h"
-#include "qemu/units.h"
-#include "qemu/cutils.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
-#include "hw/arm/boot.h"
+#include "hw/arm/arm.h"
 #include "hw/arm/armv7m.h"
 #include "hw/or-irq.h"
 #include "hw/boards.h"
@@ -55,33 +46,28 @@
 #include "hw/misc/mps2-fpgaio.h"
 #include "hw/misc/tz-mpc.h"
 #include "hw/misc/tz-msc.h"
-#include "hw/arm/armsse.h"
+#include "hw/arm/iotkit.h"
 #include "hw/dma/pl080.h"
 #include "hw/ssi/pl022.h"
-#include "hw/i2c/arm_sbcon_i2c.h"
-#include "hw/net/lan9118.h"
+#include "hw/devices.h"
 #include "net/net.h"
 #include "hw/core/split-irq.h"
-#include "qom/object.h"
-
-#define MPS2TZ_NUMIRQ 92
 
 typedef enum MPS2TZFPGAType {
     FPGA_AN505,
-    FPGA_AN521,
 } MPS2TZFPGAType;
 
-struct MPS2TZMachineClass {
+typedef struct {
     MachineClass parent;
     MPS2TZFPGAType fpga_type;
     uint32_t scc_id;
-    const char *armsse_type;
-};
+} MPS2TZMachineClass;
 
-struct MPS2TZMachineState {
+typedef struct {
     MachineState parent;
 
-    ARMSSE iotkit;
+    IoTKit iotkit;
+    MemoryRegion psram;
     MemoryRegion ssram[3];
     MemoryRegion ssram1_m;
     MPS2SCC scc;
@@ -89,7 +75,7 @@ struct MPS2TZMachineState {
     TZPPC ppc[5];
     TZMPC ssram_mpc[3];
     PL022State spi[5];
-    ArmSbconI2CState i2c[4];
+    UnimplementedDeviceState i2c[4];
     UnimplementedDeviceState i2s_audio;
     UnimplementedDeviceState gpio[4];
     UnimplementedDeviceState gfx;
@@ -99,14 +85,17 @@ struct MPS2TZMachineState {
     SplitIRQ sec_resp_splitter;
     qemu_or_irq uart_irq_orgate;
     DeviceState *lan9118;
-    SplitIRQ cpu_irq_splitter[MPS2TZ_NUMIRQ];
-};
+} MPS2TZMachineState;
 
 #define TYPE_MPS2TZ_MACHINE "mps2tz"
 #define TYPE_MPS2TZ_AN505_MACHINE MACHINE_TYPE_NAME("mps2-an505")
-#define TYPE_MPS2TZ_AN521_MACHINE MACHINE_TYPE_NAME("mps2-an521")
 
-OBJECT_DECLARE_TYPE(MPS2TZMachineState, MPS2TZMachineClass, MPS2TZ_MACHINE)
+#define MPS2TZ_MACHINE(obj) \
+    OBJECT_CHECK(MPS2TZMachineState, obj, TYPE_MPS2TZ_MACHINE)
+#define MPS2TZ_MACHINE_GET_CLASS(obj) \
+    OBJECT_GET_CLASS(MPS2TZMachineClass, obj, TYPE_MPS2TZ_MACHINE)
+#define MPS2TZ_MACHINE_CLASS(klass) \
+    OBJECT_CLASS_CHECK(MPS2TZMachineClass, klass, TYPE_MPS2TZ_MACHINE)
 
 /* Main SYSCLK frequency in Hz */
 #define SYSCLK_FRQ 20000000
@@ -120,23 +109,6 @@ static void make_ram_alias(MemoryRegion *mr, const char *name,
     memory_region_init_alias(mr, NULL, name, orig, 0,
                              memory_region_size(orig));
     memory_region_add_subregion(get_system_memory(), base, mr);
-}
-
-static qemu_irq get_sse_irq_in(MPS2TZMachineState *mms, int irqno)
-{
-    /* Return a qemu_irq which will signal IRQ n to all CPUs in the SSE. */
-    MPS2TZMachineClass *mmc = MPS2TZ_MACHINE_GET_CLASS(mms);
-
-    assert(irqno < MPS2TZ_NUMIRQ);
-
-    switch (mmc->fpga_type) {
-    case FPGA_AN505:
-        return qdev_get_gpio_in_named(DEVICE(&mms->iotkit), "EXP_IRQ", irqno);
-    case FPGA_AN521:
-        return qdev_get_gpio_in(DEVICE(&mms->cpu_irq_splitter[irqno]), 0);
-    default:
-        g_assert_not_reached();
-    }
 }
 
 /* Most of the devices in the AN505 FPGA image sit behind
@@ -171,10 +143,12 @@ static MemoryRegion *make_unimp_dev(MPS2TZMachineState *mms,
      */
     UnimplementedDeviceState *uds = opaque;
 
-    object_initialize_child(OBJECT(mms), name, uds, TYPE_UNIMPLEMENTED_DEVICE);
+    sysbus_init_child_obj(OBJECT(mms), name, uds,
+                          sizeof(UnimplementedDeviceState),
+                          TYPE_UNIMPLEMENTED_DEVICE);
     qdev_prop_set_string(DEVICE(uds), "name", name);
     qdev_prop_set_uint64(DEVICE(uds), "size", size);
-    sysbus_realize(SYS_BUS_DEVICE(uds), &error_fatal);
+    object_property_set_bool(OBJECT(uds), true, "realized", &error_fatal);
     return sysbus_mmio_get_region(SYS_BUS_DEVICE(uds), 0);
 }
 
@@ -187,18 +161,23 @@ static MemoryRegion *make_uart(MPS2TZMachineState *mms, void *opaque,
     int txirqno = i * 2 + 1;
     int combirqno = i + 10;
     SysBusDevice *s;
+    DeviceState *iotkitdev = DEVICE(&mms->iotkit);
     DeviceState *orgate_dev = DEVICE(&mms->uart_irq_orgate);
 
-    object_initialize_child(OBJECT(mms), name, uart, TYPE_CMSDK_APB_UART);
+    sysbus_init_child_obj(OBJECT(mms), name, uart, sizeof(mms->uart[0]),
+                          TYPE_CMSDK_APB_UART);
     qdev_prop_set_chr(DEVICE(uart), "chardev", serial_hd(i));
     qdev_prop_set_uint32(DEVICE(uart), "pclk-frq", SYSCLK_FRQ);
-    sysbus_realize(SYS_BUS_DEVICE(uart), &error_fatal);
+    object_property_set_bool(OBJECT(uart), true, "realized", &error_fatal);
     s = SYS_BUS_DEVICE(uart);
-    sysbus_connect_irq(s, 0, get_sse_irq_in(mms, txirqno));
-    sysbus_connect_irq(s, 1, get_sse_irq_in(mms, rxirqno));
+    sysbus_connect_irq(s, 0, qdev_get_gpio_in_named(iotkitdev,
+                                                    "EXP_IRQ", txirqno));
+    sysbus_connect_irq(s, 1, qdev_get_gpio_in_named(iotkitdev,
+                                                    "EXP_IRQ", rxirqno));
     sysbus_connect_irq(s, 2, qdev_get_gpio_in(orgate_dev, i * 2));
     sysbus_connect_irq(s, 3, qdev_get_gpio_in(orgate_dev, i * 2 + 1));
-    sysbus_connect_irq(s, 4, get_sse_irq_in(mms, combirqno));
+    sysbus_connect_irq(s, 4, qdev_get_gpio_in_named(iotkitdev,
+                                                    "EXP_IRQ", combirqno));
     return sysbus_mmio_get_region(SYS_BUS_DEVICE(uart), 0);
 }
 
@@ -209,12 +188,13 @@ static MemoryRegion *make_scc(MPS2TZMachineState *mms, void *opaque,
     DeviceState *sccdev;
     MPS2TZMachineClass *mmc = MPS2TZ_MACHINE_GET_CLASS(mms);
 
-    object_initialize_child(OBJECT(mms), "scc", scc, TYPE_MPS2_SCC);
+    object_initialize(scc, sizeof(mms->scc), TYPE_MPS2_SCC);
     sccdev = DEVICE(scc);
+    qdev_set_parent_bus(sccdev, sysbus_get_default());
     qdev_prop_set_uint32(sccdev, "scc-cfg4", 0x2);
     qdev_prop_set_uint32(sccdev, "scc-aid", 0x00200008);
     qdev_prop_set_uint32(sccdev, "scc-id", mmc->scc_id);
-    sysbus_realize(SYS_BUS_DEVICE(scc), &error_fatal);
+    object_property_set_bool(OBJECT(scc), true, "realized", &error_fatal);
     return sysbus_mmio_get_region(SYS_BUS_DEVICE(sccdev), 0);
 }
 
@@ -223,8 +203,9 @@ static MemoryRegion *make_fpgaio(MPS2TZMachineState *mms, void *opaque,
 {
     MPS2FPGAIO *fpgaio = opaque;
 
-    object_initialize_child(OBJECT(mms), "fpgaio", fpgaio, TYPE_MPS2_FPGAIO);
-    sysbus_realize(SYS_BUS_DEVICE(fpgaio), &error_fatal);
+    object_initialize(fpgaio, sizeof(mms->fpgaio), TYPE_MPS2_FPGAIO);
+    qdev_set_parent_bus(DEVICE(fpgaio), sysbus_get_default());
+    object_property_set_bool(OBJECT(fpgaio), true, "realized", &error_fatal);
     return sysbus_mmio_get_region(SYS_BUS_DEVICE(fpgaio), 0);
 }
 
@@ -232,18 +213,19 @@ static MemoryRegion *make_eth_dev(MPS2TZMachineState *mms, void *opaque,
                                   const char *name, hwaddr size)
 {
     SysBusDevice *s;
+    DeviceState *iotkitdev = DEVICE(&mms->iotkit);
     NICInfo *nd = &nd_table[0];
 
     /* In hardware this is a LAN9220; the LAN9118 is software compatible
      * except that it doesn't support the checksum-offload feature.
      */
     qemu_check_nic_model(nd, "lan9118");
-    mms->lan9118 = qdev_new(TYPE_LAN9118);
+    mms->lan9118 = qdev_create(NULL, "lan9118");
     qdev_set_nic_properties(mms->lan9118, nd);
+    qdev_init_nofail(mms->lan9118);
 
     s = SYS_BUS_DEVICE(mms->lan9118);
-    sysbus_realize_and_unref(s, &error_fatal);
-    sysbus_connect_irq(s, 0, get_sse_irq_in(mms, 16));
+    sysbus_connect_irq(s, 0, qdev_get_gpio_in_named(iotkitdev, "EXP_IRQ", 16));
     return sysbus_mmio_get_region(s, 0);
 }
 
@@ -260,10 +242,11 @@ static MemoryRegion *make_mpc(MPS2TZMachineState *mms, void *opaque,
 
     memory_region_init_ram(ssram, NULL, name, ramsize[i], &error_fatal);
 
-    object_initialize_child(OBJECT(mms), mpcname, mpc, TYPE_TZ_MPC);
-    object_property_set_link(OBJECT(mpc), "downstream", OBJECT(ssram),
-                             &error_fatal);
-    sysbus_realize(SYS_BUS_DEVICE(mpc), &error_fatal);
+    sysbus_init_child_obj(OBJECT(mms), mpcname, mpc, sizeof(mms->ssram_mpc[0]),
+                          TYPE_TZ_MPC);
+    object_property_set_link(OBJECT(mpc), OBJECT(ssram),
+                             "downstream", &error_fatal);
+    object_property_set_bool(OBJECT(mpc), true, "realized", &error_fatal);
     /* Map the upstream end of the MPC into system memory */
     upstream = sysbus_mmio_get_region(SYS_BUS_DEVICE(mpc), 1);
     memory_region_add_subregion(get_system_memory(), rambase[i], upstream);
@@ -302,12 +285,13 @@ static MemoryRegion *make_dma(MPS2TZMachineState *mms, void *opaque,
      * the MSC connects to the IoTKit AHB Slave Expansion port, so the
      * DMA devices can see all devices and memory that the CPU does.
      */
-    object_initialize_child(OBJECT(mms), mscname, msc, TYPE_TZ_MSC);
+    sysbus_init_child_obj(OBJECT(mms), mscname, msc, sizeof(*msc), TYPE_TZ_MSC);
     msc_downstream = sysbus_mmio_get_region(SYS_BUS_DEVICE(&mms->iotkit), 0);
-    object_property_set_link(OBJECT(msc), "downstream",
-                             OBJECT(msc_downstream), &error_fatal);
-    object_property_set_link(OBJECT(msc), "idau", OBJECT(mms), &error_fatal);
-    sysbus_realize(SYS_BUS_DEVICE(msc), &error_fatal);
+    object_property_set_link(OBJECT(msc), OBJECT(msc_downstream),
+                             "downstream", &error_fatal);
+    object_property_set_link(OBJECT(msc), OBJECT(mms),
+                             "idau", &error_fatal);
+    object_property_set_bool(OBJECT(msc), true, "realized", &error_fatal);
 
     qdev_connect_gpio_out_named(DEVICE(msc), "irq", 0,
                                 qdev_get_gpio_in_named(iotkitdev,
@@ -324,18 +308,20 @@ static MemoryRegion *make_dma(MPS2TZMachineState *mms, void *opaque,
                                                  "cfg_sec_resp", 0));
     msc_upstream = sysbus_mmio_get_region(SYS_BUS_DEVICE(msc), 0);
 
-    object_initialize_child(OBJECT(mms), name, dma, TYPE_PL081);
-    object_property_set_link(OBJECT(dma), "downstream", OBJECT(msc_upstream),
-                             &error_fatal);
-    sysbus_realize(SYS_BUS_DEVICE(dma), &error_fatal);
+    sysbus_init_child_obj(OBJECT(mms), name, dma, sizeof(*dma), TYPE_PL081);
+    object_property_set_link(OBJECT(dma), OBJECT(msc_upstream),
+                             "downstream", &error_fatal);
+    object_property_set_bool(OBJECT(dma), true, "realized", &error_fatal);
 
     s = SYS_BUS_DEVICE(dma);
     /* Wire up DMACINTR, DMACINTERR, DMACINTTC */
-    sysbus_connect_irq(s, 0, get_sse_irq_in(mms, 58 + i * 3));
-    sysbus_connect_irq(s, 1, get_sse_irq_in(mms, 56 + i * 3));
-    sysbus_connect_irq(s, 2, get_sse_irq_in(mms, 57 + i * 3));
+    sysbus_connect_irq(s, 0, qdev_get_gpio_in_named(iotkitdev,
+                                                    "EXP_IRQ", 58 + i * 3));
+    sysbus_connect_irq(s, 1, qdev_get_gpio_in_named(iotkitdev,
+                                                    "EXP_IRQ", 56 + i * 3));
+    sysbus_connect_irq(s, 2, qdev_get_gpio_in_named(iotkitdev,
+                                                    "EXP_IRQ", 57 + i * 3));
 
-    g_free(mscname);
     return sysbus_mmio_get_region(s, 0);
 }
 
@@ -352,31 +338,21 @@ static MemoryRegion *make_spi(MPS2TZMachineState *mms, void *opaque,
      */
     PL022State *spi = opaque;
     int i = spi - &mms->spi[0];
+    DeviceState *iotkitdev = DEVICE(&mms->iotkit);
     SysBusDevice *s;
 
-    object_initialize_child(OBJECT(mms), name, spi, TYPE_PL022);
-    sysbus_realize(SYS_BUS_DEVICE(spi), &error_fatal);
+    sysbus_init_child_obj(OBJECT(mms), name, spi, sizeof(mms->spi[0]),
+                          TYPE_PL022);
+    object_property_set_bool(OBJECT(spi), true, "realized", &error_fatal);
     s = SYS_BUS_DEVICE(spi);
-    sysbus_connect_irq(s, 0, get_sse_irq_in(mms, 51 + i));
-    return sysbus_mmio_get_region(s, 0);
-}
-
-static MemoryRegion *make_i2c(MPS2TZMachineState *mms, void *opaque,
-                              const char *name, hwaddr size)
-{
-    ArmSbconI2CState *i2c = opaque;
-    SysBusDevice *s;
-
-    object_initialize_child(OBJECT(mms), name, i2c, TYPE_ARM_SBCON_I2C);
-    s = SYS_BUS_DEVICE(i2c);
-    sysbus_realize(s, &error_fatal);
+    sysbus_connect_irq(s, 0,
+                       qdev_get_gpio_in_named(iotkitdev, "EXP_IRQ", 51 + i));
     return sysbus_mmio_get_region(s, 0);
 }
 
 static void mps2tz_common_init(MachineState *machine)
 {
     MPS2TZMachineState *mms = MPS2TZ_MACHINE(machine);
-    MPS2TZMachineClass *mmc = MPS2TZ_MACHINE_GET_CLASS(mms);
     MachineClass *mc = MACHINE_GET_CLASS(machine);
     MemoryRegion *system_memory = get_system_memory();
     DeviceState *iotkitdev;
@@ -389,58 +365,28 @@ static void mps2tz_common_init(MachineState *machine)
         exit(1);
     }
 
-    if (machine->ram_size != mc->default_ram_size) {
-        char *sz = size_to_str(mc->default_ram_size);
-        error_report("Invalid RAM size, should be %s", sz);
-        g_free(sz);
-        exit(EXIT_FAILURE);
-    }
-
-    object_initialize_child(OBJECT(machine), TYPE_IOTKIT, &mms->iotkit,
-                            mmc->armsse_type);
+    sysbus_init_child_obj(OBJECT(machine), "iotkit", &mms->iotkit,
+                          sizeof(mms->iotkit), TYPE_IOTKIT);
     iotkitdev = DEVICE(&mms->iotkit);
-    object_property_set_link(OBJECT(&mms->iotkit), "memory",
-                             OBJECT(system_memory), &error_abort);
-    qdev_prop_set_uint32(iotkitdev, "EXP_NUMIRQ", MPS2TZ_NUMIRQ);
+    object_property_set_link(OBJECT(&mms->iotkit), OBJECT(system_memory),
+                             "memory", &error_abort);
+    qdev_prop_set_uint32(iotkitdev, "EXP_NUMIRQ", 92);
     qdev_prop_set_uint32(iotkitdev, "MAINCLK", SYSCLK_FRQ);
-    sysbus_realize(SYS_BUS_DEVICE(&mms->iotkit), &error_fatal);
-
-    /*
-     * The AN521 needs us to create splitters to feed the IRQ inputs
-     * for each CPU in the SSE-200 from each device in the board.
-     */
-    if (mmc->fpga_type == FPGA_AN521) {
-        for (i = 0; i < MPS2TZ_NUMIRQ; i++) {
-            char *name = g_strdup_printf("mps2-irq-splitter%d", i);
-            SplitIRQ *splitter = &mms->cpu_irq_splitter[i];
-
-            object_initialize_child_with_props(OBJECT(machine), name,
-                                               splitter, sizeof(*splitter),
-                                               TYPE_SPLIT_IRQ, &error_fatal,
-                                               NULL);
-            g_free(name);
-
-            object_property_set_int(OBJECT(splitter), "num-lines", 2,
-                                    &error_fatal);
-            qdev_realize(DEVICE(splitter), NULL, &error_fatal);
-            qdev_connect_gpio_out(DEVICE(splitter), 0,
-                                  qdev_get_gpio_in_named(DEVICE(&mms->iotkit),
-                                                         "EXP_IRQ", i));
-            qdev_connect_gpio_out(DEVICE(splitter), 1,
-                                  qdev_get_gpio_in_named(DEVICE(&mms->iotkit),
-                                                         "EXP_CPU1_IRQ", i));
-        }
-    }
+    object_property_set_bool(OBJECT(&mms->iotkit), true, "realized",
+                             &error_fatal);
 
     /* The sec_resp_cfg output from the IoTKit must be split into multiple
      * lines, one for each of the PPCs we create here, plus one per MSC.
      */
-    object_initialize_child(OBJECT(machine), "sec-resp-splitter",
-                            &mms->sec_resp_splitter, TYPE_SPLIT_IRQ);
-    object_property_set_int(OBJECT(&mms->sec_resp_splitter), "num-lines",
+    object_initialize(&mms->sec_resp_splitter, sizeof(mms->sec_resp_splitter),
+                      TYPE_SPLIT_IRQ);
+    object_property_add_child(OBJECT(machine), "sec-resp-splitter",
+                              OBJECT(&mms->sec_resp_splitter), &error_abort);
+    object_property_set_int(OBJECT(&mms->sec_resp_splitter),
                             ARRAY_SIZE(mms->ppc) + ARRAY_SIZE(mms->msc),
-                            &error_fatal);
-    qdev_realize(DEVICE(&mms->sec_resp_splitter), NULL, &error_fatal);
+                            "num-lines", &error_fatal);
+    object_property_set_bool(OBJECT(&mms->sec_resp_splitter), true,
+                             "realized", &error_fatal);
     dev_splitter = DEVICE(&mms->sec_resp_splitter);
     qdev_connect_gpio_out_named(iotkitdev, "sec_resp_cfg", 0,
                                 qdev_get_gpio_in(dev_splitter, 0));
@@ -462,19 +408,24 @@ static void mps2tz_common_init(MachineState *machine)
      * tradeoffs. For QEMU they're all just RAM, though. We arbitrarily
      * call the 16MB our "system memory", as it's the largest lump.
      */
-    memory_region_add_subregion(system_memory, 0x80000000, machine->ram);
+    memory_region_allocate_system_memory(&mms->psram,
+                                         NULL, "mps.ram", 0x01000000);
+    memory_region_add_subregion(system_memory, 0x80000000, &mms->psram);
 
     /* The overflow IRQs for all UARTs are ORed together.
      * Tx, Rx and "combined" IRQs are sent to the NVIC separately.
      * Create the OR gate for this.
      */
-    object_initialize_child(OBJECT(mms), "uart-irq-orgate",
-                            &mms->uart_irq_orgate, TYPE_OR_IRQ);
-    object_property_set_int(OBJECT(&mms->uart_irq_orgate), "num-lines", 10,
+    object_initialize(&mms->uart_irq_orgate, sizeof(mms->uart_irq_orgate),
+                      TYPE_OR_IRQ);
+    object_property_add_child(OBJECT(mms), "uart-irq-orgate",
+                              OBJECT(&mms->uart_irq_orgate), &error_abort);
+    object_property_set_int(OBJECT(&mms->uart_irq_orgate), 10, "num-lines",
                             &error_fatal);
-    qdev_realize(DEVICE(&mms->uart_irq_orgate), NULL, &error_fatal);
+    object_property_set_bool(OBJECT(&mms->uart_irq_orgate), true,
+                             "realized", &error_fatal);
     qdev_connect_gpio_out(DEVICE(&mms->uart_irq_orgate), 0,
-                          get_sse_irq_in(mms, 15));
+                          qdev_get_gpio_in_named(iotkitdev, "EXP_IRQ", 15));
 
     /* Most of the devices in the FPGA are behind Peripheral Protection
      * Controllers. The required order for initializing things is:
@@ -507,10 +458,10 @@ static void mps2tz_common_init(MachineState *machine)
                 { "uart2", make_uart, &mms->uart[2], 0x40202000, 0x1000 },
                 { "uart3", make_uart, &mms->uart[3], 0x40203000, 0x1000 },
                 { "uart4", make_uart, &mms->uart[4], 0x40204000, 0x1000 },
-                { "i2c0", make_i2c, &mms->i2c[0], 0x40207000, 0x1000 },
-                { "i2c1", make_i2c, &mms->i2c[1], 0x40208000, 0x1000 },
-                { "i2c2", make_i2c, &mms->i2c[2], 0x4020c000, 0x1000 },
-                { "i2c3", make_i2c, &mms->i2c[3], 0x4020d000, 0x1000 },
+                { "i2c0", make_unimp_dev, &mms->i2c[0], 0x40207000, 0x1000 },
+                { "i2c1", make_unimp_dev, &mms->i2c[1], 0x40208000, 0x1000 },
+                { "i2c2", make_unimp_dev, &mms->i2c[2], 0x4020c000, 0x1000 },
+                { "i2c3", make_unimp_dev, &mms->i2c[3], 0x4020d000, 0x1000 },
             },
         }, {
             .name = "apb_ppcexp2",
@@ -548,8 +499,8 @@ static void mps2tz_common_init(MachineState *machine)
         int port;
         char *gpioname;
 
-        object_initialize_child(OBJECT(machine), ppcinfo->name, ppc,
-                                TYPE_TZ_PPC);
+        sysbus_init_child_obj(OBJECT(machine), ppcinfo->name, ppc,
+                              sizeof(TZPPC), TYPE_TZ_PPC);
         ppcdev = DEVICE(ppc);
 
         for (port = 0; port < TZ_NUM_PORTS; port++) {
@@ -563,12 +514,12 @@ static void mps2tz_common_init(MachineState *machine)
 
             mr = pinfo->devfn(mms, pinfo->opaque, pinfo->name, pinfo->size);
             portname = g_strdup_printf("port[%d]", port);
-            object_property_set_link(OBJECT(ppc), portname, OBJECT(mr),
-                                     &error_fatal);
+            object_property_set_link(OBJECT(ppc), OBJECT(mr),
+                                     portname, &error_fatal);
             g_free(portname);
         }
 
-        sysbus_realize(SYS_BUS_DEVICE(ppc), &error_fatal);
+        object_property_set_bool(OBJECT(ppc), true, "realized", &error_fatal);
 
         for (port = 0; port < TZ_NUM_PORTS; port++) {
             const PPCPortInfo *pinfo = &ppcinfo->ports[port];
@@ -641,9 +592,8 @@ static void mps2tz_class_init(ObjectClass *oc, void *data)
     IDAUInterfaceClass *iic = IDAU_INTERFACE_CLASS(oc);
 
     mc->init = mps2tz_common_init;
+    mc->max_cpus = 1;
     iic->check = mps2_tz_idau_check;
-    mc->default_ram_size = 16 * MiB;
-    mc->default_ram_id = "mps.ram";
 }
 
 static void mps2tz_an505_class_init(ObjectClass *oc, void *data)
@@ -652,28 +602,9 @@ static void mps2tz_an505_class_init(ObjectClass *oc, void *data)
     MPS2TZMachineClass *mmc = MPS2TZ_MACHINE_CLASS(oc);
 
     mc->desc = "ARM MPS2 with AN505 FPGA image for Cortex-M33";
-    mc->default_cpus = 1;
-    mc->min_cpus = mc->default_cpus;
-    mc->max_cpus = mc->default_cpus;
     mmc->fpga_type = FPGA_AN505;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("cortex-m33");
     mmc->scc_id = 0x41045050;
-    mmc->armsse_type = TYPE_IOTKIT;
-}
-
-static void mps2tz_an521_class_init(ObjectClass *oc, void *data)
-{
-    MachineClass *mc = MACHINE_CLASS(oc);
-    MPS2TZMachineClass *mmc = MPS2TZ_MACHINE_CLASS(oc);
-
-    mc->desc = "ARM MPS2 with AN521 FPGA image for dual Cortex-M33";
-    mc->default_cpus = 2;
-    mc->min_cpus = mc->default_cpus;
-    mc->max_cpus = mc->default_cpus;
-    mmc->fpga_type = FPGA_AN521;
-    mc->default_cpu_type = ARM_CPU_TYPE_NAME("cortex-m33");
-    mmc->scc_id = 0x41045210;
-    mmc->armsse_type = TYPE_SSE200;
 }
 
 static const TypeInfo mps2tz_info = {
@@ -695,17 +626,10 @@ static const TypeInfo mps2tz_an505_info = {
     .class_init = mps2tz_an505_class_init,
 };
 
-static const TypeInfo mps2tz_an521_info = {
-    .name = TYPE_MPS2TZ_AN521_MACHINE,
-    .parent = TYPE_MPS2TZ_MACHINE,
-    .class_init = mps2tz_an521_class_init,
-};
-
 static void mps2tz_machine_init(void)
 {
     type_register_static(&mps2tz_info);
     type_register_static(&mps2tz_an505_info);
-    type_register_static(&mps2tz_an521_info);
 }
 
 type_init(mps2tz_machine_init);

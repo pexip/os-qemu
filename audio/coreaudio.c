@@ -26,7 +26,7 @@
 #include <CoreAudio/CoreAudio.h>
 #include <pthread.h>            /* pthread_X */
 
-#include "qemu/module.h"
+#include "qemu-common.h"
 #include "audio.h"
 
 #define AUDIO_CAP "coreaudio"
@@ -36,6 +36,11 @@
 #define MAC_OS_X_VERSION_10_6 1060
 #endif
 
+typedef struct {
+    int buffer_frames;
+    int nbuffers;
+} CoreaudioConf;
+
 typedef struct coreaudioVoiceOut {
     HWVoiceOut hw;
     pthread_mutex_t mutex;
@@ -43,6 +48,9 @@ typedef struct coreaudioVoiceOut {
     UInt32 audioDevicePropertyBufferFrameSize;
     AudioStreamBasicDescription outputStreamBasicDescription;
     AudioDeviceIOProcID ioprocid;
+    int live;
+    int decr;
+    int rpos;
 } coreaudioVoiceOut;
 
 #if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_6
@@ -394,29 +402,31 @@ static int coreaudio_unlock (coreaudioVoiceOut *core, const char *fn_name)
     return 0;
 }
 
-#define COREAUDIO_WRAPPER_FUNC(name, ret_type, args_decl, args) \
-    static ret_type glue(coreaudio_, name)args_decl             \
-    {                                                           \
-        coreaudioVoiceOut *core = (coreaudioVoiceOut *) hw;     \
-        ret_type ret;                                           \
-                                                                \
-        if (coreaudio_lock(core, "coreaudio_" #name)) {         \
-            return 0;                                           \
-        }                                                       \
-                                                                \
-        ret = glue(audio_generic_, name)args;                   \
-                                                                \
-        coreaudio_unlock(core, "coreaudio_" #name);             \
-        return ret;                                             \
+static int coreaudio_run_out (HWVoiceOut *hw, int live)
+{
+    int decr;
+    coreaudioVoiceOut *core = (coreaudioVoiceOut *) hw;
+
+    if (coreaudio_lock (core, "coreaudio_run_out")) {
+        return 0;
     }
-COREAUDIO_WRAPPER_FUNC(get_buffer_out, void *, (HWVoiceOut *hw, size_t *size),
-                       (hw, size))
-COREAUDIO_WRAPPER_FUNC(put_buffer_out, size_t,
-                       (HWVoiceOut *hw, void *buf, size_t size),
-                       (hw, buf, size))
-COREAUDIO_WRAPPER_FUNC(write, size_t, (HWVoiceOut *hw, void *buf, size_t size),
-                       (hw, buf, size))
-#undef COREAUDIO_WRAPPER_FUNC
+
+    if (core->decr > live) {
+        ldebug ("core->decr %d live %d core->live %d\n",
+                core->decr,
+                live,
+                core->live);
+    }
+
+    decr = audio_MIN (core->decr, live);
+    core->decr -= decr;
+
+    core->live = live - decr;
+    hw->rpos = core->rpos;
+
+    coreaudio_unlock (core, "coreaudio_run_out");
+    return decr;
+}
 
 /* callback to feed audiooutput buffer */
 static OSStatus audioDeviceIOProc(
@@ -428,11 +438,19 @@ static OSStatus audioDeviceIOProc(
     const AudioTimeStamp* inOutputTime,
     void* hwptr)
 {
-    UInt32 frameCount, pending_frames;
-    void *out = outOutputData->mBuffers[0].mData;
+    UInt32 frame, frameCount;
+    float *out = outOutputData->mBuffers[0].mData;
     HWVoiceOut *hw = hwptr;
     coreaudioVoiceOut *core = (coreaudioVoiceOut *) hwptr;
-    size_t len;
+    int rpos, live;
+    struct st_sample *src;
+#ifndef FLOAT_MIXENG
+#ifdef RECIPROCAL
+    const float scale = 1.f / UINT_MAX;
+#else
+    const float scale = UINT_MAX;
+#endif
+#endif
 
     if (coreaudio_lock (core, "audioDeviceIOProc")) {
         inInputTime = 0;
@@ -440,35 +458,45 @@ static OSStatus audioDeviceIOProc(
     }
 
     frameCount = core->audioDevicePropertyBufferFrameSize;
-    pending_frames = hw->pending_emul / hw->info.bytes_per_frame;
+    live = core->live;
 
     /* if there are not enough samples, set signal and return */
-    if (pending_frames < frameCount) {
+    if (live < frameCount) {
         inInputTime = 0;
         coreaudio_unlock (core, "audioDeviceIOProc(empty)");
         return 0;
     }
 
-    len = frameCount * hw->info.bytes_per_frame;
-    while (len) {
-        size_t write_len;
-        ssize_t start = ((ssize_t) hw->pos_emul) - hw->pending_emul;
-        if (start < 0) {
-            start += hw->size_emul;
-        }
-        assert(start >= 0 && start < hw->size_emul);
+    rpos = core->rpos;
+    src = hw->mix_buf + rpos;
 
-        write_len = MIN(MIN(hw->pending_emul, len),
-                        hw->size_emul - start);
-
-        memcpy(out, hw->buf_emul + start, write_len);
-        hw->pending_emul -= write_len;
-        len -= write_len;
-        out += write_len;
+    /* fill buffer */
+    for (frame = 0; frame < frameCount; frame++) {
+#ifdef FLOAT_MIXENG
+        *out++ = src[frame].l; /* left channel */
+        *out++ = src[frame].r; /* right channel */
+#else
+#ifdef RECIPROCAL
+        *out++ = src[frame].l * scale; /* left channel */
+        *out++ = src[frame].r * scale; /* right channel */
+#else
+        *out++ = src[frame].l / scale; /* left channel */
+        *out++ = src[frame].r / scale; /* right channel */
+#endif
+#endif
     }
+
+    rpos = (rpos + frameCount) % hw->samples;
+    core->decr += frameCount;
+    core->rpos = rpos;
 
     coreaudio_unlock (core, "audioDeviceIOProc");
     return 0;
+}
+
+static int coreaudio_write (SWVoiceOut *sw, void *buf, int len)
+{
+    return audio_pcm_sw_write (sw, buf, len);
 }
 
 static int coreaudio_init_out(HWVoiceOut *hw, struct audsettings *as,
@@ -479,10 +507,7 @@ static int coreaudio_init_out(HWVoiceOut *hw, struct audsettings *as,
     int err;
     const char *typ = "playback";
     AudioValueRange frameRange;
-    Audiodev *dev = drv_opaque;
-    AudiodevCoreaudioPerDirectionOptions *cpdo = dev->u.coreaudio.out;
-    int frames;
-    struct audsettings fake_as;
+    CoreaudioConf *conf = drv_opaque;
 
     /* create mutex */
     err = pthread_mutex_init(&core->mutex, NULL);
@@ -491,9 +516,6 @@ static int coreaudio_init_out(HWVoiceOut *hw, struct audsettings *as,
         return -1;
     }
 
-    fake_as = *as;
-    as = &fake_as;
-    as->fmt = AUDIO_FORMAT_F32;
     audio_pcm_init_info (&hw->info, as);
 
     status = coreaudio_get_voice(&core->outputDeviceID);
@@ -516,17 +538,16 @@ static int coreaudio_init_out(HWVoiceOut *hw, struct audsettings *as,
         return -1;
     }
 
-    frames = audio_buffer_frames(
-        qapi_AudiodevCoreaudioPerDirectionOptions_base(cpdo), as, 11610);
-    if (frameRange.mMinimum > frames) {
+    if (frameRange.mMinimum > conf->buffer_frames) {
         core->audioDevicePropertyBufferFrameSize = (UInt32) frameRange.mMinimum;
         dolog ("warning: Upsizing Buffer Frames to %f\n", frameRange.mMinimum);
-    } else if (frameRange.mMaximum < frames) {
+    }
+    else if (frameRange.mMaximum < conf->buffer_frames) {
         core->audioDevicePropertyBufferFrameSize = (UInt32) frameRange.mMaximum;
         dolog ("warning: Downsizing Buffer Frames to %f\n", frameRange.mMaximum);
     }
     else {
-        core->audioDevicePropertyBufferFrameSize = frames;
+        core->audioDevicePropertyBufferFrameSize = conf->buffer_frames;
     }
 
     /* set Buffer Frame Size */
@@ -547,8 +568,7 @@ static int coreaudio_init_out(HWVoiceOut *hw, struct audsettings *as,
                            "Could not get device buffer frame size\n");
         return -1;
     }
-    hw->samples = (cpdo->has_buffer_count ? cpdo->buffer_count : 4) *
-        core->audioDevicePropertyBufferFrameSize;
+    hw->samples = conf->nbuffers * core->audioDevicePropertyBufferFrameSize;
 
     /* get StreamFormat */
     status = coreaudio_get_streamformat(core->outputDeviceID,
@@ -562,7 +582,6 @@ static int coreaudio_init_out(HWVoiceOut *hw, struct audsettings *as,
 
     /* set Samplerate */
     core->outputStreamBasicDescription.mSampleRate = (Float64) as->freq;
-
     status = coreaudio_set_streamformat(core->outputDeviceID,
                                         &core->outputStreamBasicDescription);
     if (status != kAudioHardwareNoError) {
@@ -629,12 +648,13 @@ static void coreaudio_fini_out (HWVoiceOut *hw)
     }
 }
 
-static void coreaudio_enable_out(HWVoiceOut *hw, bool enable)
+static int coreaudio_ctl_out (HWVoiceOut *hw, int cmd, ...)
 {
     OSStatus status;
     coreaudioVoiceOut *core = (coreaudioVoiceOut *) hw;
 
-    if (enable) {
+    switch (cmd) {
+    case VOICE_ENABLE:
         /* start playback */
         if (!isPlaying(core->outputDeviceID)) {
             status = AudioDeviceStart(core->outputDeviceID, core->ioprocid);
@@ -642,7 +662,9 @@ static void coreaudio_enable_out(HWVoiceOut *hw, bool enable)
                 coreaudio_logerr (status, "Could not resume playback\n");
             }
         }
-    } else {
+        break;
+
+    case VOICE_DISABLE:
         /* stop playback */
         if (!audio_is_cleaning_up()) {
             if (isPlaying(core->outputDeviceID)) {
@@ -653,33 +675,57 @@ static void coreaudio_enable_out(HWVoiceOut *hw, bool enable)
                 }
             }
         }
+        break;
     }
+    return 0;
 }
 
-static void *coreaudio_audio_init(Audiodev *dev)
+static CoreaudioConf glob_conf = {
+    .buffer_frames = 512,
+    .nbuffers = 4,
+};
+
+static void *coreaudio_audio_init (void)
 {
-    return dev;
+    CoreaudioConf *conf = g_malloc(sizeof(CoreaudioConf));
+    *conf = glob_conf;
+
+    return conf;
 }
 
 static void coreaudio_audio_fini (void *opaque)
 {
+    g_free(opaque);
 }
+
+static struct audio_option coreaudio_options[] = {
+    {
+        .name  = "BUFFER_SIZE",
+        .tag   = AUD_OPT_INT,
+        .valp  = &glob_conf.buffer_frames,
+        .descr = "Size of the buffer in frames"
+    },
+    {
+        .name  = "BUFFER_COUNT",
+        .tag   = AUD_OPT_INT,
+        .valp  = &glob_conf.nbuffers,
+        .descr = "Number of buffers"
+    },
+    { /* End of list */ }
+};
 
 static struct audio_pcm_ops coreaudio_pcm_ops = {
     .init_out = coreaudio_init_out,
     .fini_out = coreaudio_fini_out,
-  /* wrapper for audio_generic_write */
+    .run_out  = coreaudio_run_out,
     .write    = coreaudio_write,
-  /* wrapper for audio_generic_get_buffer_out */
-    .get_buffer_out = coreaudio_get_buffer_out,
-  /* wrapper for audio_generic_put_buffer_out */
-    .put_buffer_out = coreaudio_put_buffer_out,
-    .enable_out = coreaudio_enable_out
+    .ctl_out  = coreaudio_ctl_out
 };
 
 static struct audio_driver coreaudio_audio_driver = {
     .name           = "coreaudio",
     .descr          = "CoreAudio http://developer.apple.com/audio/coreaudio.html",
+    .options        = coreaudio_options,
     .init           = coreaudio_audio_init,
     .fini           = coreaudio_audio_fini,
     .pcm_ops        = &coreaudio_pcm_ops,

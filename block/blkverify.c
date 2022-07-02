@@ -14,7 +14,6 @@
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qstring.h"
 #include "qemu/cutils.h"
-#include "qemu/module.h"
 #include "qemu/option.h"
 
 typedef struct {
@@ -116,16 +115,16 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
     int ret;
 
     opts = qemu_opts_create(&runtime_opts, NULL, 0, &error_abort);
-    if (!qemu_opts_absorb_qdict(opts, options, errp)) {
+    qemu_opts_absorb_qdict(opts, options, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
         ret = -EINVAL;
         goto fail;
     }
 
     /* Open the raw file */
     bs->file = bdrv_open_child(qemu_opt_get(opts, "x-raw"), options, "raw",
-                               bs, &child_of_bds,
-                               BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY,
-                               false, &local_err);
+                               bs, &child_file, false, &local_err);
     if (local_err) {
         ret = -EINVAL;
         error_propagate(errp, local_err);
@@ -134,8 +133,8 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
 
     /* Open the test file */
     s->test_file = bdrv_open_child(qemu_opt_get(opts, "x-image"), options,
-                                   "test", bs, &child_of_bds, BDRV_CHILD_DATA,
-                                   false, &local_err);
+                                   "test", bs, &child_format, false,
+                                   &local_err);
     if (local_err) {
         ret = -EINVAL;
         error_propagate(errp, local_err);
@@ -268,23 +267,40 @@ static int blkverify_co_flush(BlockDriverState *bs)
     return bdrv_co_flush(s->test_file->bs);
 }
 
-static bool blkverify_recurse_can_replace(BlockDriverState *bs,
-                                          BlockDriverState *to_replace)
+static bool blkverify_recurse_is_first_non_filter(BlockDriverState *bs,
+                                                  BlockDriverState *candidate)
 {
     BDRVBlkverifyState *s = bs->opaque;
 
-    /*
-     * blkverify quits the whole qemu process if there is a mismatch
-     * between bs->file->bs and s->test_file->bs.  Therefore, we know
-     * know that both must match bs and we can recurse down to either.
-     */
-    return bdrv_recurse_can_replace(bs->file->bs, to_replace) ||
-           bdrv_recurse_can_replace(s->test_file->bs, to_replace);
+    bool perm = bdrv_recurse_is_first_non_filter(bs->file->bs, candidate);
+
+    if (perm) {
+        return true;
+    }
+
+    return bdrv_recurse_is_first_non_filter(s->test_file->bs, candidate);
 }
 
-static void blkverify_refresh_filename(BlockDriverState *bs)
+static void blkverify_refresh_filename(BlockDriverState *bs, QDict *options)
 {
     BDRVBlkverifyState *s = bs->opaque;
+
+    /* bs->file->bs has already been refreshed */
+    bdrv_refresh_filename(s->test_file->bs);
+
+    if (bs->file->bs->full_open_options
+        && s->test_file->bs->full_open_options)
+    {
+        QDict *opts = qdict_new();
+        qdict_put_str(opts, "driver", "blkverify");
+
+        qdict_put(opts, "raw",
+                  qobject_ref(bs->file->bs->full_open_options));
+        qdict_put(opts, "test",
+                  qobject_ref(s->test_file->bs->full_open_options));
+
+        bs->full_open_options = opts;
+    }
 
     if (bs->file->bs->exact_filename[0]
         && s->test_file->bs->exact_filename[0])
@@ -300,15 +316,6 @@ static void blkverify_refresh_filename(BlockDriverState *bs)
     }
 }
 
-static char *blkverify_dirname(BlockDriverState *bs, Error **errp)
-{
-    /* In general, there are two BDSs with different dirnames below this one;
-     * so there is no unique dirname we could return (unless both are equal by
-     * chance). Therefore, to be consistent, just always return NULL. */
-    error_setg(errp, "Cannot generate a base directory for blkverify nodes");
-    return NULL;
-}
-
 static BlockDriver bdrv_blkverify = {
     .format_name                      = "blkverify",
     .protocol_name                    = "blkverify",
@@ -317,17 +324,16 @@ static BlockDriver bdrv_blkverify = {
     .bdrv_parse_filename              = blkverify_parse_filename,
     .bdrv_file_open                   = blkverify_open,
     .bdrv_close                       = blkverify_close,
-    .bdrv_child_perm                  = bdrv_default_perms,
+    .bdrv_child_perm                  = bdrv_filter_default_perms,
     .bdrv_getlength                   = blkverify_getlength,
     .bdrv_refresh_filename            = blkverify_refresh_filename,
-    .bdrv_dirname                     = blkverify_dirname,
 
     .bdrv_co_preadv                   = blkverify_co_preadv,
     .bdrv_co_pwritev                  = blkverify_co_pwritev,
     .bdrv_co_flush                    = blkverify_co_flush,
 
     .is_filter                        = true,
-    .bdrv_recurse_can_replace         = blkverify_recurse_can_replace,
+    .bdrv_recurse_is_first_non_filter = blkverify_recurse_is_first_non_filter,
 };
 
 static void bdrv_blkverify_init(void)

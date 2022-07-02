@@ -1,5 +1,4 @@
 # -*- Mode: Python -*-
-# vim: filetype=python
 #
 
 ##
@@ -13,19 +12,19 @@
 #
 # Sets the password of a remote display session.
 #
-# @protocol: - 'vnc' to modify the VNC server password
-#            - 'spice' to modify the Spice server password
+# @protocol: `vnc' to modify the VNC server password
+#            `spice' to modify the Spice server password
 #
 # @password: the new password
 #
 # @connected: how to handle existing clients when changing the
-#             password.  If nothing is specified, defaults to 'keep'
-#             'fail' to fail the command if clients are connected
-#             'disconnect' to disconnect existing clients
-#             'keep' to maintain existing clients
+#                       password.  If nothing is specified, defaults to `keep'
+#                       `fail' to fail the command if clients are connected
+#                       `disconnect' to disconnect existing clients
+#                       `keep' to maintain existing clients
 #
-# Returns: - Nothing on success
-#          - If Spice is not enabled, DeviceNotFound
+# Returns: Nothing on success
+#          If Spice is not enabled, DeviceNotFound
 #
 # Since: 0.14.0
 #
@@ -44,17 +43,16 @@
 #
 # Expire the password of a remote display server.
 #
-# @protocol: the name of the remote display protocol 'vnc' or 'spice'
+# @protocol: the name of the remote display protocol `vnc' or `spice'
 #
 # @time: when to expire the password.
+#        `now' to expire the password immediately
+#        `never' to cancel password expiration
+#        `+INT' where INT is the number of seconds from now (integer)
+#        `INT' where INT is the absolute time in seconds
 #
-#        - 'now' to expire the password immediately
-#        - 'never' to cancel password expiration
-#        - '+INT' where INT is the number of seconds from now (integer)
-#        - 'INT' where INT is the absolute time in seconds
-#
-# Returns: - Nothing on success
-#          - If @protocol is 'spice' and Spice is not active, DeviceNotFound
+# Returns: Nothing on success
+#          If @protocol is `spice' and Spice is not active, DeviceNotFound
 #
 # Since: 0.14.0
 #
@@ -98,8 +96,7 @@
 #
 ##
 { 'command': 'screendump',
-  'data': {'filename': 'str', '*device': 'str', '*head': 'int'},
-  'coroutine': true }
+  'data': {'filename': 'str', '*device': 'str', '*head': 'int'} }
 
 ##
 # == Spice
@@ -204,10 +201,9 @@
 # @tls-port: The SPICE server's TLS port number.
 #
 # @auth: the current authentication type used by the server
-#
-#        - 'none'  if no authentication is being used
-#        - 'spice' uses SASL or direct TLS authentication, depending on command
-#          line options
+#        'none'  if no authentication is being used
+#        'spice' uses SASL or direct TLS authentication, depending on command
+#                line options
 #
 # @mouse-mode: The mode in which the mouse cursor is displayed currently. Can
 #              be determined by the client or the server, or unknown if spice
@@ -437,28 +433,27 @@
 # @host: The hostname the VNC server is bound to.  This depends on
 #        the name resolution on the host and may be an IP address.
 #
-# @family: - 'ipv6' if the host is listening for IPv6 connections
-#          - 'ipv4' if the host is listening for IPv4 connections
-#          - 'unix' if the host is listening on a unix domain socket
-#          - 'unknown' otherwise
+# @family: 'ipv6' if the host is listening for IPv6 connections
+#                    'ipv4' if the host is listening for IPv4 connections
+#                    'unix' if the host is listening on a unix domain socket
+#                    'unknown' otherwise
 #
 # @service: The service name of the server's port.  This may depends
 #           on the host system's service database so symbolic names should not
 #           be relied on.
 #
 # @auth: the current authentication type used by the server
-#
-#        - 'none' if no authentication is being used
-#        - 'vnc' if VNC authentication is being used
-#        - 'vencrypt+plain' if VEncrypt is used with plain text authentication
-#        - 'vencrypt+tls+none' if VEncrypt is used with TLS and no authentication
-#        - 'vencrypt+tls+vnc' if VEncrypt is used with TLS and VNC authentication
-#        - 'vencrypt+tls+plain' if VEncrypt is used with TLS and plain text auth
-#        - 'vencrypt+x509+none' if VEncrypt is used with x509 and no auth
-#        - 'vencrypt+x509+vnc' if VEncrypt is used with x509 and VNC auth
-#        - 'vencrypt+x509+plain' if VEncrypt is used with x509 and plain text auth
-#        - 'vencrypt+tls+sasl' if VEncrypt is used with TLS and SASL auth
-#        - 'vencrypt+x509+sasl' if VEncrypt is used with x509 and SASL auth
+#        'none' if no authentication is being used
+#        'vnc' if VNC authentication is being used
+#        'vencrypt+plain' if VEncrypt is used with plain text authentication
+#        'vencrypt+tls+none' if VEncrypt is used with TLS and no authentication
+#        'vencrypt+tls+vnc' if VEncrypt is used with TLS and VNC authentication
+#        'vencrypt+tls+plain' if VEncrypt is used with TLS and plain text auth
+#        'vencrypt+x509+none' if VEncrypt is used with x509 and no auth
+#        'vencrypt+x509+vnc' if VEncrypt is used with x509 and VNC auth
+#        'vencrypt+x509+plain' if VEncrypt is used with x509 and plain text auth
+#        'vencrypt+tls+sasl' if VEncrypt is used with TLS and SASL auth
+#        'vencrypt+x509+sasl' if VEncrypt is used with x509 and SASL auth
 #
 # @clients: a list of @VncClientInfo of all currently connected clients
 #
@@ -596,15 +591,14 @@
 #
 # Change the VNC server password.
 #
-# @password: the new password to use with VNC authentication
+# @password:  the new password to use with VNC authentication
 #
 # Since: 1.1
 #
-# Notes: An empty password in this command will set the password to the empty
-#        string.  Existing clients are unaffected by executing this command.
+# Notes:  An empty password in this command will set the password to the empty
+#         string.  Existing clients are unaffected by executing this command.
 ##
-{ 'command': 'change-vnc-password',
-  'data': { 'password': 'str' },
+{ 'command': 'change-vnc-password', 'data': {'password': 'str'},
   'if': 'defined(CONFIG_VNC)' }
 
 ##
@@ -617,7 +611,7 @@
 # @client: client information
 #
 # Note: This event is emitted before any authentication takes place, thus
-#       the authentication ID is not provided
+# the authentication ID is not provided
 #
 # Since: 0.13.0
 #
@@ -781,6 +775,7 @@
 # @ac_forward: since 2.10
 # @ac_refresh: since 2.10
 # @ac_bookmarks: since 2.10
+# altgr, altgr_r: dropped in 2.10
 #
 # @muhenkan: since 2.12
 # @katakanahiragana: since 2.12
@@ -844,8 +839,8 @@
 # @hold-time: time to delay key up events, milliseconds. Defaults
 #             to 100
 #
-# Returns: - Nothing on success
-#          - If key is unknown or redundant, InvalidParameter
+# Returns: Nothing on success
+#          If key is unknown or redundant, InvalidParameter
 #
 # Since: 1.3.0
 #
@@ -919,9 +914,9 @@
 #
 # Pointer motion input event.
 #
-# @axis: Which axis is referenced by @value.
-# @value: Pointer position.  For absolute coordinates the
-#         valid range is 0 -> 0x7ffff
+# @axis:   Which axis is referenced by @value.
+# @value:  Pointer position.  For absolute coordinates the
+#          valid range is 0 -> 0x7ffff
 #
 # Since: 2.0
 ##
@@ -935,11 +930,10 @@
 # Input event union.
 #
 # @type: the input type, one of:
-#
-#        - 'key': Input event of Keyboard
-#        - 'btn': Input event of pointer buttons
-#        - 'rel': Input event of relative pointer motion
-#        - 'abs': Input event of absolute pointer motion
+#  - 'key': Input event of Keyboard
+#  - 'btn': Input event of pointer buttons
+#  - 'rel': Input event of relative pointer motion
+#  - 'abs': Input event of absolute pointer motion
 #
 # Since: 2.0
 ##
@@ -954,6 +948,13 @@
 #
 # Send input event(s) to guest.
 #
+# @device: display device to send event(s) to.
+# @head: head to send event(s) to, in case the
+#        display device supports multiple scanouts.
+# @events: List of InputEvent union.
+#
+# Returns: Nothing on success.
+#
 # The @device and @head parameters can be used to send the input event
 # to specific input devices in case (a) multiple input devices of the
 # same kind are added to the virtual machine and (b) you have
@@ -965,19 +966,12 @@
 # are admissible, but devices with input routing config take
 # precedence.
 #
-# @device: display device to send event(s) to.
-# @head: head to send event(s) to, in case the
-#        display device supports multiple scanouts.
-# @events: List of InputEvent union.
-#
-# Returns: Nothing on success.
-#
 # Since: 2.6
 #
 # Note: The consoles are visible in the qom tree, under
-#       /backend/console[$index]. They have a device link and head property,
-#       so it is possible to map which console belongs to which device and
-#       display.
+# /backend/console[$index]. They have a device link and head property,
+# so it is possible to map which console belongs to which device and
+# display.
 #
 # Example:
 #
@@ -1021,17 +1015,6 @@
             '*head'  : 'int',
             'events' : [ 'InputEvent' ] } }
 
-##
-# @GrabToggleKeys:
-#
-# Keys to toggle input-linux between host and guest.
-#
-# Since: 4.0
-#
-##
-{ 'enum': 'GrabToggleKeys',
-  'data': [ 'ctrl-ctrl', 'alt-alt', 'shift-shift','meta-meta', 'scrolllock',
-            'ctrl-scrolllock' ] }
 
 ##
 # @DisplayGTK:
@@ -1083,63 +1066,20 @@
  # Since: 3.0
  #
  ##
-{ 'enum'    : 'DisplayGLMode',
-  'data'    : [ 'off', 'on', 'core', 'es' ] }
-
-##
-# @DisplayCurses:
-#
-# Curses display options.
-#
-# @charset:       Font charset used by guest (default: CP437).
-#
-# Since: 4.0
-#
-##
-{ 'struct'  : 'DisplayCurses',
-  'data'    : { '*charset'       : 'str' } }
+ { 'enum'    : 'DisplayGLMode',
+   'data'    : [ 'off', 'on', 'core', 'es' ] }
 
 ##
 # @DisplayType:
 #
 # Display (user interface) type.
 #
-# @default: The default user interface, selecting from the first available
-#           of gtk, sdl, cocoa, and vnc.
-#
-# @none: No user interface or video output display. The guest will
-#        still see an emulated graphics card, but its output will not
-#        be displayed to the QEMU user.
-#
-# @gtk: The GTK user interface.
-#
-# @sdl: The SDL user interface.
-#
-# @egl-headless: No user interface, offload GL operations to a local
-#                DRI device. Graphical display need to be paired with
-#                VNC or Spice. (Since 3.1)
-#
-# @curses: Display video output via curses.  For graphics device
-#          models which support a text mode, QEMU can display this
-#          output using a curses/ncurses interface. Nothing is
-#          displayed when the graphics device is in graphical mode or
-#          if the graphics device does not support a text
-#          mode. Generally only the VGA device models support text
-#          mode.
-#
-# @cocoa: The Cocoa user interface.
-#
-# @spice-app: Set up a Spice server and run the default associated
-#             application to connect to it. The server will redirect
-#             the serial console and QEMU monitors. (Since 4.0)
-#
 # Since: 2.12
 #
 ##
 { 'enum'    : 'DisplayType',
   'data'    : [ 'default', 'none', 'gtk', 'sdl',
-                'egl-headless', 'curses', 'cocoa',
-                'spice-app'] }
+                'egl-headless', 'curses', 'cocoa' ] }
 
 ##
 # @DisplayOptions:
@@ -1149,8 +1089,6 @@
 # @type:          Which DisplayType qemu should use.
 # @full-screen:   Start user interface in fullscreen mode (default: off).
 # @window-close:  Allow to quit qemu with window close button (default: on).
-# @show-cursor:   Force showing the mouse cursor (default: off).
-#                 (since: 5.0)
 # @gl:            Enable OpenGL support (default: off).
 #
 # Since: 2.12
@@ -1160,11 +1098,9 @@
   'base'    : { 'type'           : 'DisplayType',
                 '*full-screen'   : 'bool',
                 '*window-close'  : 'bool',
-                '*show-cursor'   : 'bool',
                 '*gl'            : 'DisplayGLMode' },
   'discriminator' : 'type',
   'data'    : { 'gtk'            : 'DisplayGTK',
-                'curses'         : 'DisplayCurses',
                 'egl-headless'   : 'DisplayEGLHeadless'} }
 
 ##

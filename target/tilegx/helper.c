@@ -21,13 +21,14 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
+#include "qemu-common.h"
 #include "exec/helper-proto.h"
 #include <zlib.h> /* For crc32 */
 #include "syscall_defs.h"
 
 void helper_exception(CPUTLGState *env, uint32_t excp)
 {
-    CPUState *cs = env_cpu(env);
+    CPUState *cs = CPU(tilegx_env_get_cpu(env));
 
     cs->exception_index = excp;
     cpu_loop_exit(cs);

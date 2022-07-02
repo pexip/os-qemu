@@ -11,14 +11,13 @@
  * top-level directory.
  */
 
-#ifndef QEMU_VIRTIO_CRYPTO_H
-#define QEMU_VIRTIO_CRYPTO_H
+#ifndef _QEMU_VIRTIO_CRYPTO_H
+#define _QEMU_VIRTIO_CRYPTO_H
 
 #include "standard-headers/linux/virtio_crypto.h"
 #include "hw/virtio/virtio.h"
 #include "sysemu/iothread.h"
 #include "sysemu/cryptodev.h"
-#include "qom/object.h"
 
 
 #define DEBUG_VIRTIO_CRYPTO 0
@@ -32,7 +31,8 @@ do { \
 
 
 #define TYPE_VIRTIO_CRYPTO "virtio-crypto-device"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIOCrypto, VIRTIO_CRYPTO)
+#define VIRTIO_CRYPTO(obj) \
+        OBJECT_CHECK(VirtIOCrypto, (obj), TYPE_VIRTIO_CRYPTO)
 #define VIRTIO_CRYPTO_GET_PARENT_CLASS(obj) \
         OBJECT_GET_PARENT_CLASS(obj, TYPE_VIRTIO_CRYPTO)
 
@@ -82,7 +82,7 @@ typedef struct VirtIOCryptoQueue {
     struct VirtIOCrypto *vcrypto;
 } VirtIOCryptoQueue;
 
-struct VirtIOCrypto {
+typedef struct VirtIOCrypto {
     VirtIODevice parent_obj;
 
     VirtQueue *ctrl_vq;
@@ -97,6 +97,6 @@ struct VirtIOCrypto {
     uint32_t curr_queues;
     size_t config_size;
     uint8_t vhost_started;
-};
+} VirtIOCrypto;
 
-#endif /* QEMU_VIRTIO_CRYPTO_H */
+#endif /* _QEMU_VIRTIO_CRYPTO_H */

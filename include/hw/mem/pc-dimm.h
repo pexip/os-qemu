@@ -17,12 +17,17 @@
 #define QEMU_PC_DIMM_H
 
 #include "exec/memory.h"
-#include "hw/qdev-core.h"
-#include "qom/object.h"
+#include "sysemu/hostmem.h"
+#include "hw/qdev.h"
+#include "hw/boards.h"
 
 #define TYPE_PC_DIMM "pc-dimm"
-OBJECT_DECLARE_TYPE(PCDIMMDevice, PCDIMMDeviceClass,
-                    PC_DIMM)
+#define PC_DIMM(obj) \
+    OBJECT_CHECK(PCDIMMDevice, (obj), TYPE_PC_DIMM)
+#define PC_DIMM_CLASS(oc) \
+    OBJECT_CLASS_CHECK(PCDIMMDeviceClass, (oc), TYPE_PC_DIMM)
+#define PC_DIMM_GET_CLASS(obj) \
+    OBJECT_GET_CLASS(PCDIMMDeviceClass, (obj), TYPE_PC_DIMM)
 
 #define PC_DIMM_ADDR_PROP "addr"
 #define PC_DIMM_SLOT_PROP "slot"
@@ -41,7 +46,7 @@ OBJECT_DECLARE_TYPE(PCDIMMDevice, PCDIMMDeviceClass,
  *        Default value: -1, means that slot is auto-allocated.
  * @hostmem: host memory backend providing memory for @PCDIMMDevice
  */
-struct PCDIMMDevice {
+typedef struct PCDIMMDevice {
     /* private */
     DeviceState parent_obj;
 
@@ -50,7 +55,7 @@ struct PCDIMMDevice {
     uint32_t node;
     int32_t slot;
     HostMemoryBackend *hostmem;
-};
+} PCDIMMDevice;
 
 /**
  * PCDIMMDeviceClass:
@@ -60,7 +65,7 @@ struct PCDIMMDevice {
  * memory of @dimm should be kept during live migration. Will not fail
  * after the device was realized.
  */
-struct PCDIMMDeviceClass {
+typedef struct PCDIMMDeviceClass {
     /* private */
     DeviceClass parent_class;
 
@@ -68,10 +73,10 @@ struct PCDIMMDeviceClass {
     void (*realize)(PCDIMMDevice *dimm, Error **errp);
     MemoryRegion *(*get_vmstate_memory_region)(PCDIMMDevice *dimm,
                                                Error **errp);
-};
+} PCDIMMDeviceClass;
 
 void pc_dimm_pre_plug(PCDIMMDevice *dimm, MachineState *machine,
                       const uint64_t *legacy_align, Error **errp);
-void pc_dimm_plug(PCDIMMDevice *dimm, MachineState *machine);
+void pc_dimm_plug(PCDIMMDevice *dimm, MachineState *machine, Error **errp);
 void pc_dimm_unplug(PCDIMMDevice *dimm, MachineState *machine);
 #endif

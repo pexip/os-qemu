@@ -28,7 +28,13 @@
 
 #define QEMU_SENTINEL __attribute__((sentinel))
 
-#if defined(_WIN32) && (defined(__x86_64__) || defined(__i386__))
+#if QEMU_GNUC_PREREQ(4, 3)
+#define QEMU_ARTIFICIAL __attribute__((always_inline, artificial))
+#else
+#define QEMU_ARTIFICIAL
+#endif
+
+#if defined(_WIN32)
 # define QEMU_PACKED __attribute__((gcc_struct, packed))
 #else
 # define QEMU_PACKED __attribute__((packed))
@@ -59,13 +65,6 @@
 #endif
 
 #define sizeof_field(type, field) sizeof(((type *)0)->field)
-
-/*
- * Calculate the number of bytes up to and including the given 'field' of
- * 'container'.
- */
-#define endof(container, field) \
-    (offsetof(container, field) + sizeof_field(container, field))
 
 /* Convert from a base type to a parent type, with compile time checking.  */
 #ifdef __GNUC__
@@ -120,10 +119,6 @@
 #define GCC_FMT_ATTR(n, m)
 #endif
 
-#ifndef __has_warning
-#define __has_warning(x) 0 /* compatibility with non-clang compilers */
-#endif
-
 #ifndef __has_feature
 #define __has_feature(x) 0 /* compatibility with non-clang compilers */
 #endif
@@ -132,7 +127,7 @@
 #define __has_builtin(x) 0 /* compatibility with non-clang compilers */
 #endif
 
-#if __has_builtin(__builtin_assume_aligned) || !defined(__clang__)
+#if __has_builtin(__builtin_assume_aligned) || QEMU_GNUC_PREREQ(4, 7)
 #define HAS_ASSUME_ALIGNED
 #endif
 
@@ -160,32 +155,6 @@
 # define QEMU_ERROR(X) __attribute__((error(X)))
 #else
 # define QEMU_ERROR(X)
-#endif
-
-/*
- * The nonstring variable attribute specifies that an object or member
- * declaration with type array of char or pointer to char is intended
- * to store character arrays that do not necessarily contain a terminating
- * NUL character. This is useful in detecting uses of such arrays or pointers
- * with functions that expect NUL-terminated strings, and to avoid warnings
- * when such an array or pointer is used as an argument to a bounded string
- * manipulation function such as strncpy.
- */
-#if __has_attribute(nonstring)
-# define QEMU_NONSTRING __attribute__((nonstring))
-#else
-# define QEMU_NONSTRING
-#endif
-
-/*
- * Forced inlining may be desired to encourage constant propagation
- * of function parameters.  However, it can also make debugging harder,
- * so disable it for a non-optimizing build.
- */
-#if defined(__OPTIMIZE__)
-#define QEMU_ALWAYS_INLINE  __attribute__((always_inline))
-#else
-#define QEMU_ALWAYS_INLINE
 #endif
 
 /* Implement C11 _Generic via GCC builtins.  Example:
@@ -227,20 +196,5 @@
 #define QEMU_GENERIC8(x, a0, ...) QEMU_GENERIC_IF(x, a0, QEMU_GENERIC7(x, __VA_ARGS__))
 #define QEMU_GENERIC9(x, a0, ...) QEMU_GENERIC_IF(x, a0, QEMU_GENERIC8(x, __VA_ARGS__))
 #define QEMU_GENERIC10(x, a0, ...) QEMU_GENERIC_IF(x, a0, QEMU_GENERIC9(x, __VA_ARGS__))
-
-/**
- * qemu_build_not_reached()
- *
- * The compiler, during optimization, is expected to prove that a call
- * to this function cannot be reached and remove it.  If the compiler
- * supports QEMU_ERROR, this will be reported at compile time; otherwise
- * this will be reported at link time due to the missing symbol.
- */
-#if defined(__OPTIMIZE__) && !defined(__NO_INLINE__)
-extern void QEMU_NORETURN QEMU_ERROR("code path is reachable")
-    qemu_build_not_reached(void);
-#else
-#define qemu_build_not_reached()  g_assert_not_reached()
-#endif
 
 #endif /* COMPILER_H */

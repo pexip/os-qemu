@@ -1,6 +1,6 @@
 #include "qemu/osdep.h"
-#include "sysemu/cpu-timers.h"
-#include "qemu/main-loop.h"
+#include "qemu-common.h"
+#include "qemu/timer.h"
 
 int64_t cpu_get_clock(void)
 {

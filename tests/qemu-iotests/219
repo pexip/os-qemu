@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 #
 # Copyright (C) 2018 Red Hat, Inc.
 #
@@ -21,9 +21,7 @@
 
 import iotests
 
-iotests.script_initialize(supported_fmts=['qcow2'])
-
-img_size = 4 * 1024 * 1024
+iotests.verify_image_format(supported_fmts=['qcow2'])
 
 def pause_wait(vm, job_id):
     with iotests.Timeout(3, "Timeout waiting for job to pause"):
@@ -63,9 +61,7 @@ def test_pause_resume(vm):
                 # logged immediately
                 iotests.log(vm.qmp('query-jobs'))
 
-def test_job_lifecycle(vm, job, job_args, has_ready=False, is_mirror=False):
-    global img_size
-
+def test_job_lifecycle(vm, job, job_args, has_ready=False):
     iotests.log('')
     iotests.log('')
     iotests.log('Starting block job: %s (auto-finalize: %s; auto-dismiss: %s)' %
@@ -87,10 +83,6 @@ def test_job_lifecycle(vm, job, job_args, has_ready=False, is_mirror=False):
     # undefined -> created -> running
     iotests.log(iotests.filter_qmp_event(vm.event_wait('JOB_STATUS_CHANGE')))
     iotests.log(iotests.filter_qmp_event(vm.event_wait('JOB_STATUS_CHANGE')))
-
-    # Wait for total-progress to stabilize
-    while vm.qmp('query-jobs')['return'][0]['total-progress'] < img_size:
-        pass
 
     # RUNNING state:
     # pause/resume should work, complete/finalize/dismiss should error out
@@ -135,9 +127,6 @@ def test_job_lifecycle(vm, job, job_args, has_ready=False, is_mirror=False):
     iotests.log('Waiting for PENDING state...')
     iotests.log(iotests.filter_qmp_event(vm.event_wait('JOB_STATUS_CHANGE')))
     iotests.log(iotests.filter_qmp_event(vm.event_wait('JOB_STATUS_CHANGE')))
-    if is_mirror:
-        iotests.log(iotests.filter_qmp_event(vm.event_wait('JOB_STATUS_CHANGE')))
-        iotests.log(iotests.filter_qmp_event(vm.event_wait('JOB_STATUS_CHANGE')))
 
     if not job_args.get('auto-finalize', True):
         # PENDING state:
@@ -184,8 +173,9 @@ with iotests.FilePath('disk.img') as disk_path, \
      iotests.FilePath('copy.img') as copy_path, \
      iotests.VM() as vm:
 
-    iotests.qemu_img_create('-f', iotests.imgfmt, disk_path, str(img_size))
-    iotests.qemu_io('-c', 'write 0 %i' % (img_size),
+    img_size = '4M'
+    iotests.qemu_img_create('-f', iotests.imgfmt, disk_path, img_size)
+    iotests.qemu_io('-c', 'write 0 %s' % (img_size),
                     '-f', iotests.imgfmt, disk_path)
 
     iotests.log('Launching VM...')
@@ -221,7 +211,7 @@ with iotests.FilePath('disk.img') as disk_path, \
 
     for auto_finalize in [True, False]:
         for auto_dismiss in [True, False]:
-            test_job_lifecycle(vm, 'drive-backup', is_mirror=True, job_args={
+            test_job_lifecycle(vm, 'drive-backup', job_args={
                 'device': 'drive0-node',
                 'target': copy_path,
                 'sync': 'full',

@@ -18,7 +18,6 @@
 #include "scsi/pr-manager.h"
 #include "trace.h"
 #include "qapi/qapi-types-block.h"
-#include "qemu/module.h"
 #include "qapi/qapi-commands-block.h"
 
 #define PR_MANAGER_PATH     "/objects"
@@ -39,6 +38,7 @@ static int pr_manager_worker(void *opaque)
     int fd = data->fd;
     int r;
 
+    g_free(data);
     trace_pr_manager_run(fd, hdr->cmdp[0], hdr->cmdp[1]);
 
     /* The reference was taken in pr_manager_execute.  */
@@ -48,21 +48,24 @@ static int pr_manager_worker(void *opaque)
 }
 
 
-int coroutine_fn pr_manager_execute(PRManager *pr_mgr, AioContext *ctx, int fd,
-                                    struct sg_io_hdr *hdr)
+BlockAIOCB *pr_manager_execute(PRManager *pr_mgr,
+                               AioContext *ctx, int fd,
+                               struct sg_io_hdr *hdr,
+                               BlockCompletionFunc *complete,
+                               void *opaque)
 {
+    PRManagerData *data = g_new(PRManagerData, 1);
     ThreadPool *pool = aio_get_thread_pool(ctx);
-    PRManagerData data = {
-        .pr_mgr = pr_mgr,
-        .fd     = fd,
-        .hdr    = hdr,
-    };
 
-    trace_pr_manager_execute(fd, hdr->cmdp[0], hdr->cmdp[1]);
+    trace_pr_manager_execute(fd, hdr->cmdp[0], hdr->cmdp[1], opaque);
+    data->pr_mgr = pr_mgr;
+    data->fd = fd;
+    data->hdr = hdr;
 
     /* The matching object_unref is in pr_manager_worker.  */
     object_ref(OBJECT(pr_mgr));
-    return thread_pool_submit_co(pool, pr_manager_worker, &data);
+    return thread_pool_submit_aio(pool, pr_manager_worker,
+                                  data, complete, opaque);
 }
 
 bool pr_manager_is_connected(PRManager *pr_mgr)
@@ -128,7 +131,7 @@ static int query_one_pr_manager(Object *object, void *opaque)
 
     elem = g_new0(PRManagerInfoList, 1);
     info = g_new0(PRManagerInfo, 1);
-    info->id = g_strdup(object_get_canonical_path_component(object));
+    info->id = object_get_canonical_path_component(object);
     info->connected = pr_manager_is_connected(pr_mgr);
     elem->value = info;
     elem->next = NULL;

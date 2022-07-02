@@ -6,22 +6,25 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public License
+ * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef MOXIE_CPU_H
 #define MOXIE_CPU_H
 
-#include "exec/cpu-defs.h"
-#include "qom/object.h"
+#include "qemu-common.h"
+
+#define TARGET_LONG_BITS 32
+
+#define CPUArchState struct CPUMoxieState
 
 #define MOXIE_EX_DIV0        0
 #define MOXIE_EX_BAD         1
@@ -29,6 +32,15 @@
 #define MOXIE_EX_SWI         3
 #define MOXIE_EX_MMU_MISS    4
 #define MOXIE_EX_BREAK      16
+
+#include "exec/cpu-defs.h"
+
+#define TARGET_PAGE_BITS 12     /* 4k */
+
+#define TARGET_PHYS_ADDR_SPACE_BITS 32
+#define TARGET_VIRT_ADDR_SPACE_BITS 32
+
+#define NB_MMU_MODES 1
 
 typedef struct CPUMoxieState {
 
@@ -45,14 +57,21 @@ typedef struct CPUMoxieState {
 
     /* Fields up to this point are cleared by a CPU reset */
     struct {} end_reset_fields;
+
+    CPU_COMMON
+
 } CPUMoxieState;
 
-#include "hw/core/cpu.h"
+#include "qom/cpu.h"
 
 #define TYPE_MOXIE_CPU "moxie-cpu"
 
-OBJECT_DECLARE_TYPE(MoxieCPU, MoxieCPUClass,
-                    MOXIE_CPU)
+#define MOXIE_CPU_CLASS(klass) \
+    OBJECT_CLASS_CHECK(MoxieCPUClass, (klass), TYPE_MOXIE_CPU)
+#define MOXIE_CPU(obj) \
+    OBJECT_CHECK(MoxieCPU, (obj), TYPE_MOXIE_CPU)
+#define MOXIE_CPU_GET_CLASS(obj) \
+    OBJECT_GET_CLASS(MoxieCPUClass, (obj), TYPE_MOXIE_CPU)
 
 /**
  * MoxieCPUClass:
@@ -60,14 +79,14 @@ OBJECT_DECLARE_TYPE(MoxieCPU, MoxieCPUClass,
  *
  * A Moxie CPU model.
  */
-struct MoxieCPUClass {
+typedef struct MoxieCPUClass {
     /*< private >*/
     CPUClass parent_class;
     /*< public >*/
 
     DeviceRealize parent_realize;
-    DeviceReset parent_reset;
-};
+    void (*parent_reset)(CPUState *cpu);
+} MoxieCPUClass;
 
 /**
  * MoxieCPU:
@@ -75,18 +94,26 @@ struct MoxieCPUClass {
  *
  * A Moxie CPU.
  */
-struct MoxieCPU {
+typedef struct MoxieCPU {
     /*< private >*/
     CPUState parent_obj;
     /*< public >*/
 
-    CPUNegativeOffsetState neg;
     CPUMoxieState env;
-};
+} MoxieCPU;
 
+static inline MoxieCPU *moxie_env_get_cpu(CPUMoxieState *env)
+{
+    return container_of(env, MoxieCPU, env);
+}
+
+#define ENV_GET_CPU(e) CPU(moxie_env_get_cpu(e))
+
+#define ENV_OFFSET offsetof(MoxieCPU, env)
 
 void moxie_cpu_do_interrupt(CPUState *cs);
-void moxie_cpu_dump_state(CPUState *cpu, FILE *f, int flags);
+void moxie_cpu_dump_state(CPUState *cpu, FILE *f,
+                          fprintf_function cpu_fprintf, int flags);
 hwaddr moxie_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
 void moxie_translate_init(void);
 int cpu_moxie_signal_handler(int host_signum, void *pinfo,
@@ -103,9 +130,6 @@ static inline int cpu_mmu_index(CPUMoxieState *env, bool ifetch)
     return 0;
 }
 
-typedef CPUMoxieState CPUArchState;
-typedef MoxieCPU ArchCPU;
-
 #include "exec/cpu-all.h"
 
 static inline void cpu_get_tb_cpu_state(CPUMoxieState *env, target_ulong *pc,
@@ -116,8 +140,7 @@ static inline void cpu_get_tb_cpu_state(CPUMoxieState *env, target_ulong *pc,
     *flags = 0;
 }
 
-bool moxie_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
-                        MMUAccessType access_type, int mmu_idx,
-                        bool probe, uintptr_t retaddr);
+int moxie_cpu_handle_mmu_fault(CPUState *cpu, vaddr address, int size,
+                               int rw, int mmu_idx);
 
 #endif /* MOXIE_CPU_H */

@@ -23,27 +23,24 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/isa/isa.h"
 #include "vga_int.h"
 #include "ui/pixel_ops.h"
-#include "qemu/module.h"
 #include "qemu/timer.h"
 #include "hw/loader.h"
-#include "hw/qdev-properties.h"
-#include "qom/object.h"
 
 #define TYPE_ISA_VGA "isa-vga"
-OBJECT_DECLARE_SIMPLE_TYPE(ISAVGAState, ISA_VGA)
+#define ISA_VGA(obj) OBJECT_CHECK(ISAVGAState, (obj), TYPE_ISA_VGA)
 
-struct ISAVGAState {
+typedef struct ISAVGAState {
     ISADevice parent_obj;
 
     struct VGACommonState state;
     PortioList portio_vga;
     PortioList portio_vbe;
-};
+} ISAVGAState;
 
 static void vga_isa_reset(DeviceState *dev)
 {
@@ -75,11 +72,9 @@ static void vga_isa_realizefn(DeviceState *dev, Error **errp)
                                         0x000a0000,
                                         vga_io_memory, 1);
     memory_region_set_coalescing(vga_io_memory);
-    s->con = graphic_console_init(dev, 0, s->hw_ops, s);
+    s->con = graphic_console_init(DEVICE(dev), 0, s->hw_ops, s);
 
-    memory_region_add_subregion(isa_address_space(isadev),
-                                VBE_DISPI_LFB_PHYSICAL_ADDRESS,
-                                &s->vram);
+    vga_init_vbe(s, OBJECT(dev), isa_address_space(isadev));
     /* ROM BIOS */
     rom_add_vga(VGABIOS_FILENAME);
 }
@@ -96,7 +91,7 @@ static void vga_isa_class_initfn(ObjectClass *klass, void *data)
     dc->realize = vga_isa_realizefn;
     dc->reset = vga_isa_reset;
     dc->vmsd = &vmstate_vga_common;
-    device_class_set_props(dc, vga_isa_properties);
+    dc->props = vga_isa_properties;
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
 }
 

@@ -120,17 +120,25 @@ static void exit_states(QEMU_Elf *qe)
 
 int QEMU_Elf_init(QEMU_Elf *qe, const char *filename)
 {
-    GError *gerr = NULL;
     int err = 0;
+    struct stat st;
 
-    qe->gmf = g_mapped_file_new(filename, TRUE, &gerr);
-    if (gerr) {
-        eprintf("Failed to map ELF dump file \'%s\'\n", filename);
+    qe->fd = open(filename, O_RDONLY, 0);
+    if (qe->fd == -1) {
+        eprintf("Failed to open ELF dump file \'%s\'\n", filename);
         return 1;
     }
 
-    qe->map = g_mapped_file_get_contents(qe->gmf);
-    qe->size = g_mapped_file_get_length(qe->gmf);
+    fstat(qe->fd, &st);
+    qe->size = st.st_size;
+
+    qe->map = mmap(NULL, qe->size, PROT_READ | PROT_WRITE,
+            MAP_PRIVATE, qe->fd, 0);
+    if (qe->map == MAP_FAILED) {
+        eprintf("Failed to map ELF file\n");
+        err = 1;
+        goto out_fd;
+    }
 
     if (init_states(qe)) {
         eprintf("Failed to extract QEMU CPU states\n");
@@ -141,7 +149,9 @@ int QEMU_Elf_init(QEMU_Elf *qe, const char *filename)
     return 0;
 
 out_unmap:
-    g_mapped_file_unref(qe->gmf);
+    munmap(qe->map, qe->size);
+out_fd:
+    close(qe->fd);
 
     return err;
 }
@@ -149,5 +159,6 @@ out_unmap:
 void QEMU_Elf_exit(QEMU_Elf *qe)
 {
     exit_states(qe);
-    g_mapped_file_unref(qe->gmf);
+    munmap(qe->map, qe->size);
+    close(qe->fd);
 }

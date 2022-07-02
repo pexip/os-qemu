@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -18,7 +18,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "qemu/units.h"
 #include "exec/memory.h"
 #include "hw/loader.h"
@@ -26,6 +25,7 @@
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
 #include "sysemu/device_tree.h"
+#include "sysemu/sysemu.h"
 
 #include <libfdt.h>
 #include <zlib.h>
@@ -33,7 +33,7 @@
 #define FIT_LOADER_MAX_PATH (128)
 
 static const void *fit_load_image_alloc(const void *itb, const char *name,
-                                        int *poff, size_t *psz, Error **errp)
+                                        int *poff, size_t *psz)
 {
     const void *data;
     const char *comp;
@@ -46,7 +46,6 @@ static const void *fit_load_image_alloc(const void *itb, const char *name,
 
     off = fdt_path_offset(itb, path);
     if (off < 0) {
-        error_setg(errp, "can't find node %s", path);
         return NULL;
     }
     if (poff) {
@@ -55,7 +54,6 @@ static const void *fit_load_image_alloc(const void *itb, const char *name,
 
     data = fdt_getprop(itb, off, "data", &sz);
     if (!data) {
-        error_setg(errp, "can't get %s/data", path);
         return NULL;
     }
 
@@ -75,7 +73,7 @@ static const void *fit_load_image_alloc(const void *itb, const char *name,
 
         uncomp_len = gunzip(uncomp_data, uncomp_len, (void *) data, sz);
         if (uncomp_len < 0) {
-            error_setg(errp, "unable to decompress %s image", name);
+            error_printf("unable to decompress %s image\n", name);
             g_free(uncomp_data);
             return NULL;
         }
@@ -87,19 +85,18 @@ static const void *fit_load_image_alloc(const void *itb, const char *name,
         return data;
     }
 
-    error_setg(errp, "unknown compression '%s'", comp);
+    error_printf("unknown compression '%s'\n", comp);
     return NULL;
 }
 
 static int fit_image_addr(const void *itb, int img, const char *name,
-                          hwaddr *addr, Error **errp)
+                          hwaddr *addr)
 {
     const void *prop;
     int len;
 
     prop = fdt_getprop(itb, img, name, &len);
     if (!prop) {
-        error_setg(errp, "can't find %s address", name);
         return -ENOENT;
     }
 
@@ -111,14 +108,13 @@ static int fit_image_addr(const void *itb, int img, const char *name,
         *addr = fdt64_to_cpu(*(fdt64_t *)prop);
         return 0;
     default:
-        error_setg(errp, "invalid %s address length %d", name, len);
+        error_printf("invalid %s address length %d\n", name, len);
         return -EINVAL;
     }
 }
 
 static int fit_load_kernel(const struct fit_loader *ldr, const void *itb,
-                           int cfg, void *opaque, hwaddr *pend,
-                           Error **errp)
+                           int cfg, void *opaque, hwaddr *pend)
 {
     const char *name;
     const void *data;
@@ -130,26 +126,26 @@ static int fit_load_kernel(const struct fit_loader *ldr, const void *itb,
 
     name = fdt_getprop(itb, cfg, "kernel", NULL);
     if (!name) {
-        error_setg(errp, "no kernel specified by FIT configuration");
+        error_printf("no kernel specified by FIT configuration\n");
         return -EINVAL;
     }
 
-    load_data = data = fit_load_image_alloc(itb, name, &img_off, &sz, errp);
+    load_data = data = fit_load_image_alloc(itb, name, &img_off, &sz);
     if (!data) {
-        error_prepend(errp, "unable to load kernel image from FIT: ");
+        error_printf("unable to load kernel image from FIT\n");
         return -EINVAL;
     }
 
-    err = fit_image_addr(itb, img_off, "load", &load_addr, errp);
+    err = fit_image_addr(itb, img_off, "load", &load_addr);
     if (err) {
-        error_prepend(errp, "unable to read kernel load address from FIT: ");
+        error_printf("unable to read kernel load address from FIT\n");
         ret = err;
         goto out;
     }
 
-    err = fit_image_addr(itb, img_off, "entry", &entry_addr, errp);
+    err = fit_image_addr(itb, img_off, "entry", &entry_addr);
     if (err) {
-        error_prepend(errp, "unable to read kernel entry address from FIT: ");
+        error_printf("unable to read kernel entry address from FIT\n");
         ret = err;
         goto out;
     }
@@ -176,14 +172,13 @@ out:
 
 static int fit_load_fdt(const struct fit_loader *ldr, const void *itb,
                         int cfg, void *opaque, const void *match_data,
-                        hwaddr kernel_end, Error **errp)
+                        hwaddr kernel_end)
 {
-    Error *err = NULL;
     const char *name;
     const void *data;
     const void *load_data;
     hwaddr load_addr;
-    int img_off;
+    int img_off, err;
     size_t sz;
     int ret;
 
@@ -192,19 +187,17 @@ static int fit_load_fdt(const struct fit_loader *ldr, const void *itb,
         return 0;
     }
 
-    load_data = data = fit_load_image_alloc(itb, name, &img_off, &sz, errp);
+    load_data = data = fit_load_image_alloc(itb, name, &img_off, &sz);
     if (!data) {
-        error_prepend(errp, "unable to load FDT image from FIT: ");
+        error_printf("unable to load FDT image from FIT\n");
         return -EINVAL;
     }
 
-    ret = fit_image_addr(itb, img_off, "load", &load_addr, &err);
-    if (ret == -ENOENT) {
+    err = fit_image_addr(itb, img_off, "load", &load_addr);
+    if (err == -ENOENT) {
         load_addr = ROUND_UP(kernel_end, 64 * KiB) + (10 * MiB);
-        error_free(err);
-    } else if (ret) {
-        error_propagate_prepend(errp, err,
-                                "unable to read FDT load address from FIT: ");
+    } else if (err) {
+        ret = err;
         goto out;
     }
 
@@ -236,7 +229,7 @@ static bool fit_cfg_compatible(const void *itb, int cfg, const char *compat)
         return false;
     }
 
-    fdt = fit_load_image_alloc(itb, fdt_name, NULL, NULL, NULL);
+    fdt = fit_load_image_alloc(itb, fdt_name, NULL, NULL);
     if (!fdt) {
         return false;
     }
@@ -259,12 +252,11 @@ out:
 
 int load_fit(const struct fit_loader *ldr, const char *filename, void *opaque)
 {
-    Error *err = NULL;
     const struct fit_loader_match *match;
     const void *itb, *match_data = NULL;
     const char *def_cfg_name;
     char path[FIT_LOADER_MAX_PATH];
-    int itb_size, configs, cfg_off, off;
+    int itb_size, configs, cfg_off, off, err;
     hwaddr kernel_end;
     int ret;
 
@@ -275,7 +267,6 @@ int load_fit(const struct fit_loader *ldr, const char *filename, void *opaque)
 
     configs = fdt_path_offset(itb, "/configurations");
     if (configs < 0) {
-        error_report("can't find node /configurations");
         ret = configs;
         goto out;
     }
@@ -310,21 +301,20 @@ int load_fit(const struct fit_loader *ldr, const char *filename, void *opaque)
     }
 
     if (cfg_off < 0) {
-        error_report("can't find configuration");
+        /* couldn't find a configuration to use */
         ret = cfg_off;
         goto out;
     }
 
-    ret = fit_load_kernel(ldr, itb, cfg_off, opaque, &kernel_end, &err);
-    if (ret) {
-        error_report_err(err);
+    err = fit_load_kernel(ldr, itb, cfg_off, opaque, &kernel_end);
+    if (err) {
+        ret = err;
         goto out;
     }
 
-    ret = fit_load_fdt(ldr, itb, cfg_off, opaque, match_data, kernel_end,
-                       &err);
-    if (ret) {
-        error_report_err(err);
+    err = fit_load_fdt(ldr, itb, cfg_off, opaque, match_data, kernel_end);
+    if (err) {
+        ret = err;
         goto out;
     }
 

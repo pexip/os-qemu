@@ -32,7 +32,7 @@
    the Intel manual for details.  */
 
 #include "qemu/osdep.h"
-#include "disas/dis-asm.h"
+#include "disas/bfd.h"
 #include "qemu/cutils.h"
 
 /* include/opcode/i386.h r1.78 */
@@ -153,6 +153,7 @@
 #define MAX_REG_NAME_SIZE 8
 
 /* opcodes/i386-dis.c r1.126 */
+#include "qemu-common.h"
 
 static int fetch_data2(struct disassemble_info *, bfd_byte *);
 static int fetch_data(struct disassemble_info *, bfd_byte *);
@@ -6074,7 +6075,7 @@ OP_EM (int bytemode, int sizeflag)
 	{
 	  bytemode = (prefixes & PREFIX_DATA) ? x_mode : q_mode;
 	  used_prefixes |= (prefixes & PREFIX_DATA);
-	}
+ 	}
       OP_E (bytemode, sizeflag);
       return;
     }
@@ -6111,7 +6112,7 @@ OP_EMC (int bytemode, int sizeflag)
 	{
 	  bytemode = (prefixes & PREFIX_DATA) ? x_mode : q_mode;
 	  used_prefixes |= (prefixes & PREFIX_DATA);
-	}
+ 	}
       OP_E (bytemode, sizeflag);
       return;
     }

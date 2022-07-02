@@ -11,26 +11,31 @@
  * top-level directory.
  */
 
-#ifndef QEMU_VHOST_VSOCK_H
-#define QEMU_VHOST_VSOCK_H
+#ifndef _QEMU_VHOST_VSOCK_H
+#define _QEMU_VHOST_VSOCK_H
 
-#include "hw/virtio/vhost-vsock-common.h"
-#include "qom/object.h"
+#include "hw/virtio/virtio.h"
+#include "hw/virtio/vhost.h"
 
 #define TYPE_VHOST_VSOCK "vhost-vsock-device"
-OBJECT_DECLARE_SIMPLE_TYPE(VHostVSock, VHOST_VSOCK)
+#define VHOST_VSOCK(obj) \
+        OBJECT_CHECK(VHostVSock, (obj), TYPE_VHOST_VSOCK)
 
 typedef struct {
     uint64_t guest_cid;
     char *vhostfd;
 } VHostVSockConf;
 
-struct VHostVSock {
+typedef struct {
     /*< private >*/
-    VHostVSockCommon parent;
+    VirtIODevice parent;
     VHostVSockConf conf;
+    struct vhost_virtqueue vhost_vqs[2];
+    struct vhost_dev vhost_dev;
+    VirtQueue *event_vq;
+    QEMUTimer *post_load_timer;
 
     /*< public >*/
-};
+} VHostVSock;
 
-#endif /* QEMU_VHOST_VSOCK_H */
+#endif /* _QEMU_VHOST_VSOCK_H */

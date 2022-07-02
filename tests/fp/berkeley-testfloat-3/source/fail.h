@@ -35,7 +35,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 =============================================================================*/
 
-extern const char *fail_programName;
+extern char *fail_programName;
 
 void fail( const char *, ... );
 

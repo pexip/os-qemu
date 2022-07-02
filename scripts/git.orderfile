@@ -11,26 +11,19 @@
 
 # Documentation
 docs/*
-*.rst
+*.texi
 
 # build system
 configure
 Makefile*
 *.mak
-meson.build
 
 # qapi schema
-qapi/*.json
-qga/*.json
-
-# semantic patches
-*.cocci
+*.json
 
 # headers
 *.h
 
-# decoding tree specification
-*.decode
-
 # code
 *.c
+

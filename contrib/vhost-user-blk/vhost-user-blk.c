@@ -20,14 +20,7 @@
 #include "contrib/libvhost-user/libvhost-user-glib.h"
 #include "contrib/libvhost-user/libvhost-user.h"
 
-#if defined(__linux__)
-#include <linux/fs.h>
-#include <sys/ioctl.h>
-#endif
-
-enum {
-    VHOST_USER_BLK_MAX_QUEUES = 8,
-};
+#include <glib.h>
 
 struct virtio_blk_inhdr {
     unsigned char status;
@@ -62,20 +55,6 @@ static size_t vub_iov_size(const struct iovec *iov,
 
     len = 0;
     for (i = 0; i < iov_cnt; i++) {
-        len += iov[i].iov_len;
-    }
-    return len;
-}
-
-static size_t vub_iov_to_buf(const struct iovec *iov,
-                             const unsigned int iov_cnt, void *buf)
-{
-    size_t len;
-    unsigned int i;
-
-    len = 0;
-    for (i = 0; i < iov_cnt; i++) {
-        memcpy(buf + len,  iov[i].iov_base, iov[i].iov_len);
         len += iov[i].iov_len;
     }
     return len;
@@ -179,44 +158,6 @@ vub_writev(VubReq *req, struct iovec *iov, uint32_t iovcnt)
     return rc;
 }
 
-static int
-vub_discard_write_zeroes(VubReq *req, struct iovec *iov, uint32_t iovcnt,
-                         uint32_t type)
-{
-    struct virtio_blk_discard_write_zeroes *desc;
-    ssize_t size;
-    void *buf;
-
-    size = vub_iov_size(iov, iovcnt);
-    if (size != sizeof(*desc)) {
-        fprintf(stderr, "Invalid size %ld, expect %ld\n", size, sizeof(*desc));
-        return -1;
-    }
-    buf = g_new0(char, size);
-    vub_iov_to_buf(iov, iovcnt, buf);
-
-    #if defined(__linux__) && defined(BLKDISCARD) && defined(BLKZEROOUT)
-    VubDev *vdev_blk = req->vdev_blk;
-    desc = (struct virtio_blk_discard_write_zeroes *)buf;
-    uint64_t range[2] = { le64toh(desc->sector) << 9,
-                          le32toh(desc->num_sectors) << 9 };
-    if (type == VIRTIO_BLK_T_DISCARD) {
-        if (ioctl(vdev_blk->blk_fd, BLKDISCARD, range) == 0) {
-            g_free(buf);
-            return 0;
-        }
-    } else if (type == VIRTIO_BLK_T_WRITE_ZEROES) {
-        if (ioctl(vdev_blk->blk_fd, BLKZEROOUT, range) == 0) {
-            g_free(buf);
-            return 0;
-        }
-    }
-    #endif
-
-    g_free(buf);
-    return -1;
-}
-
 static void
 vub_flush(VubReq *req)
 {
@@ -272,55 +213,44 @@ static int vub_virtio_process_req(VubDev *vdev_blk,
     in_num--;
 
     type = le32toh(req->out->type);
-    switch (type & ~VIRTIO_BLK_T_BARRIER) {
-    case VIRTIO_BLK_T_IN:
-    case VIRTIO_BLK_T_OUT: {
-        ssize_t ret = 0;
-        bool is_write = type & VIRTIO_BLK_T_OUT;
-        req->sector_num = le64toh(req->out->sector);
-        if (is_write) {
-            ret  = vub_writev(req, &elem->out_sg[1], out_num);
-        } else {
-            ret = vub_readv(req, &elem->in_sg[0], in_num);
+    switch (type & ~(VIRTIO_BLK_T_OUT | VIRTIO_BLK_T_BARRIER)) {
+        case VIRTIO_BLK_T_IN: {
+            ssize_t ret = 0;
+            bool is_write = type & VIRTIO_BLK_T_OUT;
+            req->sector_num = le64toh(req->out->sector);
+            if (is_write) {
+                ret  = vub_writev(req, &elem->out_sg[1], out_num);
+            } else {
+                ret = vub_readv(req, &elem->in_sg[0], in_num);
+            }
+            if (ret >= 0) {
+                req->in->status = VIRTIO_BLK_S_OK;
+            } else {
+                req->in->status = VIRTIO_BLK_S_IOERR;
+            }
+            vub_req_complete(req);
+            break;
         }
-        if (ret >= 0) {
+        case VIRTIO_BLK_T_FLUSH: {
+            vub_flush(req);
             req->in->status = VIRTIO_BLK_S_OK;
-        } else {
-            req->in->status = VIRTIO_BLK_S_IOERR;
+            vub_req_complete(req);
+            break;
         }
-        vub_req_complete(req);
-        break;
-    }
-    case VIRTIO_BLK_T_FLUSH:
-        vub_flush(req);
-        req->in->status = VIRTIO_BLK_S_OK;
-        vub_req_complete(req);
-        break;
-    case VIRTIO_BLK_T_GET_ID: {
-        size_t size = MIN(vub_iov_size(&elem->in_sg[0], in_num),
-                          VIRTIO_BLK_ID_BYTES);
-        snprintf(elem->in_sg[0].iov_base, size, "%s", "vhost_user_blk");
-        req->in->status = VIRTIO_BLK_S_OK;
-        req->size = elem->in_sg[0].iov_len;
-        vub_req_complete(req);
-        break;
-    }
-    case VIRTIO_BLK_T_DISCARD:
-    case VIRTIO_BLK_T_WRITE_ZEROES: {
-        int rc;
-        rc = vub_discard_write_zeroes(req, &elem->out_sg[1], out_num, type);
-        if (rc == 0) {
+        case VIRTIO_BLK_T_GET_ID: {
+            size_t size = MIN(vub_iov_size(&elem->in_sg[0], in_num),
+                              VIRTIO_BLK_ID_BYTES);
+            snprintf(elem->in_sg[0].iov_base, size, "%s", "vhost_user_blk");
             req->in->status = VIRTIO_BLK_S_OK;
-        } else {
-            req->in->status = VIRTIO_BLK_S_IOERR;
+            req->size = elem->in_sg[0].iov_len;
+            vub_req_complete(req);
+            break;
         }
-        vub_req_complete(req);
-        break;
-    }
-    default:
-        req->in->status = VIRTIO_BLK_S_UNSUPP;
-        vub_req_complete(req);
-        break;
+        default: {
+            req->in->status = VIRTIO_BLK_S_UNSUPP;
+            vub_req_complete(req);
+            break;
+        }
     }
 
     return 0;
@@ -337,6 +267,12 @@ static void vub_process_vq(VuDev *vu_dev, int idx)
     VubDev *vdev_blk;
     VuVirtq *vq;
     int ret;
+
+    if ((idx < 0) || (idx >= VHOST_MAX_NR_VIRTQUEUE)) {
+        fprintf(stderr, "VQ Index out of range: %d\n", idx);
+        vub_panic_cb(vu_dev, NULL);
+        return;
+    }
 
     gdev = container_of(vu_dev, VugDev, parent);
     vdev_blk = container_of(gdev, VubDev, parent);
@@ -378,11 +314,9 @@ vub_get_features(VuDev *dev)
                1ull << VIRTIO_BLK_F_TOPOLOGY |
                1ull << VIRTIO_BLK_F_BLK_SIZE |
                1ull << VIRTIO_BLK_F_FLUSH |
-               #if defined(__linux__) && defined(BLKDISCARD) && defined(BLKZEROOUT)
-               1ull << VIRTIO_BLK_F_DISCARD |
-               1ull << VIRTIO_BLK_F_WRITE_ZEROES |
-               #endif
-               1ull << VIRTIO_BLK_F_CONFIG_WCE;
+               1ull << VIRTIO_BLK_F_CONFIG_WCE |
+               1ull << VIRTIO_F_VERSION_1 |
+               1ull << VHOST_USER_F_PROTOCOL_FEATURES;
 
     if (vdev_blk->enable_ro) {
         features |= 1ull << VIRTIO_BLK_F_RO;
@@ -394,8 +328,7 @@ vub_get_features(VuDev *dev)
 static uint64_t
 vub_get_protocol_features(VuDev *dev)
 {
-    return 1ull << VHOST_USER_PROTOCOL_F_CONFIG |
-           1ull << VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD;
+    return 1ull << VHOST_USER_PROTOCOL_F_CONFIG;
 }
 
 static int
@@ -403,8 +336,6 @@ vub_get_config(VuDev *vu_dev, uint8_t *config, uint32_t len)
 {
     VugDev *gdev;
     VubDev *vdev_blk;
-
-    g_return_val_if_fail(len <= sizeof(struct virtio_blk_config), -1);
 
     gdev = container_of(vu_dev, VugDev, parent);
     vdev_blk = container_of(gdev, VubDev, parent);
@@ -476,7 +407,7 @@ static int unix_sock_new(char *unix_fn)
     assert(unix_fn);
 
     sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock < 0) {
+    if (sock <= 0) {
         perror("socket");
         return -1;
     }
@@ -524,7 +455,7 @@ vub_get_blocksize(int fd)
 
 #if defined(__linux__) && defined(BLKSSZGET)
     if (ioctl(fd, BLKSSZGET, &blocksize) == 0) {
-        return blocksize;
+        return blocklen;
     }
 #endif
 
@@ -544,13 +475,6 @@ vub_initialize_config(int fd, struct virtio_blk_config *config)
     config->min_io_size = 1;
     config->opt_io_size = 1;
     config->num_queues = 1;
-    #if defined(__linux__) && defined(BLKDISCARD) && defined(BLKZEROOUT)
-    config->max_discard_sectors = 32768;
-    config->max_discard_seg = 1;
-    config->discard_sector_alignment = config->blk_size >> 9;
-    config->max_write_zeroes_sectors = 32768;
-    config->max_write_zeroes_seg = 1;
-    #endif
 }
 
 static VubDev *
@@ -576,90 +500,66 @@ vub_new(char *blk_file)
     return vdev_blk;
 }
 
-static int opt_fdnum = -1;
-static char *opt_socket_path;
-static char *opt_blk_file;
-static gboolean opt_print_caps;
-static gboolean opt_read_only;
-
-static GOptionEntry entries[] = {
-    { "print-capabilities", 'c', 0, G_OPTION_ARG_NONE, &opt_print_caps,
-      "Print capabilities", NULL },
-    { "fd", 'f', 0, G_OPTION_ARG_INT, &opt_fdnum,
-      "Use inherited fd socket", "FDNUM" },
-    { "socket-path", 's', 0, G_OPTION_ARG_FILENAME, &opt_socket_path,
-      "Use UNIX socket path", "PATH" },
-    {"blk-file", 'b', 0, G_OPTION_ARG_FILENAME, &opt_blk_file,
-     "block device or file path", "PATH"},
-    { "read-only", 'r', 0, G_OPTION_ARG_NONE, &opt_read_only,
-      "Enable read-only", NULL }
-};
-
 int main(int argc, char **argv)
 {
+    int opt;
+    char *unix_socket = NULL;
+    char *blk_file = NULL;
+    bool enable_ro = false;
     int lsock = -1, csock = -1;
     VubDev *vdev_blk = NULL;
-    GError *error = NULL;
-    GOptionContext *context;
 
-    context = g_option_context_new(NULL);
-    g_option_context_add_main_entries(context, entries, NULL);
-    if (!g_option_context_parse(context, &argc, &argv, &error)) {
-        g_printerr("Option parsing failed: %s\n", error->message);
-        exit(EXIT_FAILURE);
-    }
-    if (opt_print_caps) {
-        g_print("{\n");
-        g_print("  \"type\": \"block\",\n");
-        g_print("  \"features\": [\n");
-        g_print("    \"read-only\",\n");
-        g_print("    \"blk-file\"\n");
-        g_print("  ]\n");
-        g_print("}\n");
-        exit(EXIT_SUCCESS);
-    }
-
-    if (!opt_blk_file) {
-        g_print("%s\n", g_option_context_get_help(context, true, NULL));
-        exit(EXIT_FAILURE);
-    }
-
-    if (opt_socket_path) {
-        lsock = unix_sock_new(opt_socket_path);
-        if (lsock < 0) {
-            exit(EXIT_FAILURE);
+    while ((opt = getopt(argc, argv, "b:rs:h")) != -1) {
+        switch (opt) {
+        case 'b':
+            blk_file = g_strdup(optarg);
+            break;
+        case 's':
+            unix_socket = g_strdup(optarg);
+            break;
+        case 'r':
+            enable_ro = true;
+            break;
+        case 'h':
+        default:
+            printf("Usage: %s [ -b block device or file, -s UNIX domain socket"
+                   " | -r Enable read-only ] | [ -h ]\n", argv[0]);
+            return 0;
         }
-    } else if (opt_fdnum < 0) {
-        g_print("%s\n", g_option_context_get_help(context, true, NULL));
-        exit(EXIT_FAILURE);
-    } else {
-        lsock = opt_fdnum;
     }
 
-    csock = accept(lsock, NULL, NULL);
+    if (!unix_socket || !blk_file) {
+        printf("Usage: %s [ -b block device or file, -s UNIX domain socket"
+               " | -r Enable read-only ] | [ -h ]\n", argv[0]);
+        return -1;
+    }
+
+    lsock = unix_sock_new(unix_socket);
+    if (lsock < 0) {
+        goto err;
+    }
+
+    csock = accept(lsock, (void *)0, (void *)0);
     if (csock < 0) {
-        g_printerr("Accept error %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
+        fprintf(stderr, "Accept error %s\n", strerror(errno));
+        goto err;
     }
 
-    vdev_blk = vub_new(opt_blk_file);
+    vdev_blk = vub_new(blk_file);
     if (!vdev_blk) {
-        exit(EXIT_FAILURE);
+        goto err;
     }
-    if (opt_read_only) {
+    if (enable_ro) {
         vdev_blk->enable_ro = true;
     }
 
-    if (!vug_init(&vdev_blk->parent, VHOST_USER_BLK_MAX_QUEUES, csock,
-                  vub_panic_cb, &vub_iface)) {
-        g_printerr("Failed to initialize libvhost-user-glib\n");
-        exit(EXIT_FAILURE);
-    }
+    vug_init(&vdev_blk->parent, csock, vub_panic_cb, &vub_iface);
 
     g_main_loop_run(vdev_blk->loop);
-    g_main_loop_unref(vdev_blk->loop);
-    g_option_context_free(context);
+
     vug_deinit(&vdev_blk->parent);
+
+err:
     vub_free(vdev_blk);
     if (csock >= 0) {
         close(csock);
@@ -667,8 +567,8 @@ int main(int argc, char **argv)
     if (lsock >= 0) {
         close(lsock);
     }
-    g_free(opt_socket_path);
-    g_free(opt_blk_file);
+    g_free(unix_socket);
+    g_free(blk_file);
 
     return 0;
 }

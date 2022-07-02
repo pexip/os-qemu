@@ -13,13 +13,11 @@
 #include "target/arm/cpu.h"
 #include "hw/sysbus.h"
 #include "hw/timer/armv7m_systick.h"
-#include "qom/object.h"
 
 #define TYPE_NVIC "armv7m_nvic"
 
-typedef struct NVICState NVICState;
-DECLARE_INSTANCE_CHECKER(NVICState, NVIC,
-                         TYPE_NVIC)
+#define NVIC(obj) \
+    OBJECT_CHECK(NVICState, (obj), TYPE_NVIC)
 
 /* Highest permitted number of exceptions (architectural limit) */
 #define NVIC_MAX_VECTORS 512
@@ -37,7 +35,7 @@ typedef struct VecInfo {
     uint8_t level; /* exceptions <=15 never set level */
 } VecInfo;
 
-struct NVICState {
+typedef struct NVICState {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
@@ -90,6 +88,6 @@ struct NVICState {
     qemu_irq sysresetreq;
 
     SysTickState systick[M_REG_NUM_BANKS];
-};
+} NVICState;
 
 #endif

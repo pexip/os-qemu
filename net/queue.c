@@ -46,7 +46,7 @@ struct NetPacket {
     unsigned flags;
     int size;
     NetPacketSent *sent_cb;
-    uint8_t data[];
+    uint8_t data[0];
 };
 
 struct NetQueue {
@@ -55,7 +55,7 @@ struct NetQueue {
     uint32_t nq_count;
     NetQueueDeliverFunc *deliver;
 
-    QTAILQ_HEAD(, NetPacket) packets;
+    QTAILQ_HEAD(packets, NetPacket) packets;
 
     unsigned delivering : 1;
 };
@@ -250,9 +250,6 @@ void qemu_net_queue_purge(NetQueue *queue, NetClientState *from)
 
 bool qemu_net_queue_flush(NetQueue *queue)
 {
-    if (queue->delivering)
-        return false;
-
     while (!QTAILQ_EMPTY(&queue->packets)) {
         NetPacket *packet;
         int ret;

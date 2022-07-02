@@ -24,14 +24,15 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
+#include "qemu-common.h"
 #include "cpu.h"
 #include "hw/sysbus.h"
+#include "hw/hw.h"
+#include "hw/isa/isa.h"
 #include "net/net.h"
-#include "sysemu/reset.h"
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "hw/loader.h"
@@ -52,13 +53,13 @@ typedef struct {
 
 static void load_kernel(MoxieCPU *cpu, LoaderParams *loader_params)
 {
-    uint64_t entry, kernel_high;
+    uint64_t entry, kernel_low, kernel_high;
     int64_t initrd_size;
     long kernel_size;
     ram_addr_t initrd_offset;
 
-    kernel_size = load_elf(loader_params->kernel_filename,  NULL, NULL, NULL,
-                           &entry, NULL, &kernel_high, NULL, 1, EM_MOXIE,
+    kernel_size = load_elf(loader_params->kernel_filename,  NULL, NULL,
+                           &entry, &kernel_low, &kernel_high, 1, EM_MOXIE,
                            0, 0);
 
     if (kernel_size <= 0) {
@@ -150,7 +151,7 @@ static void moxiesim_machine_init(MachineClass *mc)
 {
     mc->desc = "Moxie simulator platform";
     mc->init = moxiesim_init;
-    mc->is_default = true;
+    mc->is_default = 1;
     mc->default_cpu_type = MOXIE_CPU_TYPE_NAME("MoxieLite");
 }
 

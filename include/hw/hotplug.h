@@ -16,13 +16,18 @@
 
 #define TYPE_HOTPLUG_HANDLER "hotplug-handler"
 
-typedef struct HotplugHandlerClass HotplugHandlerClass;
-DECLARE_CLASS_CHECKERS(HotplugHandlerClass, HOTPLUG_HANDLER,
-                       TYPE_HOTPLUG_HANDLER)
+#define HOTPLUG_HANDLER_CLASS(klass) \
+     OBJECT_CLASS_CHECK(HotplugHandlerClass, (klass), TYPE_HOTPLUG_HANDLER)
+#define HOTPLUG_HANDLER_GET_CLASS(obj) \
+     OBJECT_GET_CLASS(HotplugHandlerClass, (obj), TYPE_HOTPLUG_HANDLER)
 #define HOTPLUG_HANDLER(obj) \
      INTERFACE_CHECK(HotplugHandler, (obj), TYPE_HOTPLUG_HANDLER)
 
-typedef struct HotplugHandler HotplugHandler;
+
+typedef struct HotplugHandler {
+    /* <private> */
+    Object Parent;
+} HotplugHandler;
 
 /**
  * hotplug_fn:
@@ -49,7 +54,7 @@ typedef void (*hotplug_fn)(HotplugHandler *plug_handler,
  *          Used for device removal with devices that implement
  *          asynchronous and synchronous (surprise) removal.
  */
-struct HotplugHandlerClass {
+typedef struct HotplugHandlerClass {
     /* <private> */
     InterfaceClass parent;
 
@@ -58,7 +63,7 @@ struct HotplugHandlerClass {
     hotplug_fn plug;
     hotplug_fn unplug_request;
     hotplug_fn unplug;
-};
+} HotplugHandlerClass;
 
 /**
  * hotplug_handler_plug:

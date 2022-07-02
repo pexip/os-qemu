@@ -14,17 +14,14 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/qdev.h"
 #include "qemu/thread.h"
 #include "qemu/error-report.h"
-#include "qemu/module.h"
 #include "chardev/char-fe.h"
 
 #include "hw/s390x/sclp.h"
-#include "migration/vmstate.h"
 #include "hw/s390x/event-facility.h"
-#include "hw/qdev-properties.h"
 #include "hw/s390x/ebcdic.h"
-#include "qom/object.h"
 
 #define SIZE_BUFFER 4096
 #define NEWLINE     "\n"
@@ -32,25 +29,24 @@
 typedef struct OprtnsCommand {
     EventBufferHeader header;
     MDMSU message_unit;
-    char data[];
+    char data[0];
 } QEMU_PACKED OprtnsCommand;
 
 /* max size for line-mode data in 4K SCCB page */
 #define SIZE_CONSOLE_BUFFER (SCCB_DATA_LEN - sizeof(OprtnsCommand))
 
-struct SCLPConsoleLM {
+typedef struct SCLPConsoleLM {
     SCLPEvent event;
     CharBackend chr;
     bool echo;                  /* immediate echo of input if true        */
     uint32_t write_errors;      /* errors writing to char layer           */
     uint32_t length;            /* length of byte stream in buffer        */
     uint8_t buf[SIZE_CONSOLE_BUFFER];
-};
-typedef struct SCLPConsoleLM SCLPConsoleLM;
+} SCLPConsoleLM;
 
 #define TYPE_SCLPLM_CONSOLE "sclplmconsole"
-DECLARE_INSTANCE_CHECKER(SCLPConsoleLM, SCLPLM_CONSOLE,
-                         TYPE_SCLPLM_CONSOLE)
+#define SCLPLM_CONSOLE(obj) \
+    OBJECT_CHECK(SCLPConsoleLM, (obj), TYPE_SCLPLM_CONSOLE)
 
 /*
 *  Character layer call-back functions
@@ -344,7 +340,7 @@ static void console_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     SCLPEventClass *ec = SCLP_EVENT_CLASS(klass);
 
-    device_class_set_props(dc, console_properties);
+    dc->props = console_properties;
     dc->reset = console_reset;
     dc->vmsd = &vmstate_sclplmconsole;
     ec->init = console_init;
@@ -357,7 +353,7 @@ static void console_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo sclp_console_info = {
-    .name          = TYPE_SCLPLM_CONSOLE,
+    .name          = "sclplmconsole",
     .parent        = TYPE_SCLP_EVENT,
     .instance_size = sizeof(SCLPConsoleLM),
     .class_init    = console_class_init,

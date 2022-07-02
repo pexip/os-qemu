@@ -7,27 +7,39 @@
  * This code is licensed under the GPL.
  */
 
-/*
- * QEMU interface:
- *  + sysbus MMIO region 0: device registers
- *  + sysbus IRQ 0: UARTINTR (combined interrupt line)
- *  + sysbus IRQ 1: UARTRXINTR (receive FIFO interrupt line)
- *  + sysbus IRQ 2: UARTTXINTR (transmit FIFO interrupt line)
- *  + sysbus IRQ 3: UARTRTINTR (receive timeout interrupt line)
- *  + sysbus IRQ 4: UARTMSINTR (momem status interrupt line)
- *  + sysbus IRQ 5: UARTEINTR (error interrupt line)
- */
-
 #include "qemu/osdep.h"
-#include "hw/char/pl011.h"
-#include "hw/irq.h"
 #include "hw/sysbus.h"
-#include "hw/qdev-clock.h"
-#include "migration/vmstate.h"
 #include "chardev/char-fe.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 #include "trace.h"
+
+#define TYPE_PL011 "pl011"
+#define PL011(obj) OBJECT_CHECK(PL011State, (obj), TYPE_PL011)
+
+typedef struct PL011State {
+    SysBusDevice parent_obj;
+
+    MemoryRegion iomem;
+    uint32_t readbuff;
+    uint32_t flags;
+    uint32_t lcr;
+    uint32_t rsr;
+    uint32_t cr;
+    uint32_t dmacr;
+    uint32_t int_enabled;
+    uint32_t int_level;
+    uint32_t read_fifo[16];
+    uint32_t ilpr;
+    uint32_t ibrd;
+    uint32_t fbrd;
+    uint32_t ifl;
+    int read_pos;
+    int read_count;
+    int read_trigger;
+    CharBackend chr;
+    qemu_irq irq;
+    const unsigned char *id;
+} PL011State;
 
 #define PL011_INT_TX 0x20
 #define PL011_INT_RX 0x10
@@ -37,46 +49,18 @@
 #define PL011_FLAG_TXFF 0x20
 #define PL011_FLAG_RXFE 0x10
 
-/* Interrupt status bits in UARTRIS, UARTMIS, UARTIMSC */
-#define INT_OE (1 << 10)
-#define INT_BE (1 << 9)
-#define INT_PE (1 << 8)
-#define INT_FE (1 << 7)
-#define INT_RT (1 << 6)
-#define INT_TX (1 << 5)
-#define INT_RX (1 << 4)
-#define INT_DSR (1 << 3)
-#define INT_DCD (1 << 2)
-#define INT_CTS (1 << 1)
-#define INT_RI (1 << 0)
-#define INT_E (INT_OE | INT_BE | INT_PE | INT_FE)
-#define INT_MS (INT_RI | INT_DSR | INT_DCD | INT_CTS)
-
 static const unsigned char pl011_id_arm[8] =
   { 0x11, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1 };
 static const unsigned char pl011_id_luminary[8] =
   { 0x11, 0x00, 0x18, 0x01, 0x0d, 0xf0, 0x05, 0xb1 };
 
-/* Which bits in the interrupt status matter for each outbound IRQ line ? */
-static const uint32_t irqmask[] = {
-    INT_E | INT_MS | INT_RT | INT_TX | INT_RX, /* combined IRQ */
-    INT_RX,
-    INT_TX,
-    INT_RT,
-    INT_MS,
-    INT_E,
-};
-
 static void pl011_update(PL011State *s)
 {
     uint32_t flags;
-    int i;
 
     flags = s->int_level & s->int_enabled;
     trace_pl011_irq_state(flags != 0);
-    for (i = 0; i < ARRAY_SIZE(s->irq); i++) {
-        qemu_set_irq(s->irq[i], (flags & irqmask[i]) != 0);
-    }
+    qemu_set_irq(s->irq, flags != 0);
 }
 
 static uint64_t pl011_read(void *opaque, hwaddr offset,
@@ -147,7 +131,7 @@ static uint64_t pl011_read(void *opaque, hwaddr offset,
         break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
-                      "pl011_read: Bad offset 0x%x\n", (int)offset);
+                      "pl011_read: Bad offset %x\n", (int)offset);
         r = 0;
         break;
     }
@@ -168,25 +152,6 @@ static void pl011_set_read_trigger(PL011State *s)
     else
 #endif
         s->read_trigger = 1;
-}
-
-static unsigned int pl011_get_baudrate(const PL011State *s)
-{
-    uint64_t clk;
-
-    if (s->fbrd == 0) {
-        return 0;
-    }
-
-    clk = clock_get_hz(s->clk);
-    return (clk / ((s->ibrd << 6) + s->fbrd)) << 2;
-}
-
-static void pl011_trace_baudrate_change(const PL011State *s)
-{
-    trace_pl011_baudrate_change(pl011_get_baudrate(s),
-                                clock_get_hz(s->clk),
-                                s->ibrd, s->fbrd);
 }
 
 static void pl011_write(void *opaque, hwaddr offset,
@@ -218,11 +183,9 @@ static void pl011_write(void *opaque, hwaddr offset,
         break;
     case 9: /* UARTIBRD */
         s->ibrd = value;
-        pl011_trace_baudrate_change(s);
         break;
     case 10: /* UARTFBRD */
         s->fbrd = value;
-        pl011_trace_baudrate_change(s);
         break;
     case 11: /* UARTLCR_H */
         /* Reset the FIFO state on FIFO enable or disable */
@@ -257,7 +220,7 @@ static void pl011_write(void *opaque, hwaddr offset,
         break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
-                      "pl011_write: Bad offset 0x%x\n", (int)offset);
+                      "pl011_write: Bad offset %x\n", (int)offset);
     }
 }
 
@@ -302,33 +265,16 @@ static void pl011_receive(void *opaque, const uint8_t *buf, int size)
     pl011_put_fifo(opaque, *buf);
 }
 
-static void pl011_event(void *opaque, QEMUChrEvent event)
+static void pl011_event(void *opaque, int event)
 {
     if (event == CHR_EVENT_BREAK)
         pl011_put_fifo(opaque, 0x400);
-}
-
-static void pl011_clock_update(void *opaque)
-{
-    PL011State *s = PL011(opaque);
-
-    pl011_trace_baudrate_change(s);
 }
 
 static const MemoryRegionOps pl011_ops = {
     .read = pl011_read,
     .write = pl011_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
-};
-
-static const VMStateDescription vmstate_pl011_clock = {
-    .name = "pl011/clock",
-    .version_id = 1,
-    .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
-        VMSTATE_CLOCK(clk, PL011State),
-        VMSTATE_END_OF_LIST()
-    }
 };
 
 static const VMStateDescription vmstate_pl011 = {
@@ -353,10 +299,6 @@ static const VMStateDescription vmstate_pl011 = {
         VMSTATE_INT32(read_count, PL011State),
         VMSTATE_INT32(read_trigger, PL011State),
         VMSTATE_END_OF_LIST()
-    },
-    .subsections = (const VMStateDescription * []) {
-        &vmstate_pl011_clock,
-        NULL
     }
 };
 
@@ -369,15 +311,10 @@ static void pl011_init(Object *obj)
 {
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
     PL011State *s = PL011(obj);
-    int i;
 
     memory_region_init_io(&s->iomem, OBJECT(s), &pl011_ops, s, "pl011", 0x1000);
     sysbus_init_mmio(sbd, &s->iomem);
-    for (i = 0; i < ARRAY_SIZE(s->irq); i++) {
-        sysbus_init_irq(sbd, &s->irq[i]);
-    }
-
-    s->clk = qdev_init_clock_in(DEVICE(obj), "clk", pl011_clock_update, s);
+    sysbus_init_irq(sbd, &s->irq);
 
     s->read_trigger = 1;
     s->ifl = 0x12;
@@ -401,7 +338,7 @@ static void pl011_class_init(ObjectClass *oc, void *data)
 
     dc->realize = pl011_realize;
     dc->vmsd = &vmstate_pl011;
-    device_class_set_props(dc, pl011_properties);
+    dc->props = pl011_properties;
 }
 
 static const TypeInfo pl011_arm_info = {
@@ -420,7 +357,7 @@ static void pl011_luminary_init(Object *obj)
 }
 
 static const TypeInfo pl011_luminary_info = {
-    .name          = TYPE_PL011_LUMINARY,
+    .name          = "pl011_luminary",
     .parent        = TYPE_PL011,
     .instance_init = pl011_luminary_init,
 };

@@ -1,9 +1,8 @@
 #ifndef QEMU_MSIX_H
 #define QEMU_MSIX_H
 
+#include "qemu-common.h"
 #include "hw/pci/pci.h"
-
-#define MSIX_CAP_LENGTH 12
 
 void msix_set_message(PCIDevice *dev, int vector, MSIMessage msg);
 MSIMessage msix_get_message(PCIDevice *dev, unsigned int vector);

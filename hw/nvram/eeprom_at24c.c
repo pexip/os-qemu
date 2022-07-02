@@ -10,11 +10,9 @@
 #include "qemu/osdep.h"
 
 #include "qapi/error.h"
-#include "qemu/module.h"
+#include "hw/hw.h"
 #include "hw/i2c/i2c.h"
-#include "hw/qdev-properties.h"
 #include "sysemu/block-backend.h"
-#include "qom/object.h"
 
 /* #define DEBUG_AT24C */
 
@@ -28,11 +26,9 @@
                             ## __VA_ARGS__)
 
 #define TYPE_AT24C_EE "at24c-eeprom"
-typedef struct EEPROMState EEPROMState;
-DECLARE_INSTANCE_CHECKER(EEPROMState, AT24C_EE,
-                         TYPE_AT24C_EE)
+#define AT24C_EE(obj) OBJECT_CHECK(EEPROMState, (obj), TYPE_AT24C_EE)
 
-struct EEPROMState {
+typedef struct EEPROMState {
     I2CSlave parent_obj;
 
     /* address counter */
@@ -48,7 +44,7 @@ struct EEPROMState {
     uint8_t *mem;
 
     BlockBackend *blk;
-};
+} EEPROMState;
 
 static
 int at24c_eeprom_event(I2CSlave *s, enum i2c_event event)
@@ -78,10 +74,10 @@ int at24c_eeprom_event(I2CSlave *s, enum i2c_event event)
 }
 
 static
-uint8_t at24c_eeprom_recv(I2CSlave *s)
+int at24c_eeprom_recv(I2CSlave *s)
 {
     EEPROMState *ee = AT24C_EE(s);
-    uint8_t ret;
+    int ret;
 
     ret = ee->mem[ee->cur];
 
@@ -185,7 +181,7 @@ void at24c_eeprom_class_init(ObjectClass *klass, void *data)
     k->recv = &at24c_eeprom_recv;
     k->send = &at24c_eeprom_send;
 
-    device_class_set_props(dc, at24c_eeprom_props);
+    dc->props = at24c_eeprom_props;
     dc->reset = at24c_eeprom_reset;
 }
 

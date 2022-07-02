@@ -12,13 +12,13 @@
 #ifndef QEMU_VIRTIO_RNG_H
 #define QEMU_VIRTIO_RNG_H
 
-#include "hw/virtio/virtio.h"
 #include "sysemu/rng.h"
+#include "sysemu/rng-random.h"
 #include "standard-headers/linux/virtio_rng.h"
-#include "qom/object.h"
 
 #define TYPE_VIRTIO_RNG "virtio-rng-device"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIORNG, VIRTIO_RNG)
+#define VIRTIO_RNG(obj) \
+        OBJECT_CHECK(VirtIORNG, (obj), TYPE_VIRTIO_RNG)
 #define VIRTIO_RNG_GET_PARENT_CLASS(obj) \
         OBJECT_GET_PARENT_CLASS(obj, TYPE_VIRTIO_RNG)
 
@@ -26,9 +26,10 @@ struct VirtIORNGConf {
     RngBackend *rng;
     uint64_t max_bytes;
     uint32_t period_ms;
+    RngRandom *default_backend;
 };
 
-struct VirtIORNG {
+typedef struct VirtIORNG {
     VirtIODevice parent_obj;
 
     /* Only one vq - guest puts buffer(s) on it when it needs entropy */
@@ -46,6 +47,6 @@ struct VirtIORNG {
     bool activate_timer;
 
     VMChangeStateEntry *vmstate;
-};
+} VirtIORNG;
 
 #endif

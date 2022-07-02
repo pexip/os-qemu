@@ -19,17 +19,14 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/cutils.h"
 #include "qapi/error.h"
 #include "cpu.h"
 #include "internal.h"
 #include "kvm_mips.h"
-#include "qemu/module.h"
+#include "qemu-common.h"
 #include "sysemu/kvm.h"
-#include "sysemu/qtest.h"
 #include "exec/exec-all.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-clock.h"
+
 
 static void mips_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -60,11 +57,9 @@ static bool mips_cpu_has_work(CPUState *cs)
     CPUMIPSState *env = &cpu->env;
     bool has_work = false;
 
-    /*
-     * Prior to MIPS Release 6 it is implementation dependent if non-enabled
-     * interrupts wake-up the CPU, however most of the implementations only
-     * check for interrupts that can be taken.
-     */
+    /* Prior to MIPS Release 6 it is implementation dependent if non-enabled
+       interrupts wake-up the CPU, however most of the implementations only
+       check for interrupts that can be taken. */
     if ((cs->interrupt_request & CPU_INTERRUPT_HARD) &&
         cpu_mips_hw_interrupts_pending(env)) {
         if (cpu_mips_hw_interrupts_enabled(env) ||
@@ -75,10 +70,8 @@ static bool mips_cpu_has_work(CPUState *cs)
 
     /* MIPS-MT has the ability to halt the CPU.  */
     if (env->CP0_Config3 & (1 << CP0C3_MT)) {
-        /*
-         * The QEMU model will issue an _WAKE request whenever the CPUs
-         * should be woken up.
-         */
+        /* The QEMU model will issue an _WAKE request whenever the CPUs
+           should be woken up.  */
         if (cs->interrupt_request & CPU_INTERRUPT_WAKE) {
             has_work = true;
         }
@@ -99,14 +92,14 @@ static bool mips_cpu_has_work(CPUState *cs)
     return has_work;
 }
 
-static void mips_cpu_reset(DeviceState *dev)
+/* CPUClass::reset() */
+static void mips_cpu_reset(CPUState *s)
 {
-    CPUState *s = CPU(dev);
     MIPSCPU *cpu = MIPS_CPU(s);
     MIPSCPUClass *mcc = MIPS_CPU_GET_CLASS(cpu);
     CPUMIPSState *env = &cpu->env;
 
-    mcc->parent_reset(dev);
+    mcc->parent_reset(s);
 
     memset(env, 0, offsetof(CPUMIPSState, end_reset_fields));
 
@@ -119,8 +112,7 @@ static void mips_cpu_reset(DeviceState *dev)
 #endif
 }
 
-static void mips_cpu_disas_set_info(CPUState *s, disassemble_info *info)
-{
+static void mips_cpu_disas_set_info(CPUState *s, disassemble_info *info) {
     MIPSCPU *cpu = MIPS_CPU(s);
     CPUMIPSState *env = &cpu->env;
 
@@ -137,41 +129,12 @@ static void mips_cpu_disas_set_info(CPUState *s, disassemble_info *info)
     }
 }
 
-/*
- * Since commit 6af0bf9c7c3 this model assumes a CPU clocked at 200MHz.
- */
-#define CPU_FREQ_HZ_DEFAULT     200000000
-#define CP0_COUNT_RATE_DEFAULT  2
-
-static void mips_cp0_period_set(MIPSCPU *cpu)
-{
-    CPUMIPSState *env = &cpu->env;
-
-    env->cp0_count_ns = cpu->cp0_count_rate
-                        * clock_get_ns(MIPS_CPU(cpu)->clock);
-    assert(env->cp0_count_ns);
-}
-
 static void mips_cpu_realizefn(DeviceState *dev, Error **errp)
 {
     CPUState *cs = CPU(dev);
     MIPSCPU *cpu = MIPS_CPU(dev);
     MIPSCPUClass *mcc = MIPS_CPU_GET_CLASS(dev);
     Error *local_err = NULL;
-
-    if (!clock_get(cpu->clock)) {
-#ifndef CONFIG_USER_ONLY
-        if (!qtest_enabled()) {
-            g_autofree char *cpu_freq_str = freq_to_str(CPU_FREQ_HZ_DEFAULT);
-
-            warn_report("CPU input clock is not connected to any output clock, "
-                        "using default frequency of %s.", cpu_freq_str);
-        }
-#endif
-        /* Initialize the frequency in case the clock remains unconnected. */
-        clock_set_hz(cpu->clock, CPU_FREQ_HZ_DEFAULT);
-    }
-    mips_cp0_period_set(cpu);
 
     cpu_exec_realizefn(cs, &local_err);
     if (local_err != NULL) {
@@ -189,12 +152,12 @@ static void mips_cpu_realizefn(DeviceState *dev, Error **errp)
 
 static void mips_cpu_initfn(Object *obj)
 {
+    CPUState *cs = CPU(obj);
     MIPSCPU *cpu = MIPS_CPU(obj);
     CPUMIPSState *env = &cpu->env;
     MIPSCPUClass *mcc = MIPS_CPU_GET_CLASS(obj);
 
-    cpu_set_cpustate_pointers(cpu);
-    cpu->clock = qdev_init_clock_in(DEVICE(obj), "clk-in", NULL, cpu);
+    cs->env_ptr = env;
     env->cpu_model = mcc->cpu_def;
 }
 
@@ -214,13 +177,6 @@ static ObjectClass *mips_cpu_class_by_name(const char *cpu_model)
     return oc;
 }
 
-static Property mips_cpu_properties[] = {
-    /* CP0 timer running at half the clock of the CPU */
-    DEFINE_PROP_UINT32("cp0-count-rate", MIPSCPU, cp0_count_rate,
-                       CP0_COUNT_RATE_DEFAULT),
-    DEFINE_PROP_END_OF_LIST()
-};
-
 static void mips_cpu_class_init(ObjectClass *c, void *data)
 {
     MIPSCPUClass *mcc = MIPS_CPU_CLASS(c);
@@ -229,8 +185,8 @@ static void mips_cpu_class_init(ObjectClass *c, void *data)
 
     device_class_set_parent_realize(dc, mips_cpu_realizefn,
                                     &mcc->parent_realize);
-    device_class_set_parent_reset(dc, mips_cpu_reset, &mcc->parent_reset);
-    device_class_set_props(dc, mips_cpu_properties);
+    mcc->parent_reset = cc->reset;
+    cc->reset = mips_cpu_reset;
 
     cc->class_by_name = mips_cpu_class_by_name;
     cc->has_work = mips_cpu_has_work;
@@ -241,8 +197,10 @@ static void mips_cpu_class_init(ObjectClass *c, void *data)
     cc->synchronize_from_tb = mips_cpu_synchronize_from_tb;
     cc->gdb_read_register = mips_cpu_gdb_read_register;
     cc->gdb_write_register = mips_cpu_gdb_write_register;
-#ifndef CONFIG_USER_ONLY
-    cc->do_transaction_failed = mips_cpu_do_transaction_failed;
+#ifdef CONFIG_USER_ONLY
+    cc->handle_mmu_fault = mips_cpu_handle_mmu_fault;
+#else
+    cc->do_unassigned_access = mips_cpu_unassigned_access;
     cc->do_unaligned_access = mips_cpu_do_unaligned_access;
     cc->get_phys_page_debug = mips_cpu_get_phys_page_debug;
     cc->vmsd = &vmstate_mips_cpu;
@@ -250,7 +208,6 @@ static void mips_cpu_class_init(ObjectClass *c, void *data)
     cc->disas_set_info = mips_cpu_disas_set_info;
 #ifdef CONFIG_TCG
     cc->tcg_initialize = mips_tcg_init;
-    cc->tlb_fill = mips_cpu_tlb_fill;
 #endif
 
     cc->gdb_num_core_regs = 73;
@@ -298,15 +255,3 @@ static void mips_cpu_register_types(void)
 }
 
 type_init(mips_cpu_register_types)
-
-/* Could be used by generic CPU object */
-MIPSCPU *mips_cpu_create_with_clock(const char *cpu_type, Clock *cpu_refclk)
-{
-    DeviceState *cpu;
-
-    cpu = DEVICE(object_new(cpu_type));
-    qdev_connect_clock_in(cpu, "clk-in", cpu_refclk);
-    qdev_realize(cpu, NULL, &error_abort);
-
-    return MIPS_CPU(cpu);
-}

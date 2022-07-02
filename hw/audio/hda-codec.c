@@ -18,15 +18,12 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/pci/pci.h"
-#include "hw/qdev-properties.h"
 #include "intel-hda.h"
-#include "migration/vmstate.h"
-#include "qemu/module.h"
 #include "intel-hda-defs.h"
 #include "audio/audio.h"
 #include "trace.h"
-#include "qom/object.h"
 
 /* -------------------------------------------------------------------------- */
 
@@ -102,9 +99,9 @@ static void hda_codec_parse_fmt(uint32_t format, struct audsettings *as)
     }
 
     switch (format & AC_FMT_BITS_MASK) {
-    case AC_FMT_BITS_8:  as->fmt = AUDIO_FORMAT_S8;  break;
-    case AC_FMT_BITS_16: as->fmt = AUDIO_FORMAT_S16; break;
-    case AC_FMT_BITS_32: as->fmt = AUDIO_FORMAT_S32; break;
+    case AC_FMT_BITS_8:  as->fmt = AUD_FMT_S8;  break;
+    case AC_FMT_BITS_16: as->fmt = AUD_FMT_S16; break;
+    case AC_FMT_BITS_32: as->fmt = AUD_FMT_S32; break;
     }
 
     as->nchannels = ((format & AC_FMT_CHAN_MASK) >> AC_FMT_CHAN_SHIFT) + 1;
@@ -137,12 +134,12 @@ static void hda_codec_parse_fmt(uint32_t format, struct audsettings *as)
 /* -------------------------------------------------------------------------- */
 
 static const char *fmt2name[] = {
-    [ AUDIO_FORMAT_U8  ] = "PCM-U8",
-    [ AUDIO_FORMAT_S8  ] = "PCM-S8",
-    [ AUDIO_FORMAT_U16 ] = "PCM-U16",
-    [ AUDIO_FORMAT_S16 ] = "PCM-S16",
-    [ AUDIO_FORMAT_U32 ] = "PCM-U32",
-    [ AUDIO_FORMAT_S32 ] = "PCM-S32",
+    [ AUD_FMT_U8  ] = "PCM-U8",
+    [ AUD_FMT_S8  ] = "PCM-S8",
+    [ AUD_FMT_U16 ] = "PCM-U16",
+    [ AUD_FMT_S16 ] = "PCM-S16",
+    [ AUD_FMT_U32 ] = "PCM-U32",
+    [ AUD_FMT_S32 ] = "PCM-S32",
 };
 
 typedef struct HDAAudioState HDAAudioState;
@@ -172,7 +169,7 @@ struct HDAAudioStream {
 };
 
 #define TYPE_HDA_AUDIO "hda-audio"
-OBJECT_DECLARE_SIMPLE_TYPE(HDAAudioState, HDA_AUDIO)
+#define HDA_AUDIO(obj) OBJECT_CHECK(HDAAudioState, (obj), TYPE_HDA_AUDIO)
 
 struct HDAAudioState {
     HDACodecDevice hda;
@@ -236,10 +233,10 @@ static void hda_audio_input_timer(void *opaque)
         goto out_timer;
     }
 
-    int64_t to_transfer = MIN(wpos - rpos, wanted_rpos - rpos);
+    int64_t to_transfer = audio_MIN(wpos - rpos, wanted_rpos - rpos);
     while (to_transfer) {
         uint32_t start = (rpos & B_MASK);
-        uint32_t chunk = MIN(B_SIZE - start, to_transfer);
+        uint32_t chunk = audio_MIN(B_SIZE - start, to_transfer);
         int rc = hda_codec_xfer(
                 &st->state->hda, st->stream, false, st->buf + start, chunk);
         if (!rc) {
@@ -264,11 +261,13 @@ static void hda_audio_input_cb(void *opaque, int avail)
     int64_t wpos = st->wpos;
     int64_t rpos = st->rpos;
 
-    int64_t to_transfer = MIN(B_SIZE - (wpos - rpos), avail);
+    int64_t to_transfer = audio_MIN(B_SIZE - (wpos - rpos), avail);
+
+    hda_timer_sync_adjust(st, -((wpos - rpos) + to_transfer - (B_SIZE >> 1)));
 
     while (to_transfer) {
         uint32_t start = (uint32_t) (wpos & B_MASK);
-        uint32_t chunk = (uint32_t) MIN(B_SIZE - start, to_transfer);
+        uint32_t chunk = (uint32_t) audio_MIN(B_SIZE - start, to_transfer);
         uint32_t read = AUD_read(st->voice.in, st->buf + start, chunk);
         wpos += read;
         to_transfer -= read;
@@ -277,8 +276,6 @@ static void hda_audio_input_cb(void *opaque, int avail)
             break;
         }
     }
-
-    hda_timer_sync_adjust(st, -((wpos - rpos) - (B_SIZE >> 1)));
 }
 
 static void hda_audio_output_timer(void *opaque)
@@ -300,10 +297,10 @@ static void hda_audio_output_timer(void *opaque)
         goto out_timer;
     }
 
-    int64_t to_transfer = MIN(B_SIZE - (wpos - rpos), wanted_wpos - wpos);
+    int64_t to_transfer = audio_MIN(B_SIZE - (wpos - rpos), wanted_wpos - wpos);
     while (to_transfer) {
         uint32_t start = (wpos & B_MASK);
-        uint32_t chunk = MIN(B_SIZE - start, to_transfer);
+        uint32_t chunk = audio_MIN(B_SIZE - start, to_transfer);
         int rc = hda_codec_xfer(
                 &st->state->hda, st->stream, true, st->buf + start, chunk);
         if (!rc) {
@@ -328,7 +325,7 @@ static void hda_audio_output_cb(void *opaque, int avail)
     int64_t wpos = st->wpos;
     int64_t rpos = st->rpos;
 
-    int64_t to_transfer = MIN(wpos - rpos, avail);
+    int64_t to_transfer = audio_MIN(wpos - rpos, avail);
 
     if (wpos - rpos == B_SIZE) {
         /* drop buffer, reset timer adjust */
@@ -339,9 +336,11 @@ static void hda_audio_output_cb(void *opaque, int avail)
         return;
     }
 
+    hda_timer_sync_adjust(st, (wpos - rpos) - to_transfer - (B_SIZE >> 1));
+
     while (to_transfer) {
         uint32_t start = (uint32_t) (rpos & B_MASK);
-        uint32_t chunk = (uint32_t) MIN(B_SIZE - start, to_transfer);
+        uint32_t chunk = (uint32_t) audio_MIN(B_SIZE - start, to_transfer);
         uint32_t written = AUD_write(st->voice.out, st->buf + start, chunk);
         rpos += written;
         to_transfer -= written;
@@ -350,8 +349,6 @@ static void hda_audio_output_cb(void *opaque, int avail)
             break;
         }
     }
-
-    hda_timer_sync_adjust(st, (wpos - rpos) - (B_SIZE >> 1));
 }
 
 static void hda_audio_compat_input_cb(void *opaque, int avail)
@@ -842,7 +839,6 @@ static const VMStateDescription vmstate_hda_audio = {
 };
 
 static Property hda_audio_properties[] = {
-    DEFINE_AUDIO_PROPERTIES(HDAAudioState, card),
     DEFINE_PROP_UINT32("debug", HDAAudioState, debug,   0),
     DEFINE_PROP_BOOL("mixer", HDAAudioState, mixer,  true),
     DEFINE_PROP_BOOL("use-timer", HDAAudioState, use_timer,  true),
@@ -893,13 +889,12 @@ static void hda_audio_base_class_init(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
     dc->reset = hda_audio_reset;
     dc->vmsd = &vmstate_hda_audio;
-    device_class_set_props(dc, hda_audio_properties);
+    dc->props = hda_audio_properties;
 }
 
 static const TypeInfo hda_audio_info = {
     .name          = TYPE_HDA_AUDIO,
     .parent        = TYPE_HDA_CODEC_DEVICE,
-    .instance_size = sizeof(HDAAudioState),
     .class_init    = hda_audio_base_class_init,
     .abstract      = true,
 };
@@ -916,6 +911,7 @@ static void hda_audio_output_class_init(ObjectClass *klass, void *data)
 static const TypeInfo hda_audio_output_info = {
     .name          = "hda-output",
     .parent        = TYPE_HDA_AUDIO,
+    .instance_size = sizeof(HDAAudioState),
     .class_init    = hda_audio_output_class_init,
 };
 
@@ -931,6 +927,7 @@ static void hda_audio_duplex_class_init(ObjectClass *klass, void *data)
 static const TypeInfo hda_audio_duplex_info = {
     .name          = "hda-duplex",
     .parent        = TYPE_HDA_AUDIO,
+    .instance_size = sizeof(HDAAudioState),
     .class_init    = hda_audio_duplex_class_init,
 };
 
@@ -946,6 +943,7 @@ static void hda_audio_micro_class_init(ObjectClass *klass, void *data)
 static const TypeInfo hda_audio_micro_info = {
     .name          = "hda-micro",
     .parent        = TYPE_HDA_AUDIO,
+    .instance_size = sizeof(HDAAudioState),
     .class_init    = hda_audio_micro_class_init,
 };
 

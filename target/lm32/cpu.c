@@ -20,8 +20,8 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu/qemu-print.h"
 #include "cpu.h"
+#include "qemu-common.h"
 
 
 static void lm32_cpu_set_pc(CPUState *cs, vaddr value)
@@ -34,22 +34,27 @@ static void lm32_cpu_set_pc(CPUState *cs, vaddr value)
 static void lm32_cpu_list_entry(gpointer data, gpointer user_data)
 {
     ObjectClass *oc = data;
+    CPUListState *s = user_data;
     const char *typename = object_class_get_name(oc);
     char *name;
 
     name = g_strndup(typename, strlen(typename) - strlen(LM32_CPU_TYPE_SUFFIX));
-    qemu_printf("  %s\n", name);
+    (*s->cpu_fprintf)(s->file, "  %s\n", name);
     g_free(name);
 }
 
 
-void lm32_cpu_list(void)
+void lm32_cpu_list(FILE *f, fprintf_function cpu_fprintf)
 {
+    CPUListState s = {
+        .file = f,
+        .cpu_fprintf = cpu_fprintf,
+    };
     GSList *list;
 
     list = object_class_get_list_sorted(TYPE_LM32_CPU, false);
-    qemu_printf("Available CPUs:\n");
-    g_slist_foreach(list, lm32_cpu_list_entry, NULL);
+    (*cpu_fprintf)(f, "Available CPUs:\n");
+    g_slist_foreach(list, lm32_cpu_list_entry, &s);
     g_slist_free(list);
 }
 
@@ -99,14 +104,14 @@ static bool lm32_cpu_has_work(CPUState *cs)
     return cs->interrupt_request & CPU_INTERRUPT_HARD;
 }
 
-static void lm32_cpu_reset(DeviceState *dev)
+/* CPUClass::reset() */
+static void lm32_cpu_reset(CPUState *s)
 {
-    CPUState *s = CPU(dev);
     LM32CPU *cpu = LM32_CPU(s);
     LM32CPUClass *lcc = LM32_CPU_GET_CLASS(cpu);
     CPULM32State *env = &cpu->env;
 
-    lcc->parent_reset(dev);
+    lcc->parent_reset(s);
 
     /* reset cpu state */
     memset(env, 0, offsetof(CPULM32State, end_reset_fields));
@@ -141,10 +146,11 @@ static void lm32_cpu_realizefn(DeviceState *dev, Error **errp)
 
 static void lm32_cpu_initfn(Object *obj)
 {
+    CPUState *cs = CPU(obj);
     LM32CPU *cpu = LM32_CPU(obj);
     CPULM32State *env = &cpu->env;
 
-    cpu_set_cpustate_pointers(cpu);
+    cs->env_ptr = env;
 
     env->flags = 0;
 }
@@ -218,7 +224,8 @@ static void lm32_cpu_class_init(ObjectClass *oc, void *data)
 
     device_class_set_parent_realize(dc, lm32_cpu_realizefn,
                                     &lcc->parent_realize);
-    device_class_set_parent_reset(dc, lm32_cpu_reset, &lcc->parent_reset);
+    lcc->parent_reset = cc->reset;
+    cc->reset = lm32_cpu_reset;
 
     cc->class_by_name = lm32_cpu_class_by_name;
     cc->has_work = lm32_cpu_has_work;
@@ -228,8 +235,9 @@ static void lm32_cpu_class_init(ObjectClass *oc, void *data)
     cc->set_pc = lm32_cpu_set_pc;
     cc->gdb_read_register = lm32_cpu_gdb_read_register;
     cc->gdb_write_register = lm32_cpu_gdb_write_register;
-    cc->tlb_fill = lm32_cpu_tlb_fill;
-#ifndef CONFIG_USER_ONLY
+#ifdef CONFIG_USER_ONLY
+    cc->handle_mmu_fault = lm32_cpu_handle_mmu_fault;
+#else
     cc->get_phys_page_debug = lm32_cpu_get_phys_page_debug;
     cc->vmsd = &vmstate_lm32_cpu;
 #endif

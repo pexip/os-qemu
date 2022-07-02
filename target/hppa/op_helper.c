@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,14 +22,14 @@
 #include "exec/exec-all.h"
 #include "exec/helper-proto.h"
 #include "exec/cpu_ldst.h"
+#include "sysemu/sysemu.h"
 #include "qemu/timer.h"
-#include "sysemu/runstate.h"
 #include "fpu/softfloat.h"
-#include "trace.h"
 
 void QEMU_NORETURN HELPER(excp)(CPUHPPAState *env, int excp)
 {
-    CPUState *cs = env_cpu(env);
+    HPPACPU *cpu = hppa_env_get_cpu(env);
+    CPUState *cs = CPU(cpu);
 
     cs->exception_index = excp;
     cpu_loop_exit(cs);
@@ -37,7 +37,8 @@ void QEMU_NORETURN HELPER(excp)(CPUHPPAState *env, int excp)
 
 void QEMU_NORETURN hppa_dynamic_excp(CPUHPPAState *env, int excp, uintptr_t ra)
 {
-    CPUState *cs = env_cpu(env);
+    HPPACPU *cpu = hppa_env_get_cpu(env);
+    CPUState *cs = CPU(cpu);
 
     cs->exception_index = excp;
     cpu_loop_exit_restore(cs, ra);
@@ -67,7 +68,7 @@ static void atomic_store_3(CPUHPPAState *env, target_ulong addr, uint32_t val,
     old = *haddr;
     while (1) {
         new = (old & ~mask) | (val & mask);
-        cmp = qatomic_cmpxchg(haddr, old, new);
+        cmp = atomic_cmpxchg(haddr, old, new);
         if (cmp == old) {
             return;
         }
@@ -75,13 +76,15 @@ static void atomic_store_3(CPUHPPAState *env, target_ulong addr, uint32_t val,
     }
 #else
     /* FIXME -- we can do better.  */
-    cpu_loop_exit_atomic(env_cpu(env), ra);
+    cpu_loop_exit_atomic(ENV_GET_CPU(env), ra);
 #endif
 }
 
 static void do_stby_b(CPUHPPAState *env, target_ulong addr, target_ureg val,
-                      bool parallel, uintptr_t ra)
+                      bool parallel)
 {
+    uintptr_t ra = GETPC();
+
     switch (addr & 3) {
     case 3:
         cpu_stb_data_ra(env, addr, val, ra);
@@ -106,18 +109,20 @@ static void do_stby_b(CPUHPPAState *env, target_ulong addr, target_ureg val,
 
 void HELPER(stby_b)(CPUHPPAState *env, target_ulong addr, target_ureg val)
 {
-    do_stby_b(env, addr, val, false, GETPC());
+    do_stby_b(env, addr, val, false);
 }
 
 void HELPER(stby_b_parallel)(CPUHPPAState *env, target_ulong addr,
                              target_ureg val)
 {
-    do_stby_b(env, addr, val, true, GETPC());
+    do_stby_b(env, addr, val, true);
 }
 
 static void do_stby_e(CPUHPPAState *env, target_ulong addr, target_ureg val,
-                      bool parallel, uintptr_t ra)
+                      bool parallel)
 {
+    uintptr_t ra = GETPC();
+
     switch (addr & 3) {
     case 3:
         /* The 3 byte store must appear atomic.  */
@@ -137,29 +142,22 @@ static void do_stby_e(CPUHPPAState *env, target_ulong addr, target_ureg val,
     default:
         /* Nothing is stored, but protection is checked and the
            cacheline is marked dirty.  */
+#ifndef CONFIG_USER_ONLY
         probe_write(env, addr, 0, cpu_mmu_index(env, 0), ra);
+#endif
         break;
     }
 }
 
 void HELPER(stby_e)(CPUHPPAState *env, target_ulong addr, target_ureg val)
 {
-    do_stby_e(env, addr, val, false, GETPC());
+    do_stby_e(env, addr, val, false);
 }
 
 void HELPER(stby_e_parallel)(CPUHPPAState *env, target_ulong addr,
                              target_ureg val)
 {
-    do_stby_e(env, addr, val, true, GETPC());
-}
-
-void HELPER(ldc_check)(target_ulong addr)
-{
-    if (unlikely(addr & 0xf)) {
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "Undefined ldc to unaligned address mod 16: "
-                      TARGET_FMT_lx "\n", addr);
-    }
+    do_stby_e(env, addr, val, true);
 }
 
 target_ureg HELPER(probe)(CPUHPPAState *env, target_ulong addr,
@@ -171,7 +169,6 @@ target_ureg HELPER(probe)(CPUHPPAState *env, target_ulong addr,
     int prot, excp;
     hwaddr phys;
 
-    trace_hppa_tlb_probe(addr, level, want);
     /* Fail if the requested privilege level is higher than current.  */
     if (level < (env->iaoq_f & 3)) {
         return 0;
@@ -523,8 +520,7 @@ uint64_t HELPER(fcnv_t_d_udw)(CPUHPPAState *env, float64 arg)
     return ret;
 }
 
-static void update_fr0_cmp(CPUHPPAState *env, uint32_t y,
-                           uint32_t c, FloatRelation r)
+static void update_fr0_cmp(CPUHPPAState *env, uint32_t y, uint32_t c, int r)
 {
     uint32_t shadow = env->fr0_shadow;
 
@@ -566,7 +562,7 @@ static void update_fr0_cmp(CPUHPPAState *env, uint32_t y,
 void HELPER(fcmp_s)(CPUHPPAState *env, float32 a, float32 b,
                     uint32_t y, uint32_t c)
 {
-    FloatRelation r;
+    int r;
     if (c & 1) {
         r = float32_compare(a, b, &env->fp_status);
     } else {
@@ -579,7 +575,7 @@ void HELPER(fcmp_s)(CPUHPPAState *env, float32 a, float32 b,
 void HELPER(fcmp_d)(CPUHPPAState *env, float64 a, float64 b,
                     uint32_t y, uint32_t c)
 {
-    FloatRelation r;
+    int r;
     if (c & 1) {
         r = float64_compare(a, b, &env->fp_status);
     } else {
@@ -636,7 +632,7 @@ target_ureg HELPER(read_interval_timer)(void)
 #ifndef CONFIG_USER_ONLY
 void HELPER(write_interval_timer)(CPUHPPAState *env, target_ureg val)
 {
-    HPPACPU *cpu = env_archcpu(env);
+    HPPACPU *cpu = hppa_env_get_cpu(env);
     uint64_t current = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     uint64_t timeout;
 
@@ -669,21 +665,22 @@ void HELPER(reset)(CPUHPPAState *env)
 target_ureg HELPER(swap_system_mask)(CPUHPPAState *env, target_ureg nsm)
 {
     target_ulong psw = env->psw;
-    /*
-     * Setting the PSW Q bit to 1, if it was not already 1, is an
-     * undefined operation.
-     *
-     * However, HP-UX 10.20 does this with the SSM instruction.
-     * Tested this on HP9000/712 and HP9000/785/C3750 and both
-     * machines set the Q bit from 0 to 1 without an exception,
-     * so let this go without comment.
-     */
+    /* ??? On second reading this condition simply seems
+       to be undefined rather than a diagnosed trap.  */
+    if (nsm & ~psw & PSW_Q) {
+        hppa_dynamic_excp(env, EXCP_ILL, GETPC());
+    }
     env->psw = (psw & ~PSW_SM) | (nsm & PSW_SM);
     return psw & PSW_SM;
 }
 
 void HELPER(rfi)(CPUHPPAState *env)
 {
+    /* ??? On second reading this condition simply seems
+       to be undefined rather than a diagnosed trap.  */
+    if (env->psw & (PSW_I | PSW_R | PSW_Q)) {
+        helper_excp(env, EXCP_ILL);
+    }
     env->iasq_f = (uint64_t)env->cr[CR_IIASQ] << 32;
     env->iasq_b = (uint64_t)env->cr_back[0] << 32;
     env->iaoq_f = env->cr[CR_IIAOQ];

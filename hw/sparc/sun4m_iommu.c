@@ -23,12 +23,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties.h"
 #include "hw/sparc/sun4m_iommu.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
-#include "qemu/module.h"
 #include "exec/address-spaces.h"
 #include "trace.h"
 
@@ -379,7 +375,7 @@ static void iommu_class_init(ObjectClass *klass, void *data)
 
     dc->reset = iommu_reset;
     dc->vmsd = &vmstate_iommu;
-    device_class_set_props(dc, iommu_properties);
+    dc->props = iommu_properties;
 }
 
 static const TypeInfo iommu_info = {

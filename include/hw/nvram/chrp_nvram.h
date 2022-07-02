@@ -18,8 +18,6 @@
 #ifndef CHRP_NVRAM_H
 #define CHRP_NVRAM_H
 
-#include "qemu/bswap.h"
-
 /* OpenBIOS NVRAM partition */
 typedef struct {
     uint8_t signature;
@@ -50,8 +48,7 @@ chrp_nvram_finish_partition(ChrpNvramPartHdr *header, uint32_t size)
     header->checksum = sum & 0xff;
 }
 
-/* chrp_nvram_create_system_partition() failure is fatal */
-int chrp_nvram_create_system_partition(uint8_t *data, int min_len, int max_len);
+int chrp_nvram_create_system_partition(uint8_t *data, int min_len);
 int chrp_nvram_create_free_partition(uint8_t *data, int len);
 
 #endif

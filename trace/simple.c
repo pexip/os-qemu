@@ -16,7 +16,6 @@
 #include "trace/control.h"
 #include "trace/simple.h"
 #include "qemu/error-report.h"
-#include "qemu/qemu-print.h"
 
 /** Trace file header event ID, picked to avoid conflict with real event IDs */
 #define HEADER_EVENT_ID (~(uint64_t)0)
@@ -170,9 +169,9 @@ static gpointer writeout_thread(gpointer opaque)
         wait_for_trace_records_available();
 
         if (g_atomic_int_get(&dropped_events)) {
-            dropped.rec.event = DROPPED_EVENT_ID;
+            dropped.rec.event = DROPPED_EVENT_ID,
             dropped.rec.timestamp_ns = get_clock();
-            dropped.rec.length = sizeof(TraceRecord) + sizeof(uint64_t);
+            dropped.rec.length = sizeof(TraceRecord) + sizeof(uint64_t),
             dropped.rec.pid = trace_pid;
             do {
                 dropped_count = g_atomic_int_get(&dropped_events);
@@ -302,17 +301,10 @@ static int st_write_event_mapping(void)
     return 0;
 }
 
-/**
- * Enable / disable tracing, return whether it was enabled.
- *
- * @enable: enable if %true, else disable.
- */
-bool st_set_trace_file_enabled(bool enable)
+void st_set_trace_file_enabled(bool enable)
 {
-    bool was_enabled = trace_fp;
-
     if (enable == !!trace_fp) {
-        return was_enabled;     /* no change */
+        return; /* no change */
     }
 
     /* Halt trace writeout */
@@ -330,14 +322,14 @@ bool st_set_trace_file_enabled(bool enable)
 
         trace_fp = fopen(trace_file_name, "wb");
         if (!trace_fp) {
-            return was_enabled;
+            return;
         }
 
         if (fwrite(&header, sizeof header, 1, trace_fp) != 1 ||
             st_write_event_mapping() < 0) {
             fclose(trace_fp);
             trace_fp = NULL;
-            return was_enabled;
+            return;
         }
 
         /* Resume trace writeout */
@@ -347,7 +339,6 @@ bool st_set_trace_file_enabled(bool enable)
         fclose(trace_fp);
         trace_fp = NULL;
     }
-    return was_enabled;
 }
 
 /**
@@ -358,7 +349,7 @@ bool st_set_trace_file_enabled(bool enable)
  */
 void st_set_trace_file(const char *file)
 {
-    bool saved_enable = st_set_trace_file_enabled(false);
+    st_set_trace_file_enabled(false);
 
     g_free(trace_file_name);
 
@@ -369,13 +360,13 @@ void st_set_trace_file(const char *file)
         trace_file_name = g_strdup_printf("%s", file);
     }
 
-    st_set_trace_file_enabled(saved_enable);
+    st_set_trace_file_enabled(true);
 }
 
-void st_print_trace_file_status(void)
+void st_print_trace_file_status(FILE *stream, int (*stream_printf)(FILE *stream, const char *fmt, ...))
 {
-    qemu_printf("Trace file \"%s\" %s.\n",
-                trace_file_name, trace_fp ? "on" : "off");
+    stream_printf(stream, "Trace file \"%s\" %s.\n",
+                  trace_file_name, trace_fp ? "on" : "off");
 }
 
 void st_flush_trace_buffer(void)

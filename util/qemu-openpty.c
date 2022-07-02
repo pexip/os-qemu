@@ -35,7 +35,7 @@
 #include "qemu/osdep.h"
 #include "qemu-common.h"
 
-#if defined HAVE_PTY_H
+#if defined(__GLIBC__)
 # include <pty.h>
 #elif defined CONFIG_BSD
 # include <termios.h>
@@ -52,9 +52,7 @@
 #endif
 
 #ifdef __sun__
-
-#if !defined(HAVE_OPENPTY)
-/* Once illumos has openpty(), this is going to be removed. */
+/* Once Solaris has openpty(), this is going to be removed. */
 static int openpty(int *amaster, int *aslave, char *name,
                    struct termios *termp, struct winsize *winp)
 {
@@ -95,7 +93,6 @@ err:
         close(mfd);
         return -1;
 }
-#endif
 
 static void cfmakeraw (struct termios *termios_p)
 {

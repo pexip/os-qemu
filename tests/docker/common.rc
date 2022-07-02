@@ -11,10 +11,6 @@
 # or (at your option) any later version. See the COPYING file in
 # the top-level directory.
 
-# This might be set by ENV of a docker container... it is always
-# overriden by TARGET_LIST if the user sets it.
-DEF_TARGET_LIST=${DEF_TARGET_LIST:-"x86_64-softmmu,aarch64-softmmu"}
-
 requires()
 {
     for c in $@; do
@@ -47,13 +43,18 @@ build_qemu()
 check_qemu()
 {
     # default to make check unless the caller specifies
-    if [ $# = 0 ]; then
+    if test -z "$@"; then
         INVOCATION="check"
     else
         INVOCATION="$@"
     fi
 
-    make $MAKEFLAGS $INVOCATION
+    if command -v gtester > /dev/null 2>&1 && \
+           gtester --version > /dev/null 2>&1; then
+        make $MAKEFLAGS $INVOCATION
+    else
+        echo "No working gtester, skipping make $INVOCATION"
+    fi
 }
 
 test_fail()

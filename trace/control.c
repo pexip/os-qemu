@@ -27,7 +27,7 @@
 #include "qemu/error-report.h"
 #include "qemu/config-file.h"
 #include "monitor/monitor.h"
-#include "trace/trace-root.h"
+#include "trace-root.h"
 
 int trace_events_enabled_count;
 
@@ -39,7 +39,6 @@ static TraceEventGroup *event_groups;
 static size_t nevent_groups;
 static uint32_t next_id;
 static uint32_t next_vcpu_id;
-static bool init_trace_on_startup;
 
 QemuOptsList qemu_trace_opts = {
     .name = "trace",
@@ -99,6 +98,38 @@ TraceEvent *trace_event_name(const char *name)
     return NULL;
 }
 
+static bool pattern_glob(const char *pat, const char *ev)
+{
+    while (*pat != '\0' && *ev != '\0') {
+        if (*pat == *ev) {
+            pat++;
+            ev++;
+        }
+        else if (*pat == '*') {
+            if (pattern_glob(pat, ev+1)) {
+                return true;
+            } else if (pattern_glob(pat+1, ev)) {
+                return true;
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    while (*pat == '*') {
+        pat++;
+    }
+
+    if (*pat == '\0' && *ev == '\0') {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+
 void trace_event_iter_init(TraceEventIter *iter, const char *pattern)
 {
     iter->event = 0;
@@ -117,7 +148,8 @@ TraceEvent *trace_event_iter_next(TraceEventIter *iter)
             iter->group++;
         }
         if (!iter->pattern ||
-            g_pattern_match_simple(iter->pattern, trace_event_get_name(ev))) {
+            pattern_glob(iter->pattern,
+                         trace_event_get_name(ev))) {
             return ev;
         }
     }
@@ -133,12 +165,6 @@ void trace_list_events(void)
     while ((ev = trace_event_iter_next(&iter)) != NULL) {
         fprintf(stderr, "%s\n", trace_event_get_name(ev));
     }
-#ifdef CONFIG_TRACE_DTRACE
-    fprintf(stderr, "This list of names of trace points may be incomplete "
-                    "when using the DTrace/SystemTap backends.\n"
-                    "Run 'qemu-trace-stap list %s' to print the full list.\n",
-            error_get_progname());
-#endif
 }
 
 static void do_trace_enable_events(const char *line_buf)
@@ -177,7 +203,7 @@ void trace_enable_events(const char *line_buf)
 {
     if (is_help_option(line_buf)) {
         trace_list_events();
-        if (monitor_cur() == NULL) {
+        if (cur_mon == NULL) {
             exit(0);
         }
     } else {
@@ -222,21 +248,13 @@ static void trace_init_events(const char *fname)
     loc_pop(&loc);
 }
 
-void trace_init_file(void)
+void trace_init_file(const char *file)
 {
-    QemuOpts *opts = qemu_find_opts_singleton("trace");
-    const char *file = qemu_opt_get(opts, "file");
 #ifdef CONFIG_TRACE_SIMPLE
     st_set_trace_file(file);
-    if (init_trace_on_startup) {
-        st_set_trace_file_enabled(true);
-    }
 #elif defined CONFIG_TRACE_LOG
-    /*
-     * If both the simple and the log backends are enabled, "--trace file"
-     * only applies to the simple backend; use "-D" for the log
-     * backend. However we should only override -D if we actually have
-     * something to override it with.
+    /* If both the simple and the log backends are enabled, "--trace file"
+     * only applies to the simple backend; use "-D" for the log backend.
      */
     if (file) {
         qemu_set_log_filename(file, &error_fatal);
@@ -291,8 +309,9 @@ bool trace_init_backends(void)
     return true;
 }
 
-void trace_opt_parse(const char *optarg)
+char *trace_opt_parse(const char *optarg)
 {
+    char *trace_file;
     QemuOpts *opts = qemu_opts_parse_noisily(qemu_find_opts("trace"),
                                              optarg, true);
     if (!opts) {
@@ -302,8 +321,10 @@ void trace_opt_parse(const char *optarg)
         trace_enable_events(qemu_opt_get(opts, "enable"));
     }
     trace_init_events(qemu_opt_get(opts, "events"));
-    init_trace_on_startup = true;
+    trace_file = g_strdup(qemu_opt_get(opts, "file"));
     qemu_opts_del(opts);
+
+    return trace_file;
 }
 
 uint32_t trace_get_vcpu_event_count(void)

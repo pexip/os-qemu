@@ -369,7 +369,7 @@ static void perf_lifecycle(void)
     }
     duration = g_test_timer_elapsed();
 
-    g_test_message("Lifecycle %u iterations: %f s", max, duration);
+    g_test_message("Lifecycle %u iterations: %f s\n", max, duration);
 }
 
 static void perf_nesting(void)
@@ -393,7 +393,7 @@ static void perf_nesting(void)
     }
     duration = g_test_timer_elapsed();
 
-    g_test_message("Nesting %u iterations of %u depth each: %f s",
+    g_test_message("Nesting %u iterations of %u depth each: %f s\n",
         maxcycles, maxnesting, duration);
 }
 
@@ -426,7 +426,8 @@ static void perf_yield(void)
     }
     duration = g_test_timer_elapsed();
 
-    g_test_message("Yield %u iterations: %f s", maxcycles, duration);
+    g_test_message("Yield %u iterations: %f s\n",
+        maxcycles, duration);
 }
 
 static __attribute__((noinline)) void dummy(unsigned *i)
@@ -448,7 +449,8 @@ static void perf_baseline(void)
     }
     duration = g_test_timer_elapsed();
 
-    g_test_message("Function call %u iterations: %f s", maxcycles, duration);
+    g_test_message("Function call %u iterations: %f s\n",
+        maxcycles, duration);
 }
 
 static __attribute__((noinline)) void perf_cost_func(void *opaque)

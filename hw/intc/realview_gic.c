@@ -9,10 +9,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
 #include "hw/intc/realview_gic.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties.h"
 
 static void realview_gic_set_irq(void *opaque, int irq, int level)
 {
@@ -26,6 +23,7 @@ static void realview_gic_realize(DeviceState *dev, Error **errp)
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
     RealViewGICState *s = REALVIEW_GIC(dev);
     SysBusDevice *busdev;
+    Error *err = NULL;
     /* The GICs on the RealView boards have a fixed nonconfigurable
      * number of interrupt lines, so we don't need to expose this as
      * a qdev property.
@@ -33,7 +31,9 @@ static void realview_gic_realize(DeviceState *dev, Error **errp)
     int numirq = 96;
 
     qdev_prop_set_uint32(DEVICE(&s->gic), "num-irq", numirq);
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->gic), errp)) {
+    object_property_set_bool(OBJECT(&s->gic), true, "realized", &err);
+    if (err != NULL) {
+        error_propagate(errp, err);
         return;
     }
     busdev = SYS_BUS_DEVICE(&s->gic);
@@ -59,7 +59,7 @@ static void realview_gic_init(Object *obj)
                        "realview-gic-container", 0x2000);
     sysbus_init_mmio(sbd, &s->container);
 
-    object_initialize_child(obj, "gic", &s->gic, TYPE_ARM_GIC);
+    sysbus_init_child_obj(obj, "gic", &s->gic, sizeof(s->gic), TYPE_ARM_GIC);
     qdev_prop_set_uint32(DEVICE(&s->gic), "num-cpu", 1);
 }
 

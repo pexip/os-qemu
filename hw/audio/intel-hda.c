@@ -18,21 +18,17 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/pci/pci.h"
-#include "hw/qdev-properties.h"
 #include "hw/pci/msi.h"
 #include "qemu/timer.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
-#include "qemu/error-report.h"
 #include "hw/audio/soundhw.h"
 #include "intel-hda.h"
-#include "migration/vmstate.h"
 #include "intel-hda-defs.h"
 #include "sysemu/dma.h"
 #include "qapi/error.h"
-#include "qom/object.h"
 
 /* --------------------------------------------------------------------- */
 /* hda bus                                                               */
@@ -76,7 +72,7 @@ static void hda_codec_dev_realize(DeviceState *qdev, Error **errp)
     }
 }
 
-static void hda_codec_dev_unrealize(DeviceState *qdev)
+static void hda_codec_dev_unrealize(DeviceState *qdev, Error **errp)
 {
     HDACodecDevice *dev = HDA_CODEC_DEVICE(qdev);
     HDACodecDeviceClass *cdc = HDA_CODEC_DEVICE_GET_CLASS(dev);
@@ -183,9 +179,7 @@ struct IntelHDAState {
     IntelHDAStream st[8];
 
     /* state */
-    MemoryRegion container;
     MemoryRegion mmio;
-    MemoryRegion alias;
     uint32_t rirb_count;
     int64_t wall_base_ns;
 
@@ -204,8 +198,8 @@ struct IntelHDAState {
 
 #define TYPE_INTEL_HDA_GENERIC "intel-hda-generic"
 
-DECLARE_INSTANCE_CHECKER(IntelHDAState, INTEL_HDA,
-                         TYPE_INTEL_HDA_GENERIC)
+#define INTEL_HDA(obj) \
+    OBJECT_CHECK(IntelHDAState, (obj), TYPE_INTEL_HDA_GENERIC)
 
 struct IntelHDAReg {
     const char *name;      /* register name */
@@ -674,6 +668,12 @@ static const struct IntelHDAReg regtab[] = {
         .offset   = offsetof(IntelHDAState, wall_clk),
         .rhandler = intel_hda_get_wall_clk,
     },
+    [ ICH6_REG_WALLCLK + 0x2000 ] = {
+        .name     = "WALLCLK(alias)",
+        .size     = 4,
+        .offset   = offsetof(IntelHDAState, wall_clk),
+        .rhandler = intel_hda_get_wall_clk,
+    },
 
     /* dma engine */
     [ ICH6_REG_CORBLBASE ] = {
@@ -832,6 +832,12 @@ static const struct IntelHDAReg regtab[] = {
     [ ST_REG(_i, ICH6_REG_SD_LPIB) ] = {                              \
         .stream   = _i,                                               \
         .name     = _t stringify(_i) " LPIB",                         \
+        .size     = 4,                                                \
+        .offset   = offsetof(IntelHDAState, st[_i].lpib),             \
+    },                                                                \
+    [ ST_REG(_i, ICH6_REG_SD_LPIB) + 0x2000 ] = {                     \
+        .stream   = _i,                                               \
+        .name     = _t stringify(_i) " LPIB(alias)",                  \
         .size     = 4,                                                \
         .offset   = offsetof(IntelHDAState, st[_i].lpib),             \
     },                                                                \
@@ -1079,7 +1085,7 @@ static void intel_hda_reset(DeviceState *dev)
     QTAILQ_FOREACH(kid, &d->codecs.qbus.children, sibling) {
         DeviceState *qdev = kid->child;
         cdev = HDA_CODEC_DEVICE(qdev);
-        device_legacy_reset(DEVICE(cdev));
+        device_reset(DEVICE(cdev));
         d->state_sts |= (1 << cdev->cad);
     }
     intel_hda_update_irq(d);
@@ -1117,15 +1123,9 @@ static void intel_hda_realize(PCIDevice *pci, Error **errp)
         error_free(err);
     }
 
-    memory_region_init(&d->container, OBJECT(d),
-                       "intel-hda-container", 0x4000);
     memory_region_init_io(&d->mmio, OBJECT(d), &intel_hda_mmio_ops, d,
-                          "intel-hda", 0x2000);
-    memory_region_add_subregion(&d->container, 0x0000, &d->mmio);
-    memory_region_init_alias(&d->alias, OBJECT(d), "intel-hda-alias",
-                             &d->mmio, 0, 0x2000);
-    memory_region_add_subregion(&d->container, 0x2000, &d->alias);
-    pci_register_bar(&d->pci, 0, 0, &d->container);
+                          "intel-hda", 0x4000);
+    pci_register_bar(&d->pci, 0, 0, &d->mmio);
 
     hda_codec_bus_init(DEVICE(pci), &d->codecs, sizeof(d->codecs),
                        intel_hda_response, intel_hda_xfer);
@@ -1231,7 +1231,7 @@ static void intel_hda_class_init(ObjectClass *klass, void *data)
     k->class_id = PCI_CLASS_MULTIMEDIA_HD_AUDIO;
     dc->reset = intel_hda_reset;
     dc->vmsd = &vmstate_intel_hda;
-    device_class_set_props(dc, intel_hda_properties);
+    dc->props = intel_hda_properties;
 }
 
 static void intel_hda_class_init_ich6(ObjectClass *klass, void *data)
@@ -1287,7 +1287,7 @@ static void hda_codec_device_class_init(ObjectClass *klass, void *data)
     k->unrealize = hda_codec_dev_unrealize;
     set_bit(DEVICE_CATEGORY_SOUND, k->categories);
     k->bus_type = TYPE_HDA_BUS;
-    device_class_set_props(k, hda_props);
+    k->props = hda_props;
 }
 
 static const TypeInfo hda_codec_device_type_info = {
@@ -1309,12 +1309,10 @@ static int intel_hda_and_codec_init(PCIBus *bus)
     BusState *hdabus;
     DeviceState *codec;
 
-    warn_report("'-soundhw hda' is deprecated, "
-                "please use '-device intel-hda -device hda-duplex' instead");
     controller = DEVICE(pci_create_simple(bus, -1, "intel-hda"));
     hdabus = QLIST_FIRST(&controller->child_bus);
-    codec = qdev_new("hda-duplex");
-    qdev_realize_and_unref(codec, hdabus, &error_fatal);
+    codec = qdev_create(hdabus, "hda-duplex");
+    qdev_init_nofail(codec);
     return 0;
 }
 

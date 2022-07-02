@@ -1,7 +1,7 @@
 /*
  * QEMU GRLIB GPTimer Emulator
  *
- * Copyright (c) 2010-2019 AdaCore
+ * Copyright (c) 2010-2011 AdaCore
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -23,16 +23,12 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/sparc/grlib.h"
 #include "hw/sysbus.h"
 #include "qemu/timer.h"
-#include "hw/irq.h"
 #include "hw/ptimer.h"
-#include "hw/qdev-properties.h"
-#include "qemu/module.h"
+#include "qemu/main-loop.h"
 
 #include "trace.h"
-#include "qom/object.h"
 
 #define UNIT_REG_SIZE    16     /* Size of memory mapped regs for the unit */
 #define GPTIMER_REG_SIZE 16     /* Size of memory mapped regs for a GPTimer */
@@ -56,11 +52,15 @@
 #define COUNTER_RELOAD_OFFSET 0x04
 #define TIMER_BASE            0x10
 
-OBJECT_DECLARE_SIMPLE_TYPE(GPTimerUnit, GRLIB_GPTIMER)
+#define TYPE_GRLIB_GPTIMER "grlib,gptimer"
+#define GRLIB_GPTIMER(obj) \
+    OBJECT_CHECK(GPTimerUnit, (obj), TYPE_GRLIB_GPTIMER)
 
 typedef struct GPTimer     GPTimer;
+typedef struct GPTimerUnit GPTimerUnit;
 
 struct GPTimer {
+    QEMUBH *bh;
     struct ptimer_state *ptimer;
 
     qemu_irq     irq;
@@ -90,17 +90,6 @@ struct GPTimerUnit {
     uint32_t config;
 };
 
-static void grlib_gptimer_tx_begin(GPTimer *timer)
-{
-    ptimer_transaction_begin(timer->ptimer);
-}
-
-static void grlib_gptimer_tx_commit(GPTimer *timer)
-{
-    ptimer_transaction_commit(timer->ptimer);
-}
-
-/* Must be called within grlib_gptimer_tx_begin/commit block */
 static void grlib_gptimer_enable(GPTimer *timer)
 {
     assert(timer != NULL);
@@ -123,7 +112,6 @@ static void grlib_gptimer_enable(GPTimer *timer)
     ptimer_run(timer->ptimer, 1);
 }
 
-/* Must be called within grlib_gptimer_tx_begin/commit block */
 static void grlib_gptimer_restart(GPTimer *timer)
 {
     assert(timer != NULL);
@@ -150,9 +138,7 @@ static void grlib_gptimer_set_scaler(GPTimerUnit *unit, uint32_t scaler)
     trace_grlib_gptimer_set_scaler(scaler, value);
 
     for (i = 0; i < unit->nr_timers; i++) {
-        ptimer_transaction_begin(unit->timers[i].ptimer);
         ptimer_set_freq(unit->timers[i].ptimer, value);
-        ptimer_transaction_commit(unit->timers[i].ptimer);
     }
 }
 
@@ -277,10 +263,8 @@ static void grlib_gptimer_write(void *opaque, hwaddr addr,
         switch (timer_addr) {
         case COUNTER_OFFSET:
             trace_grlib_gptimer_writel(id, addr, value);
-            grlib_gptimer_tx_begin(&unit->timers[id]);
             unit->timers[id].counter = value;
             grlib_gptimer_enable(&unit->timers[id]);
-            grlib_gptimer_tx_commit(&unit->timers[id]);
             return;
 
         case COUNTER_RELOAD_OFFSET:
@@ -304,7 +288,6 @@ static void grlib_gptimer_write(void *opaque, hwaddr addr,
             /* gptimer_restart calls gptimer_enable, so if "enable" and "load"
                bits are present, we just have to call restart. */
 
-            grlib_gptimer_tx_begin(&unit->timers[id]);
             if (value & GPTIMER_LOAD) {
                 grlib_gptimer_restart(&unit->timers[id]);
             } else if (value & GPTIMER_ENABLE) {
@@ -315,7 +298,6 @@ static void grlib_gptimer_write(void *opaque, hwaddr addr,
             value &= ~(GPTIMER_LOAD & GPTIMER_DEBUG_HALT);
 
             unit->timers[id].config = value;
-            grlib_gptimer_tx_commit(&unit->timers[id]);
             return;
 
         default:
@@ -359,19 +341,16 @@ static void grlib_gptimer_reset(DeviceState *d)
         timer->counter = 0;
         timer->reload = 0;
         timer->config = 0;
-        ptimer_transaction_begin(timer->ptimer);
         ptimer_stop(timer->ptimer);
         ptimer_set_count(timer->ptimer, 0);
         ptimer_set_freq(timer->ptimer, unit->freq_hz);
-        ptimer_transaction_commit(timer->ptimer);
     }
 }
 
-static void grlib_gptimer_realize(DeviceState *dev, Error **errp)
+static int grlib_gptimer_init(SysBusDevice *dev)
 {
     GPTimerUnit  *unit = GRLIB_GPTIMER(dev);
     unsigned int  i;
-    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     assert(unit->nr_timers > 0);
     assert(unit->nr_timers <= GPTIMER_MAX_TIMERS);
@@ -382,23 +361,22 @@ static void grlib_gptimer_realize(DeviceState *dev, Error **errp)
         GPTimer *timer = &unit->timers[i];
 
         timer->unit   = unit;
-        timer->ptimer = ptimer_init(grlib_gptimer_hit, timer,
-                                    PTIMER_POLICY_DEFAULT);
+        timer->bh     = qemu_bh_new(grlib_gptimer_hit, timer);
+        timer->ptimer = ptimer_init(timer->bh, PTIMER_POLICY_DEFAULT);
         timer->id     = i;
 
         /* One IRQ line for each timer */
-        sysbus_init_irq(sbd, &timer->irq);
+        sysbus_init_irq(dev, &timer->irq);
 
-        ptimer_transaction_begin(timer->ptimer);
         ptimer_set_freq(timer->ptimer, unit->freq_hz);
-        ptimer_transaction_commit(timer->ptimer);
     }
 
     memory_region_init_io(&unit->iomem, OBJECT(unit), &grlib_gptimer_ops,
                           unit, "gptimer",
                           UNIT_REG_SIZE + GPTIMER_REG_SIZE * unit->nr_timers);
 
-    sysbus_init_mmio(sbd, &unit->iomem);
+    sysbus_init_mmio(dev, &unit->iomem);
+    return 0;
 }
 
 static Property grlib_gptimer_properties[] = {
@@ -411,10 +389,11 @@ static Property grlib_gptimer_properties[] = {
 static void grlib_gptimer_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
-    dc->realize = grlib_gptimer_realize;
+    k->init = grlib_gptimer_init;
     dc->reset = grlib_gptimer_reset;
-    device_class_set_props(dc, grlib_gptimer_properties);
+    dc->props = grlib_gptimer_properties;
 }
 
 static const TypeInfo grlib_gptimer_info = {

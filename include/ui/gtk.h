@@ -1,11 +1,15 @@
 #ifndef UI_GTK_H
 #define UI_GTK_H
 
+#ifdef CONFIG_PRAGMA_DIAGNOSTIC_AVAILABLE
 /* Work around an -Wstrict-prototypes warning in GTK headers */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstrict-prototypes"
+#endif
 #include <gtk/gtk.h>
+#ifdef CONFIG_PRAGMA_DIAGNOSTIC_AVAILABLE
 #pragma GCC diagnostic pop
+#endif
 
 #include <gdk/gdkkeysyms.h>
 
@@ -18,20 +22,16 @@
 #include <gdk/gdkwayland.h>
 #endif
 
-#include "ui/kbd-state.h"
 #if defined(CONFIG_OPENGL)
 #include "ui/egl-helpers.h"
 #include "ui/egl-context.h"
 #endif
-
-#define MILLISEC_PER_SEC 1000000
 
 typedef struct GtkDisplayState GtkDisplayState;
 
 typedef struct VirtualGfxConsole {
     GtkWidget *drawing_area;
     DisplayChangeListener dcl;
-    QKbdState *kbd;
     DisplaySurface *ds;
     pixman_image_t *convert;
     cairo_surface_t *surface;

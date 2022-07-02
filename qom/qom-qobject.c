@@ -11,35 +11,36 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qemu-common.h"
 #include "qom/object.h"
 #include "qom/qom-qobject.h"
 #include "qapi/visitor.h"
 #include "qapi/qobject-input-visitor.h"
 #include "qapi/qobject-output-visitor.h"
 
-bool object_property_set_qobject(Object *obj,
-                                 const char *name, QObject *value,
-                                 Error **errp)
+void object_property_set_qobject(Object *obj, QObject *value,
+                                 const char *name, Error **errp)
 {
     Visitor *v;
-    bool ok;
 
     v = qobject_input_visitor_new(value);
-    ok = object_property_set(obj, name, v, errp);
+    object_property_set(obj, v, name, errp);
     visit_free(v);
-    return ok;
 }
 
 QObject *object_property_get_qobject(Object *obj, const char *name,
                                      Error **errp)
 {
     QObject *ret = NULL;
+    Error *local_err = NULL;
     Visitor *v;
 
     v = qobject_output_visitor_new(&ret);
-    if (object_property_get(obj, name, v, errp)) {
+    object_property_get(obj, v, name, &local_err);
+    if (!local_err) {
         visit_complete(v, &ret);
     }
+    error_propagate(errp, local_err);
     visit_free(v);
     return ret;
 }

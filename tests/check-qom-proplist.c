@@ -33,8 +33,8 @@
 typedef struct DummyObject DummyObject;
 typedef struct DummyObjectClass DummyObjectClass;
 
-DECLARE_INSTANCE_CHECKER(DummyObject, DUMMY_OBJECT,
-                         TYPE_DUMMY)
+#define DUMMY_OBJECT(obj)                               \
+    OBJECT_CHECK(DummyObject, (obj), TYPE_DUMMY)
 
 typedef enum DummyAnimal DummyAnimal;
 
@@ -125,22 +125,32 @@ static char *dummy_get_sv(Object *obj,
 
 static void dummy_init(Object *obj)
 {
+    Error *err = NULL;
+
     object_property_add_bool(obj, "bv",
                              dummy_get_bv,
-                             dummy_set_bv);
+                             dummy_set_bv,
+                             &err);
+    error_free_or_abort(&err);
 }
 
 
 static void dummy_class_init(ObjectClass *cls, void *data)
 {
+    object_class_property_add_bool(cls, "bv",
+                                   dummy_get_bv,
+                                   dummy_set_bv,
+                                   NULL);
     object_class_property_add_str(cls, "sv",
                                   dummy_get_sv,
-                                  dummy_set_sv);
+                                  dummy_set_sv,
+                                  NULL);
     object_class_property_add_enum(cls, "av",
                                    "DummyAnimal",
                                    &dummy_animal_map,
                                    dummy_get_av,
-                                   dummy_set_av);
+                                   dummy_set_av,
+                                   NULL);
 }
 
 
@@ -196,12 +206,12 @@ typedef struct DummyBackendClass DummyBackendClass;
 #define TYPE_DUMMY_BUS "qemu-dummy-bus"
 #define TYPE_DUMMY_BACKEND "qemu-dummy-backend"
 
-DECLARE_INSTANCE_CHECKER(DummyDev, DUMMY_DEV,
-                         TYPE_DUMMY_DEV)
-DECLARE_INSTANCE_CHECKER(DummyBus, DUMMY_BUS,
-                         TYPE_DUMMY_BUS)
-DECLARE_INSTANCE_CHECKER(DummyBackend, DUMMY_BACKEND,
-                         TYPE_DUMMY_BACKEND)
+#define DUMMY_DEV(obj)                               \
+    OBJECT_CHECK(DummyDev, (obj), TYPE_DUMMY_DEV)
+#define DUMMY_BUS(obj)                               \
+    OBJECT_CHECK(DummyBus, (obj), TYPE_DUMMY_BUS)
+#define DUMMY_BACKEND(obj)                               \
+    OBJECT_CHECK(DummyBackend, (obj), TYPE_DUMMY_BACKEND)
 
 struct DummyDev {
     Object parent_obj;
@@ -245,13 +255,13 @@ static void dummy_dev_init(Object *obj)
     DummyBus *bus = DUMMY_BUS(object_new(TYPE_DUMMY_BUS));
     DummyBackend *backend = DUMMY_BACKEND(object_new(TYPE_DUMMY_BACKEND));
 
-    object_property_add_child(obj, "bus", OBJECT(bus));
+    object_property_add_child(obj, "bus", OBJECT(bus), NULL);
     dev->bus = bus;
-    object_property_add_child(OBJECT(bus), "backend", OBJECT(backend));
+    object_property_add_child(OBJECT(bus), "backend", OBJECT(backend), NULL);
     bus->backend = backend;
 
     object_property_add_link(obj, "backend", TYPE_DUMMY_BACKEND,
-                             (Object **)&bus->backend, NULL, 0);
+                             (Object **)&bus->backend, NULL, 0, NULL);
 }
 
 static void dummy_dev_unparent(Object *obj)
@@ -280,7 +290,7 @@ static void dummy_bus_init(Object *obj)
 static void dummy_bus_unparent(Object *obj)
 {
     DummyBus *bus = DUMMY_BUS(obj);
-    object_property_del(obj->parent, "backend");
+    object_property_del(obj->parent, "backend", NULL);
     object_unparent(OBJECT(bus->backend));
 }
 
@@ -419,7 +429,9 @@ static void test_dummy_createcmdl(void)
     g_assert(dobj->bv == true);
     g_assert(dobj->av == DUMMY_PLATYPUS);
 
-    user_creatable_del("dev0", &error_abort);
+    user_creatable_del("dev0", &err);
+    g_assert(err == NULL);
+    error_free(err);
 
     object_unref(OBJECT(dobj));
 
@@ -483,7 +495,8 @@ static void test_dummy_getenum(void)
     val = object_property_get_enum(OBJECT(dobj),
                                    "av",
                                    "DummyAnimal",
-                                   &error_abort);
+                                   &err);
+    g_assert(err == NULL);
     g_assert(val == DUMMY_PLATYPUS);
 
     /* A bad enum type name */
@@ -491,48 +504,50 @@ static void test_dummy_getenum(void)
                                    "av",
                                    "BadAnimal",
                                    &err);
-    g_assert(val == -1);
-    error_free_or_abort(&err);
+    g_assert(err != NULL);
+    error_free(err);
+    err = NULL;
 
     /* A non-enum property name */
     val = object_property_get_enum(OBJECT(dobj),
                                    "iv",
                                    "DummyAnimal",
                                    &err);
-    g_assert(val == -1);
-    error_free_or_abort(&err);
+    g_assert(err != NULL);
+    error_free(err);
 
     object_unparent(OBJECT(dobj));
 }
 
 
-static void test_dummy_prop_iterator(ObjectPropertyIterator *iter,
-                                     const char *expected[], int n)
+static void test_dummy_prop_iterator(ObjectPropertyIterator *iter)
 {
+    bool seenbv = false, seensv = false, seenav = false, seentype = false;
     ObjectProperty *prop;
-    int i;
 
     while ((prop = object_property_iter_next(iter))) {
-        for (i = 0; i < n; i++) {
-            if (!g_strcmp0(prop->name, expected[i])) {
-                break;
-            }
+        if (!seenbv && g_str_equal(prop->name, "bv")) {
+            seenbv = true;
+        } else if (!seensv && g_str_equal(prop->name, "sv")) {
+            seensv = true;
+        } else if (!seenav && g_str_equal(prop->name, "av")) {
+            seenav = true;
+        } else if (!seentype && g_str_equal(prop->name, "type")) {
+            /* This prop comes from the base Object class */
+            seentype = true;
+        } else {
+            g_printerr("Found prop '%s'\n", prop->name);
+            g_assert_not_reached();
         }
-        g_assert(i < n);
-        expected[i] = NULL;
     }
-
-    for (i = 0; i < n; i++) {
-        g_assert(!expected[i]);
-    }
+    g_assert(seenbv);
+    g_assert(seenav);
+    g_assert(seensv);
+    g_assert(seentype);
 }
 
 static void test_dummy_iterator(void)
 {
-    const char *expected[] = {
-        "type",                 /* inherited from TYPE_OBJECT */
-        "sv", "av",             /* class properties */
-        "bv"};                  /* instance property */
     Object *parent = object_get_objects_root();
     DummyObject *dobj = DUMMY_OBJECT(
         object_new_with_props(TYPE_DUMMY,
@@ -546,18 +561,17 @@ static void test_dummy_iterator(void)
     ObjectPropertyIterator iter;
 
     object_property_iter_init(&iter, OBJECT(dobj));
-    test_dummy_prop_iterator(&iter, expected, ARRAY_SIZE(expected));
+    test_dummy_prop_iterator(&iter);
     object_unparent(OBJECT(dobj));
 }
 
 static void test_dummy_class_iterator(void)
 {
-    const char *expected[] = { "type", "av", "sv" };
     ObjectPropertyIterator iter;
     ObjectClass *klass = object_class_by_name(TYPE_DUMMY);
 
     object_class_property_iter_init(&iter, klass);
-    test_dummy_prop_iterator(&iter, expected, ARRAY_SIZE(expected));
+    test_dummy_prop_iterator(&iter);
 }
 
 static void test_dummy_delchild(void)
@@ -588,11 +602,11 @@ static void test_qom_partial_path(void)
      * /cont1/obj2 (obj2a)
      * /obj2 (obj2b)
      */
-    object_property_add_child(cont1, "obj1", obj1);
+    object_property_add_child(cont1, "obj1", obj1, &error_abort);
     object_unref(obj1);
-    object_property_add_child(cont1, "obj2", obj2a);
+    object_property_add_child(cont1, "obj2", obj2a, &error_abort);
     object_unref(obj2a);
-    object_property_add_child(root,  "obj2", obj2b);
+    object_property_add_child(root,  "obj2", obj2b, &error_abort);
     object_unref(obj2b);
 
     ambiguous = false;

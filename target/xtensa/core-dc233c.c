@@ -28,19 +28,20 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/gdbstub.h"
+#include "qemu-common.h"
 #include "qemu/host-utils.h"
 
 #include "core-dc233c/core-isa.h"
 #include "overlay_tool.h"
 
 #define xtensa_modules xtensa_modules_dc233c
-#include "core-dc233c/xtensa-modules.c.inc"
+#include "core-dc233c/xtensa-modules.inc.c"
 
 static XtensaConfig dc233c __attribute__((unused)) = {
     .name = "dc233c",
     .gdb_regmap = {
         .reg = {
-#include "core-dc233c/gdb-config.c.inc"
+#include "core-dc233c/gdb-config.inc.c"
         }
     },
     .isa_internal = &xtensa_modules,

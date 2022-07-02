@@ -16,19 +16,19 @@
 
 #include "block/aio.h"
 #include "qemu/thread.h"
-#include "qom/object.h"
 
 #define TYPE_IOTHREAD "iothread"
 
-struct IOThread {
+typedef struct {
     Object parent_obj;
 
     QemuThread thread;
     AioContext *ctx;
-    bool run_gcontext;          /* whether we should run gcontext */
     GMainContext *worker_context;
     GMainLoop *main_loop;
-    QemuSemaphore init_done_sem; /* is thread init done? */
+    GOnce once;
+    QemuMutex init_done_lock;
+    QemuCond init_done_cond;    /* is thread initialization done? */
     bool stopping;              /* has iothread_stop() been called? */
     bool running;               /* should iothread_run() continue? */
     int thread_id;
@@ -37,11 +37,10 @@ struct IOThread {
     int64_t poll_max_ns;
     int64_t poll_grow;
     int64_t poll_shrink;
-};
-typedef struct IOThread IOThread;
+} IOThread;
 
-DECLARE_INSTANCE_CHECKER(IOThread, IOTHREAD,
-                         TYPE_IOTHREAD)
+#define IOTHREAD(obj) \
+   OBJECT_CHECK(IOThread, obj, TYPE_IOTHREAD)
 
 char *iothread_get_id(IOThread *iothread);
 IOThread *iothread_by_id(const char *id);

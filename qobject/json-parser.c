@@ -12,10 +12,10 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/ctype.h"
 #include "qemu/cutils.h"
 #include "qemu/unicode.h"
 #include "qapi/error.h"
+#include "qemu-common.h"
 #include "qapi/qmp/qbool.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qlist.h"
@@ -208,13 +208,11 @@ static QString *parse_string(JSONParserContext *ctxt, JSONToken *token)
             }
             break;
         case '%':
-            if (ctxt->ap) {
-                if (ptr[1] != '%') {
-                    parse_error(ctxt, token, "can't interpolate into string");
-                    goto out;
-                }
-                ptr++;
+            if (ctxt->ap && ptr[1] != '%') {
+                parse_error(ctxt, token, "can't interpolate into string");
+                goto out;
             }
+            ptr++;
             /* fall through */
         default:
             cp = mod_utf8_codepoint(ptr, 6, &end);
@@ -257,9 +255,8 @@ static JSONToken *parser_context_peek_token(JSONParserContext *ctxt)
  */
 static int parse_pair(JSONParserContext *ctxt, QDict *dict)
 {
-    QObject *key_obj = NULL;
-    QString *key;
     QObject *value;
+    QString *key = NULL;
     JSONToken *peek, *token;
 
     peek = parser_context_peek_token(ctxt);
@@ -268,8 +265,7 @@ static int parse_pair(JSONParserContext *ctxt, QDict *dict)
         goto out;
     }
 
-    key_obj = parse_value(ctxt);
-    key = qobject_to(QString, key_obj);
+    key = qobject_to(QString, parse_value(ctxt));
     if (!key) {
         parse_error(ctxt, peek, "key is not a string in object");
         goto out;
@@ -292,18 +288,15 @@ static int parse_pair(JSONParserContext *ctxt, QDict *dict)
         goto out;
     }
 
-    if (qdict_haskey(dict, qstring_get_str(key))) {
-        parse_error(ctxt, token, "duplicate key");
-        goto out;
-    }
-
     qdict_put_obj(dict, qstring_get_str(key), value);
 
-    qobject_unref(key_obj);
+    qobject_unref(key);
+
     return 0;
 
 out:
-    qobject_unref(key_obj);
+    qobject_unref(key);
+
     return -1;
 }
 
@@ -519,8 +512,8 @@ static QObject *parse_literal(JSONParserContext *ctxt)
             }
             assert(ret == -ERANGE);
         }
+        /* fall through to JSON_FLOAT */
     }
-    /* fall through to JSON_FLOAT */
     case JSON_FLOAT:
         /* FIXME dependent on locale; a pervasive issue in QEMU */
         /* FIXME our lexer matches RFC 8259 in forbidding Inf or NaN,

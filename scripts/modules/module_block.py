@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python
 #
 # Module information generator
 #
@@ -10,6 +10,7 @@
 # This work is licensed under the terms of the GNU GPL, version 2.
 # See the COPYING file in the top-level directory.
 
+from __future__ import print_function
 import sys
 import os
 
@@ -67,6 +68,8 @@ def print_top(fheader):
     fheader.write('''#ifndef QEMU_MODULE_BLOCK_H
 #define QEMU_MODULE_BLOCK_H
 
+#include "qemu-common.h"
+
 static const struct {
     const char *format_name;
     const char *protocol_name;
@@ -80,20 +83,19 @@ def print_bottom(fheader):
 #endif
 ''')
 
-if __name__ == '__main__':
-    # First argument: output file
-    # All other arguments: modules source files (.c)
-    output_file = sys.argv[1]
-    with open(output_file, 'w') as fheader:
-        print_top(fheader)
+# First argument: output file
+# All other arguments: modules source files (.c)
+output_file = sys.argv[1]
+with open(output_file, 'w') as fheader:
+    print_top(fheader)
 
-        for filename in sys.argv[2:]:
-            if os.path.isfile(filename):
-                process_file(fheader, filename)
-            else:
-                print("File " + filename + " does not exist.", file=sys.stderr)
-                sys.exit(1)
+    for filename in sys.argv[2:]:
+        if os.path.isfile(filename):
+            process_file(fheader, filename)
+        else:
+            print("File " + filename + " does not exist.", file=sys.stderr)
+            sys.exit(1)
 
-        print_bottom(fheader)
+    print_bottom(fheader)
 
-    sys.exit(0)
+sys.exit(0)

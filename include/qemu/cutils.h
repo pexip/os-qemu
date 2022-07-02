@@ -1,6 +1,8 @@
 #ifndef QEMU_CUTILS_H
 #define QEMU_CUTILS_H
 
+#include "qemu/fprintf-fn.h"
+
 /**
  * pstrcpy:
  * @buf: buffer to copy string into
@@ -130,7 +132,6 @@ const char *qemu_strchrnul(const char *s, int c);
 #endif
 time_t mktimegm(struct tm *tm);
 int qemu_fdatasync(int fd);
-int qemu_msync(void *addr, size_t length, int fd);
 int fcntl_setfl(int fd, int flag);
 int qemu_parse_fd(const char *param);
 int qemu_strtoi(const char *nptr, const char **endptr, int base,
@@ -145,30 +146,14 @@ int qemu_strtoi64(const char *nptr, const char **endptr, int base,
                   int64_t *result);
 int qemu_strtou64(const char *nptr, const char **endptr, int base,
                   uint64_t *result);
-int qemu_strtod(const char *nptr, const char **endptr, double *result);
-int qemu_strtod_finite(const char *nptr, const char **endptr, double *result);
 
 int parse_uint(const char *s, unsigned long long *value, char **endptr,
                int base);
 int parse_uint_full(const char *s, unsigned long long *value, int base);
 
-int qemu_strtosz(const char *nptr, const char **end, uint64_t *result);
-int qemu_strtosz_MiB(const char *nptr, const char **end, uint64_t *result);
-int qemu_strtosz_metric(const char *nptr, const char **end, uint64_t *result);
-
-char *size_to_str(uint64_t val);
-
-/**
- * freq_to_str:
- * @freq_hz: frequency to stringify
- *
- * Return human readable string for frequency @freq_hz.
- * Use SI units like KHz, MHz, and so forth.
- *
- * The caller is responsible for releasing the value returned
- * with g_free() after use.
- */
-char *freq_to_str(uint64_t freq_hz);
+int qemu_strtosz(const char *nptr, char **end, uint64_t *result);
+int qemu_strtosz_MiB(const char *nptr, char **end, uint64_t *result);
+int qemu_strtosz_metric(const char *nptr, char **end, uint64_t *result);
 
 /* used to print char* safely */
 #define STR_OR_NULL(str) ((str) ? (str) : "null")
@@ -195,18 +180,5 @@ int uleb128_decode_small(const uint8_t *in, uint32_t *n);
  * *str1 is <, == or > than *str2.
  */
 int qemu_pstrcmp0(const char **str1, const char **str2);
-
-
-/**
- * get_relocated_path:
- * @dir: the directory (typically a `CONFIG_*DIR` variable) to be relocated.
- *
- * Returns a path for @dir that uses the directory of the running executable
- * as the prefix.  For example, if `bindir` is `/usr/bin` and @dir is
- * `/usr/share/qemu`, the function will append `../share/qemu` to the
- * directory that contains the running executable and return the result.
- * The returned string should be freed by the caller.
- */
-char *get_relocated_path(const char *dir);
 
 #endif

@@ -20,13 +20,16 @@
 #ifndef QEMU_MICROBLAZE_CPU_QOM_H
 #define QEMU_MICROBLAZE_CPU_QOM_H
 
-#include "hw/core/cpu.h"
-#include "qom/object.h"
+#include "qom/cpu.h"
 
 #define TYPE_MICROBLAZE_CPU "microblaze-cpu"
 
-OBJECT_DECLARE_TYPE(MicroBlazeCPU, MicroBlazeCPUClass,
-                    MICROBLAZE_CPU)
+#define MICROBLAZE_CPU_CLASS(klass) \
+    OBJECT_CLASS_CHECK(MicroBlazeCPUClass, (klass), TYPE_MICROBLAZE_CPU)
+#define MICROBLAZE_CPU(obj) \
+    OBJECT_CHECK(MicroBlazeCPU, (obj), TYPE_MICROBLAZE_CPU)
+#define MICROBLAZE_CPU_GET_CLASS(obj) \
+    OBJECT_GET_CLASS(MicroBlazeCPUClass, (obj), TYPE_MICROBLAZE_CPU)
 
 /**
  * MicroBlazeCPUClass:
@@ -35,14 +38,15 @@ OBJECT_DECLARE_TYPE(MicroBlazeCPU, MicroBlazeCPUClass,
  *
  * A MicroBlaze CPU model.
  */
-struct MicroBlazeCPUClass {
+typedef struct MicroBlazeCPUClass {
     /*< private >*/
     CPUClass parent_class;
     /*< public >*/
 
     DeviceRealize parent_realize;
-    DeviceReset parent_reset;
-};
+    void (*parent_reset)(CPUState *cpu);
+} MicroBlazeCPUClass;
 
+typedef struct MicroBlazeCPU MicroBlazeCPU;
 
 #endif

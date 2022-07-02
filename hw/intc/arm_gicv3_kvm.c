@@ -24,14 +24,12 @@
 #include "hw/intc/arm_gicv3_common.h"
 #include "hw/sysbus.h"
 #include "qemu/error-report.h"
-#include "qemu/module.h"
 #include "sysemu/kvm.h"
-#include "sysemu/runstate.h"
+#include "sysemu/sysemu.h"
 #include "kvm_arm.h"
 #include "gicv3_internal.h"
 #include "vgic_common.h"
 #include "migration/blocker.h"
-#include "qom/object.h"
 
 #ifdef DEBUG_GICV3_KVM
 #define DPRINTF(fmt, ...) \
@@ -42,10 +40,12 @@
 #endif
 
 #define TYPE_KVM_ARM_GICV3 "kvm-arm-gicv3"
-typedef struct KVMARMGICv3Class KVMARMGICv3Class;
-/* This is reusing the GICv3State typedef from ARM_GICV3_ITS_COMMON */
-DECLARE_OBJ_CHECKERS(GICv3State, KVMARMGICv3Class,
-                     KVM_ARM_GICV3, TYPE_KVM_ARM_GICV3)
+#define KVM_ARM_GICV3(obj) \
+     OBJECT_CHECK(GICv3State, (obj), TYPE_KVM_ARM_GICV3)
+#define KVM_ARM_GICV3_CLASS(klass) \
+     OBJECT_CLASS_CHECK(KVMARMGICv3Class, (klass), TYPE_KVM_ARM_GICV3)
+#define KVM_ARM_GICV3_GET_CLASS(obj) \
+     OBJECT_GET_CLASS(KVMARMGICv3Class, (obj), TYPE_KVM_ARM_GICV3)
 
 #define   KVM_DEV_ARM_VGIC_SYSREG(op0, op1, crn, crm, op2)         \
                              (ARM64_SYS_REG_SHIFT_MASK(op0, OP0) | \
@@ -73,11 +73,11 @@ DECLARE_OBJ_CHECKERS(GICv3State, KVMARMGICv3Class,
 #define ICC_IGRPEN1_EL1 \
     KVM_DEV_ARM_VGIC_SYSREG(3, 0, 12, 12, 7)
 
-struct KVMARMGICv3Class {
+typedef struct KVMARMGICv3Class {
     ARMGICv3CommonClass parent_class;
     DeviceRealize parent_realize;
     void (*parent_reset)(DeviceState *dev);
-};
+} KVMARMGICv3Class;
 
 static void kvm_arm_gicv3_set_irq(void *opaque, int irq, int level)
 {
@@ -335,10 +335,7 @@ static void kvm_arm_gicv3_put(GICv3State *s)
     kvm_gicd_access(s, GICD_CTLR, &reg, true);
 
     if (redist_typer & GICR_TYPER_PLPIS) {
-        /*
-         * Restore base addresses before LPIs are potentially enabled by
-         * GICR_CTLR write
-         */
+        /* Set base addresses before LPIs are enabled by GICR_CTLR write */
         for (ncpu = 0; ncpu < s->num_cpu; ncpu++) {
             GICv3CPUState *c = &s->cpu[ncpu];
 
@@ -349,6 +346,12 @@ static void kvm_arm_gicv3_put(GICv3State *s)
             kvm_gicr_access(s, GICR_PROPBASER + 4, ncpu, &regh, true);
 
             reg64 = c->gicr_pendbaser;
+            if (!(c->gicr_ctlr & GICR_CTLR_ENABLE_LPIS)) {
+                /* Setting PTZ is advised if LPIs are disabled, to reduce
+                 * GIC initialization time.
+                 */
+                reg64 |= GICR_PENDBASER_PTZ;
+            }
             regl = (uint32_t)reg64;
             kvm_gicr_access(s, GICR_PENDBASER, ncpu, &regl, true);
             regh = (uint32_t)(reg64 >> 32);
@@ -657,11 +660,13 @@ static void kvm_arm_gicv3_get(GICv3State *s)
 
 static void arm_gicv3_icc_reset(CPUARMState *env, const ARMCPRegInfo *ri)
 {
+    ARMCPU *cpu;
     GICv3State *s;
     GICv3CPUState *c;
 
     c = (GICv3CPUState *)env->gicv3state;
     s = c->gic;
+    cpu = ARM_CPU(c->cpu);
 
     c->icc_pmr_el1 = 0;
     c->icc_bpr[GICV3_G0] = GIC_MIN_BPR;
@@ -678,7 +683,7 @@ static void arm_gicv3_icc_reset(CPUARMState *env, const ARMCPRegInfo *ri)
 
     /* Initialize to actual HW supported configuration */
     kvm_device_access(s->dev_fd, KVM_DEV_ARM_VGIC_GRP_CPU_SYSREGS,
-                      KVM_VGIC_ATTR(ICC_CTLR_EL1, c->gicr_typer),
+                      KVM_VGIC_ATTR(ICC_CTLR_EL1, cpu->mp_affinity),
                       &c->icc_ctlr_el1[GICV3_NS], false, &error_abort);
 
     c->icc_ctlr_el1[GICV3_S] = c->icc_ctlr_el1[GICV3_NS];
@@ -857,7 +862,9 @@ static void kvm_arm_gicv3_realize(DeviceState *dev, Error **errp)
                                GICD_CTLR)) {
         error_setg(&s->migration_blocker, "This operating system kernel does "
                                           "not support vGICv3 migration");
-        if (migrate_add_blocker(s->migration_blocker, errp) < 0) {
+        migrate_add_blocker(s->migration_blocker, &local_err);
+        if (local_err) {
+            error_propagate(errp, local_err);
             error_free(s->migration_blocker);
             return;
         }

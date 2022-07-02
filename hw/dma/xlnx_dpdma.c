@@ -23,12 +23,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 #include "hw/dma/xlnx_dpdma.h"
-#include "hw/irq.h"
-#include "migration/vmstate.h"
 
 #ifndef DEBUG_DPDMA
 #define DEBUG_DPDMA 0
@@ -388,7 +384,7 @@ static void xlnx_dpdma_dump_descriptor(DPDMADescriptor *desc)
 {
     if (DEBUG_DPDMA) {
         qemu_log("DUMP DESCRIPTOR:\n");
-        qemu_hexdump(stdout, "", desc, sizeof(DPDMADescriptor));
+        qemu_hexdump((char *)desc, stdout, "", sizeof(DPDMADescriptor));
     }
 }
 

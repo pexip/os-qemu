@@ -1,10 +1,8 @@
 #ifndef ACPI_DEV_INTERFACE_H
 #define ACPI_DEV_INTERFACE_H
 
-#include "qapi/qapi-types-acpi.h"
 #include "qom/object.h"
 #include "hw/boards.h"
-#include "hw/qdev-core.h"
 
 /* These values are part of guest ABI, and can not be changed */
 typedef enum {
@@ -13,19 +11,25 @@ typedef enum {
     ACPI_MEMORY_HOTPLUG_STATUS = 8,
     ACPI_NVDIMM_HOTPLUG_STATUS = 16,
     ACPI_VMGENID_CHANGE_STATUS = 32,
-    ACPI_POWER_DOWN_STATUS = 64,
 } AcpiEventStatusBits;
 
 #define TYPE_ACPI_DEVICE_IF "acpi-device-interface"
 
-typedef struct AcpiDeviceIfClass AcpiDeviceIfClass;
-DECLARE_CLASS_CHECKERS(AcpiDeviceIfClass, ACPI_DEVICE_IF,
-                       TYPE_ACPI_DEVICE_IF)
+#define ACPI_DEVICE_IF_CLASS(klass) \
+     OBJECT_CLASS_CHECK(AcpiDeviceIfClass, (klass), \
+                        TYPE_ACPI_DEVICE_IF)
+#define ACPI_DEVICE_IF_GET_CLASS(obj) \
+     OBJECT_GET_CLASS(AcpiDeviceIfClass, (obj), \
+                      TYPE_ACPI_DEVICE_IF)
 #define ACPI_DEVICE_IF(obj) \
      INTERFACE_CHECK(AcpiDeviceIf, (obj), \
                      TYPE_ACPI_DEVICE_IF)
 
-typedef struct AcpiDeviceIf AcpiDeviceIf;
+
+typedef struct AcpiDeviceIf {
+    /* <private> */
+    Object Parent;
+} AcpiDeviceIf;
 
 void acpi_send_event(DeviceState *dev, AcpiEventStatusBits event);
 
@@ -45,7 +49,7 @@ void acpi_send_event(DeviceState *dev, AcpiEventStatusBits event);
  * knowledge about internals of actual device that implements
  * ACPI interface.
  */
-struct AcpiDeviceIfClass {
+typedef struct AcpiDeviceIfClass {
     /* <private> */
     InterfaceClass parent_class;
 
@@ -54,5 +58,5 @@ struct AcpiDeviceIfClass {
     void (*send_event)(AcpiDeviceIf *adev, AcpiEventStatusBits ev);
     void (*madt_cpu)(AcpiDeviceIf *adev, int uid,
                      const CPUArchIdList *apic_ids, GArray *entry);
-};
+} AcpiDeviceIfClass;
 #endif

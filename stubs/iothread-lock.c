@@ -1,4 +1,5 @@
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "qemu/main-loop.h"
 
 bool qemu_mutex_iothread_locked(void)

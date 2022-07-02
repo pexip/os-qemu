@@ -27,8 +27,10 @@
 #include <Hypervisor/hv_vmx.h>
 
 #include "hw/i386/apic_internal.h"
+#include "hw/boards.h"
 #include "qemu/main-loop.h"
 #include "sysemu/accel.h"
+#include "sysemu/sysemu.h"
 #include "target/i386/cpu.h"
 
 // TODO: taskswitch handling
@@ -38,8 +40,8 @@ static void save_state_to_tss32(CPUState *cpu, struct x86_tss_segment32 *tss)
     CPUX86State *env = &x86_cpu->env;
 
     /* CR3 and ldt selector are not saved intentionally */
-    tss->eip = (uint32_t)env->eip;
-    tss->eflags = (uint32_t)env->eflags;
+    tss->eip = EIP(env);
+    tss->eflags = EFLAGS(env);
     tss->eax = EAX(env);
     tss->ecx = ECX(env);
     tss->edx = EDX(env);
@@ -64,8 +66,8 @@ static void load_state_from_tss32(CPUState *cpu, struct x86_tss_segment32 *tss)
 
     wvmcs(cpu->hvf_fd, VMCS_GUEST_CR3, tss->cr3);
 
-    env->eip = tss->eip;
-    env->eflags = tss->eflags | 2;
+    RIP(env) = tss->eip;
+    EFLAGS(env) = tss->eflags | 2;
 
     /* General purpose registers */
     RAX(env) = tss->eax;
@@ -158,7 +160,7 @@ void vmx_handle_task_switch(CPUState *cpu, x68_segment_selector tss_sel, int rea
     }
 
     if (reason == TSR_IRET)
-        env->eflags &= ~NT_MASK;
+        EFLAGS(env) &= ~RFLAGS_NT;
 
     if (reason != TSR_CALL && reason != TSR_IDT_GATE)
         old_tss_sel.sel = 0xffff;

@@ -6,7 +6,7 @@
 //  This library is free software; you can redistribute it and/or
 //  modify it under the terms of the GNU Lesser General Public
 //  License as published by the Free Software Foundation; either
-//  version 2.1 of the License, or (at your option) any later version.
+//  version 2 of the License, or (at your option) any later version.
 //
 //  This library is distributed in the hope that it will be useful,
 //  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,9 +20,8 @@
 /*
  * x86 eflags functions
  */
-
-#ifndef X86_FLAGS_H
-#define X86_FLAGS_H
+#ifndef __X86_FLAGS_H__
+#define __X86_FLAGS_H__
 
 #include "cpu.h"
 void lflags_to_rflags(CPUX86State *env);
@@ -78,4 +77,4 @@ void SET_FLAGS_OSZAPC_LOGIC16(CPUX86State *env, uint16_t v1, uint16_t v2,
 void SET_FLAGS_OSZAPC_LOGIC8(CPUX86State *env, uint8_t v1, uint8_t v2,
                              uint8_t diff);
 
-#endif /* X86_FLAGS_H */
+#endif /* __X86_FLAGS_H__ */

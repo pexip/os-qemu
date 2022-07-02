@@ -14,15 +14,12 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #ifdef CONFIG_MODULES
 #include <gmodule.h>
 #endif
 #include "qemu/queue.h"
 #include "qemu/module.h"
-#include "qemu/cutils.h"
-#ifdef CONFIG_MODULE_UPGRADES
-#include "qemu-version.h"
-#endif
 
 typedef struct ModuleEntry
 {
@@ -34,7 +31,6 @@ typedef struct ModuleEntry
 typedef QTAILQ_HEAD(, ModuleEntry) ModuleTypeList;
 
 static ModuleTypeList init_type_list[MODULE_INIT_MAX];
-static bool modules_init_done[MODULE_INIT_MAX];
 
 static ModuleTypeList dso_init_list;
 
@@ -96,29 +92,23 @@ void module_call_init(module_init_type type)
     ModuleTypeList *l;
     ModuleEntry *e;
 
-    if (modules_init_done[type]) {
-        return;
-    }
-
     l = find_type(type);
 
     QTAILQ_FOREACH(e, l, node) {
         e->init();
     }
-
-    modules_init_done[type] = true;
 }
 
 #ifdef CONFIG_MODULES
-static int module_load_file(const char *fname, bool mayfail, bool export_symbols)
+static int module_load_file(const char *fname)
 {
     GModule *g_module;
     void (*sym)(void);
-    const char *dsosuf = CONFIG_HOST_DSOSUF;
+    const char *dsosuf = HOST_DSOSUF;
     int len = strlen(fname);
     int suf_len = strlen(dsosuf);
     ModuleEntry *e, *next;
-    int ret, flags;
+    int ret;
 
     if (len <= suf_len || strcmp(&fname[len - suf_len], dsosuf)) {
         /* wrong suffix */
@@ -132,16 +122,10 @@ static int module_load_file(const char *fname, bool mayfail, bool export_symbols
 
     assert(QTAILQ_EMPTY(&dso_init_list));
 
-    flags = 0;
-    if (!export_symbols) {
-        flags |= G_MODULE_BIND_LOCAL;
-    }
-    g_module = g_module_open(fname, flags);
+    g_module = g_module_open(fname, G_MODULE_BIND_LAZY | G_MODULE_BIND_LOCAL);
     if (!g_module) {
-        if (!mayfail) {
-            fprintf(stderr, "Failed to open module: %s\n",
-                    g_module_error());
-        }
+        fprintf(stderr, "Failed to open module: %s\n",
+                g_module_error());
         ret = -EINVAL;
         goto out;
     }
@@ -171,46 +155,23 @@ static int module_load_file(const char *fname, bool mayfail, bool export_symbols
 out:
     return ret;
 }
-
-static const struct {
-    const char *name;
-    const char *dep;
-} module_deps[] = {
-    { "audio-spice",    "ui-spice-core" },
-    { "chardev-spice",  "ui-spice-core" },
-    { "hw-display-qxl", "ui-spice-core" },
-    { "ui-spice-app",   "ui-spice-core" },
-    { "ui-spice-app",   "chardev-spice" },
-
-#ifdef CONFIG_OPENGL
-    { "ui-egl-headless", "ui-opengl"    },
-    { "ui-gtk",          "ui-opengl"    },
-    { "ui-sdl",          "ui-opengl"    },
-    { "ui-spice-core",   "ui-opengl"    },
-#endif
-};
 #endif
 
-bool module_load_one(const char *prefix, const char *lib_name, bool mayfail)
+void module_load_one(const char *prefix, const char *lib_name)
 {
-    bool success = false;
-
 #ifdef CONFIG_MODULES
     char *fname = NULL;
-#ifdef CONFIG_MODULE_UPGRADES
-    char *version_dir;
-#endif
+    char *exec_dir;
     const char *search_dir;
-    char *dirs[5];
+    char *dirs[4];
     char *module_name;
     int i = 0, n_dirs = 0;
-    int ret, dep;
-    bool export_symbols = false;
+    int ret;
     static GHashTable *loaded_modules;
 
     if (!g_module_supported()) {
         fprintf(stderr, "Module is not supported by system.\n");
-        return false;
+        return;
     }
 
     if (!loaded_modules) {
@@ -219,54 +180,35 @@ bool module_load_one(const char *prefix, const char *lib_name, bool mayfail)
 
     module_name = g_strdup_printf("%s%s", prefix, lib_name);
 
-    for (dep = 0; dep < ARRAY_SIZE(module_deps); dep++) {
-        if (strcmp(module_name, module_deps[dep].name) == 0) {
-            /* we depend on another module */
-            module_load_one("", module_deps[dep].dep, false);
-        }
-        if (strcmp(module_name, module_deps[dep].dep) == 0) {
-            /* another module depends on us */
-            export_symbols = true;
-        }
-    }
-
-    if (!g_hash_table_add(loaded_modules, module_name)) {
+    if (g_hash_table_lookup(loaded_modules, module_name)) {
         g_free(module_name);
-        return true;
+        return;
     }
+    g_hash_table_insert(loaded_modules, module_name, module_name);
 
+    exec_dir = qemu_get_exec_dir();
     search_dir = getenv("QEMU_MODULE_DIR");
     if (search_dir != NULL) {
         dirs[n_dirs++] = g_strdup_printf("%s", search_dir);
     }
-    dirs[n_dirs++] = get_relocated_path(CONFIG_QEMU_MODDIR);
-    dirs[n_dirs++] = g_strdup(qemu_get_exec_dir());
-
-#ifdef CONFIG_MODULE_UPGRADES
-    version_dir = g_strcanon(g_strdup(QEMU_PKGVERSION),
-                             G_CSET_A_2_Z G_CSET_a_2_z G_CSET_DIGITS "+-.~",
-                             '_');
-    dirs[n_dirs++] = g_strdup_printf("/var/run/qemu/%s", version_dir);
-#endif
-
+    dirs[n_dirs++] = g_strdup_printf("%s", CONFIG_QEMU_MODDIR);
+    dirs[n_dirs++] = g_strdup_printf("%s/..", exec_dir ? : "");
+    dirs[n_dirs++] = g_strdup_printf("%s", exec_dir ? : "");
     assert(n_dirs <= ARRAY_SIZE(dirs));
+
+    g_free(exec_dir);
+    exec_dir = NULL;
 
     for (i = 0; i < n_dirs; i++) {
         fname = g_strdup_printf("%s/%s%s",
-                dirs[i], module_name, CONFIG_HOST_DSOSUF);
-        ret = module_load_file(fname, mayfail, export_symbols);
+                dirs[i], module_name, HOST_DSOSUF);
+        ret = module_load_file(fname);
         g_free(fname);
         fname = NULL;
         /* Try loading until loaded a module file */
         if (!ret) {
-            success = true;
             break;
         }
-    }
-
-    if (!success) {
-        g_hash_table_remove(loaded_modules, module_name);
-        g_free(module_name);
     }
 
     for (i = 0; i < n_dirs; i++) {
@@ -274,79 +216,4 @@ bool module_load_one(const char *prefix, const char *lib_name, bool mayfail)
     }
 
 #endif
-    return success;
-}
-
-/*
- * Building devices and other qom objects modular is mostly useful in
- * case they have dependencies to external shared libraries, so we can
- * cut down the core qemu library dependencies.  Which is the case for
- * only a very few devices & objects.
- *
- * So with the expectation that this will be rather the exception than
- * the rule and the list will not gain that many entries, go with a
- * simple manually maintained list for now.
- *
- * The list must be sorted by module (module_load_qom_all() needs this).
- */
-static struct {
-    const char *type;
-    const char *prefix;
-    const char *module;
-} const qom_modules[] = {
-    { "ccid-card-passthru",    "hw-", "usb-smartcard"         },
-    { "ccid-card-emulated",    "hw-", "usb-smartcard"         },
-    { "usb-redir",             "hw-", "usb-redirect"          },
-    { "qxl-vga",               "hw-", "display-qxl"           },
-    { "qxl",                   "hw-", "display-qxl"           },
-    { "virtio-gpu-device",     "hw-", "display-virtio-gpu"    },
-    { "vhost-user-gpu",        "hw-", "display-virtio-gpu"    },
-    { "virtio-gpu-pci-base",   "hw-", "display-virtio-gpu-pci" },
-    { "virtio-gpu-pci",        "hw-", "display-virtio-gpu-pci" },
-    { "vhost-user-gpu-pci",    "hw-", "display-virtio-gpu-pci" },
-    { "virtio-vga-base",       "hw-", "display-virtio-vga"    },
-    { "virtio-vga",            "hw-", "display-virtio-vga"    },
-    { "vhost-user-vga",        "hw-", "display-virtio-vga"    },
-    { "chardev-braille",       "chardev-", "baum"             },
-    { "chardev-spicevmc",      "chardev-", "spice"            },
-    { "chardev-spiceport",     "chardev-", "spice"            },
-};
-
-static bool module_loaded_qom_all;
-
-void module_load_qom_one(const char *type)
-{
-    int i;
-
-    if (!type) {
-        return;
-    }
-    for (i = 0; i < ARRAY_SIZE(qom_modules); i++) {
-        if (strcmp(qom_modules[i].type, type) == 0) {
-            module_load_one(qom_modules[i].prefix,
-                            qom_modules[i].module,
-                            false);
-            return;
-        }
-    }
-}
-
-void module_load_qom_all(void)
-{
-    int i;
-
-    if (module_loaded_qom_all) {
-        return;
-    }
-    for (i = 0; i < ARRAY_SIZE(qom_modules); i++) {
-        if (i > 0 && (strcmp(qom_modules[i - 1].module,
-                             qom_modules[i].module) == 0 &&
-                      strcmp(qom_modules[i - 1].prefix,
-                             qom_modules[i].prefix) == 0)) {
-            /* one module implementing multiple types -> load only once */
-            continue;
-        }
-        module_load_one(qom_modules[i].prefix, qom_modules[i].module, true);
-    }
-    module_loaded_qom_all = true;
 }

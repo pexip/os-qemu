@@ -103,8 +103,8 @@ ivshmem_server_parse_args(IvshmemServerArgs *args, int argc, char *argv[])
             break;
 
         case 'l': /* shm size */
-            if (!parse_option_size("shm_size", optarg, &args->shm_size,
-                                   &err)) {
+            parse_option_size("shm_size", optarg, &args->shm_size, &err);
+            if (err) {
                 error_report_err(err);
                 ivshmem_server_help(argv[0]);
                 exit(1);
@@ -223,9 +223,8 @@ main(int argc, char *argv[])
     sa_quit.sa_handler = ivshmem_server_quit_cb;
     sa_quit.sa_flags = 0;
     if (sigemptyset(&sa_quit.sa_mask) == -1 ||
-        sigaction(SIGTERM, &sa_quit, 0) == -1 ||
-        sigaction(SIGINT, &sa_quit, 0) == -1) {
-        perror("failed to add signal handler; sigaction");
+        sigaction(SIGTERM, &sa_quit, 0) == -1) {
+        perror("failed to add SIGTERM handler; sigaction");
         goto err;
     }
 

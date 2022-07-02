@@ -28,12 +28,11 @@
 #include "exec/address-spaces.h"
 
 #include "qemu-common.h"
+#include "hax-i386.h"
 #include "sysemu/accel.h"
-#include "sysemu/reset.h"
-#include "sysemu/runstate.h"
+#include "sysemu/sysemu.h"
+#include "qemu/main-loop.h"
 #include "hw/boards.h"
-
-#include "hax-cpus.h"
 
 #define DEBUG_HAX 0
 
@@ -68,7 +67,7 @@ int valid_hax_tunnel_size(uint16_t size)
 
 hax_fd hax_vcpu_get_fd(CPUArchState *env)
 {
-    struct hax_vcpu_state *vcpu = env_cpu(env)->hax_vcpu;
+    struct hax_vcpu_state *vcpu = ENV_GET_CPU(env)->hax_vcpu;
     if (!vcpu) {
         return HAX_INVALID_FD;
     }
@@ -155,7 +154,13 @@ int hax_vcpu_create(int id)
         return 0;
     }
 
-    vcpu = g_new0(struct hax_vcpu_state, 1);
+    vcpu = g_malloc(sizeof(struct hax_vcpu_state));
+    if (!vcpu) {
+        fprintf(stderr, "Failed to alloc vcpu state\n");
+        return -ENOMEM;
+    }
+
+    memset(vcpu, 0, sizeof(struct hax_vcpu_state));
 
     ret = hax_host_create_vcpu(hax_global.vm->fd, id);
     if (ret) {
@@ -206,7 +211,7 @@ int hax_vcpu_destroy(CPUState *cpu)
     }
 
     /*
-     * 1. The hax_tunnel is also destroyed when vcpu is destroyed
+     * 1. The hax_tunnel is also destroied when vcpu destroy
      * 2. close fd will cause hax module vcpu be cleaned
      */
     hax_close_fd(vcpu->fd);
@@ -232,10 +237,10 @@ int hax_init_vcpu(CPUState *cpu)
     return ret;
 }
 
-struct hax_vm *hax_vm_create(struct hax_state *hax, int max_cpus)
+struct hax_vm *hax_vm_create(struct hax_state *hax)
 {
     struct hax_vm *vm;
-    int vm_id = 0, ret, i;
+    int vm_id = 0, ret;
 
     if (hax_invalid_fd(hax->fd)) {
         return NULL;
@@ -245,13 +250,11 @@ struct hax_vm *hax_vm_create(struct hax_state *hax, int max_cpus)
         return hax->vm;
     }
 
-    if (max_cpus > HAX_MAX_VCPU) {
-        fprintf(stderr, "Maximum VCPU number QEMU supported is %d\n", HAX_MAX_VCPU);
+    vm = g_malloc(sizeof(struct hax_vm));
+    if (!vm) {
         return NULL;
     }
-
-    vm = g_new0(struct hax_vm, 1);
-
+    memset(vm, 0, sizeof(struct hax_vm));
     ret = hax_host_create_vm(hax, &vm_id);
     if (ret) {
         fprintf(stderr, "Failed to create vm %x\n", ret);
@@ -262,12 +265,6 @@ struct hax_vm *hax_vm_create(struct hax_state *hax, int max_cpus)
     if (hax_invalid_fd(vm->fd)) {
         fprintf(stderr, "Failed to open vm %d\n", vm_id);
         goto error;
-    }
-
-    vm->numvcpus = max_cpus;
-    vm->vcpus = g_new0(struct hax_vcpu_state *, vm->numvcpus);
-    for (i = 0; i < vm->numvcpus; i++) {
-        vm->vcpus[i] = NULL;
     }
 
     hax->vm = vm;
@@ -283,20 +280,27 @@ int hax_vm_destroy(struct hax_vm *vm)
 {
     int i;
 
-    for (i = 0; i < vm->numvcpus; i++)
+    for (i = 0; i < HAX_MAX_VCPU; i++)
         if (vm->vcpus[i]) {
             fprintf(stderr, "VCPU should be cleaned before vm clean\n");
             return -1;
         }
     hax_close_fd(vm->fd);
-    vm->numvcpus = 0;
-    g_free(vm->vcpus);
     g_free(vm);
     hax_global.vm = NULL;
     return 0;
 }
 
-static int hax_init(ram_addr_t ram_size, int max_cpus)
+static void hax_handle_interrupt(CPUState *cpu, int mask)
+{
+    cpu->interrupt_request |= mask;
+
+    if (!qemu_cpu_is_self(cpu)) {
+        qemu_cpu_kick(cpu);
+    }
+}
+
+static int hax_init(ram_addr_t ram_size)
 {
     struct hax_state *hax = NULL;
     struct hax_qemu_version qversion;
@@ -328,7 +332,7 @@ static int hax_init(ram_addr_t ram_size, int max_cpus)
         goto error;
     }
 
-    hax->vm = hax_vm_create(hax, max_cpus);
+    hax->vm = hax_vm_create(hax);
     if (!hax->vm) {
         fprintf(stderr, "Failed to create HAX VM\n");
         ret = -EINVAL;
@@ -340,6 +344,7 @@ static int hax_init(ram_addr_t ram_size, int max_cpus)
     qversion.cur_version = hax_cur_version;
     qversion.min_version = hax_min_version;
     hax_notify_qemu_version(hax->vm->fd, &qversion);
+    cpu_interrupt_handler = hax_handle_interrupt;
 
     return ret;
   error:
@@ -355,7 +360,7 @@ static int hax_init(ram_addr_t ram_size, int max_cpus)
 
 static int hax_accel_init(MachineState *ms)
 {
-    int ret = hax_init(ms->ram_size, (int)ms->smp.max_cpus);
+    int ret = hax_init(ms->ram_size);
 
     if (ret && (ret != -ENOSPC)) {
         fprintf(stderr, "No accelerator found.\n");
@@ -364,16 +369,13 @@ static int hax_accel_init(MachineState *ms)
                 !ret ? "working" : "not working",
                 !ret ? "fast virt" : "emulation");
     }
-    if (ret == 0) {
-        cpus_register_accel(&hax_cpus);
-    }
     return ret;
 }
 
 static int hax_handle_fastmmio(CPUArchState *env, struct hax_fastmmio *hft)
 {
     if (hft->direction < 2) {
-        cpu_physical_memory_rw(hft->gpa, &hft->value, hft->size,
+        cpu_physical_memory_rw(hft->gpa, (uint8_t *) &hft->value, hft->size,
                                hft->direction);
     } else {
         /*
@@ -382,8 +384,8 @@ static int hax_handle_fastmmio(CPUArchState *env, struct hax_fastmmio *hft)
          *  hft->direction == 2: gpa ==> gpa2
          */
         uint64_t value;
-        cpu_physical_memory_read(hft->gpa, &value, hft->size);
-        cpu_physical_memory_write(hft->gpa2, &value, hft->size);
+        cpu_physical_memory_rw(hft->gpa, (uint8_t *) &value, hft->size, 0);
+        cpu_physical_memory_rw(hft->gpa2, (uint8_t *) &value, hft->size, 1);
     }
 
     return 0;
@@ -416,7 +418,7 @@ static int hax_handle_io(CPUArchState *env, uint32_t df, uint16_t port,
 
 static int hax_vcpu_interrupt(CPUArchState *env)
 {
-    CPUState *cpu = env_cpu(env);
+    CPUState *cpu = ENV_GET_CPU(env);
     struct hax_vcpu_state *vcpu = cpu->hax_vcpu;
     struct hax_tunnel *ht = vcpu->tunnel;
 
@@ -468,7 +470,7 @@ void hax_raise_event(CPUState *cpu)
 static int hax_vcpu_hax_exec(CPUArchState *env)
 {
     int ret = 0;
-    CPUState *cpu = env_cpu(env);
+    CPUState *cpu = ENV_GET_CPU(env);
     X86CPU *x86_cpu = X86_CPU(cpu);
     struct hax_vcpu_state *vcpu = cpu->hax_vcpu;
     struct hax_tunnel *ht = vcpu->tunnel;
@@ -478,33 +480,11 @@ static int hax_vcpu_hax_exec(CPUArchState *env)
         return 0;
     }
 
+    cpu->halted = 0;
+
     if (cpu->interrupt_request & CPU_INTERRUPT_POLL) {
         cpu->interrupt_request &= ~CPU_INTERRUPT_POLL;
         apic_poll_irq(x86_cpu->apic_state);
-    }
-
-    /* After a vcpu is halted (either because it is an AP and has just been
-     * reset, or because it has executed the HLT instruction), it will not be
-     * run (hax_vcpu_run()) until it is unhalted. The next few if blocks check
-     * for events that may change the halted state of this vcpu:
-     *  a) Maskable interrupt, when RFLAGS.IF is 1;
-     *     Note: env->eflags may not reflect the current RFLAGS state, because
-     *           it is not updated after each hax_vcpu_run(). We cannot afford
-     *           to fail to recognize any unhalt-by-maskable-interrupt event
-     *           (in which case the vcpu will halt forever), and yet we cannot
-     *           afford the overhead of hax_vcpu_sync_state(). The current
-     *           solution is to err on the side of caution and have the HLT
-     *           handler (see case HAX_EXIT_HLT below) unconditionally set the
-     *           IF_MASK bit in env->eflags, which, in effect, disables the
-     *           RFLAGS.IF check.
-     *  b) NMI;
-     *  c) INIT signal;
-     *  d) SIPI signal.
-     */
-    if (((cpu->interrupt_request & CPU_INTERRUPT_HARD) &&
-         (env->eflags & IF_MASK)) ||
-        (cpu->interrupt_request & CPU_INTERRUPT_NMI)) {
-        cpu->halted = 0;
     }
 
     if (cpu->interrupt_request & CPU_INTERRUPT_INIT) {
@@ -520,16 +500,6 @@ static int hax_vcpu_hax_exec(CPUArchState *env)
         hax_vcpu_sync_state(env, 0);
         do_cpu_sipi(x86_cpu);
         hax_vcpu_sync_state(env, 1);
-    }
-
-    if (cpu->halted) {
-        /* If this vcpu is halted, we must not ask HAXM to run it. Instead, we
-         * break out of hax_smp_cpu_exec() as if this vcpu had executed HLT.
-         * That way, this vcpu thread will be trapped in qemu_wait_io_event(),
-         * until the vcpu is unhalted.
-         */
-        cpu->exception_index = EXCP_HLT;
-        return 0;
     }
 
     do {
@@ -579,7 +549,7 @@ static int hax_vcpu_hax_exec(CPUArchState *env)
                     ht->_exit_reason);
             qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
             hax_vcpu_sync_state(env, 0);
-            cpu_dump_state(cpu, stderr, 0);
+            cpu_dump_state(cpu, stderr, fprintf, 0);
             ret = -1;
             break;
         case HAX_EXIT_HLT:
@@ -610,7 +580,7 @@ static int hax_vcpu_hax_exec(CPUArchState *env)
             fprintf(stderr, "Unknown exit %x from HAX\n", ht->_exit_status);
             qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
             hax_vcpu_sync_state(env, 0);
-            cpu_dump_state(cpu, stderr, 0);
+            cpu_dump_state(cpu, stderr, fprintf, 0);
             ret = 1;
             break;
         }

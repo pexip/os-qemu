@@ -19,7 +19,6 @@
 #include <comdef.h>
 #include <comutil.h>
 #include <sddl.h>
-#include <winsvc.h>
 
 #define BUFFER_SIZE 1024
 
@@ -444,17 +443,6 @@ STDAPI DllRegisterServer(void)
                                      VSS_PROV_SOFTWARE,
                                      const_cast<WCHAR*>(QGA_PROVIDER_VERSION),
                                      g_gProviderVersion);
-    if (hr == (long int) VSS_E_PROVIDER_ALREADY_REGISTERED) {
-        DllUnregisterServer();
-        hr = pVssAdmin->RegisterProvider(g_gProviderId, CLSID_QGAVSSProvider,
-                                         const_cast<WCHAR * >
-                                         (QGA_PROVIDER_LNAME),
-                                         VSS_PROV_SOFTWARE,
-                                         const_cast<WCHAR * >
-                                         (QGA_PROVIDER_VERSION),
-                                         g_gProviderVersion);
-    }
-
     if (FAILED(hr)) {
         errmsg_dialog(hr, "RegisterProvider failed");
     }
@@ -510,32 +498,26 @@ namespace _com_util
     }
 }
 
-/* Stop QGA VSS provider service using Winsvc API  */
+/* Stop QGA VSS provider service from COM+ Application Admin Catalog */
+
 STDAPI StopService(void)
 {
     HRESULT hr;
-    SC_HANDLE manager = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS);
-    SC_HANDLE service = NULL;
+    COMInitializer initializer;
+    COMPointer<IUnknown> pUnknown;
+    COMPointer<ICOMAdminCatalog2> pCatalog;
 
-    if (!manager) {
-        errmsg(E_FAIL, "Failed to open service manager");
-        hr = E_FAIL;
-        goto out;
-    }
-    service = OpenService(manager, QGA_PROVIDER_NAME, SC_MANAGER_ALL_ACCESS);
+    int count = 0;
 
-    if (!service) {
-        errmsg(E_FAIL, "Failed to open service");
-        hr =  E_FAIL;
-        goto out;
-    }
-    if (!(ControlService(service, SERVICE_CONTROL_STOP, NULL))) {
-        errmsg(E_FAIL, "Failed to stop service");
-        hr = E_FAIL;
+    chk(QGAProviderFind(QGAProviderCount, (void *)&count));
+    if (count) {
+        chk(CoCreateInstance(CLSID_COMAdminCatalog, NULL, CLSCTX_INPROC_SERVER,
+            IID_IUnknown, (void **)pUnknown.replace()));
+        chk(pUnknown->QueryInterface(IID_ICOMAdminCatalog2,
+            (void **)pCatalog.replace()));
+        chk(pCatalog->ShutdownApplication(_bstr_t(QGA_PROVIDER_LNAME)));
     }
 
 out:
-    CloseServiceHandle(service);
-    CloseServiceHandle(manager);
     return hr;
 }

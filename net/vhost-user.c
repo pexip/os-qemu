@@ -172,17 +172,6 @@ static void net_vhost_user_cleanup(NetClientState *nc)
     qemu_purge_queued_packets(nc);
 }
 
-static int vhost_user_set_vnet_endianness(NetClientState *nc,
-                                          bool enable)
-{
-    /* Nothing to do.  If the server supports
-     * VHOST_USER_PROTOCOL_F_CROSS_ENDIAN, it will get the
-     * vnet header endianness from there.  If it doesn't, negotiation
-     * fails.
-     */
-    return 0;
-}
-
 static bool vhost_user_has_vnet_hdr(NetClientState *nc)
 {
     assert(nc->info->type == NET_CLIENT_DRIVER_VHOST_USER);
@@ -204,8 +193,6 @@ static NetClientInfo net_vhost_user_info = {
         .cleanup = net_vhost_user_cleanup,
         .has_vnet_hdr = vhost_user_has_vnet_hdr,
         .has_ufo = vhost_user_has_ufo,
-        .set_vnet_be = vhost_user_set_vnet_endianness,
-        .set_vnet_le = vhost_user_set_vnet_endianness,
 };
 
 static gboolean net_vhost_user_watch(GIOChannel *chan, GIOCondition cond,
@@ -218,7 +205,7 @@ static gboolean net_vhost_user_watch(GIOChannel *chan, GIOCondition cond,
     return TRUE;
 }
 
-static void net_vhost_user_event(void *opaque, QEMUChrEvent event);
+static void net_vhost_user_event(void *opaque, int event);
 
 static void chr_closed_bh(void *opaque)
 {
@@ -226,7 +213,7 @@ static void chr_closed_bh(void *opaque)
     NetClientState *ncs[MAX_QUEUE_NUM];
     NetVhostUserState *s;
     Error *err = NULL;
-    int queues, i;
+    int queues;
 
     queues = qemu_find_net_clients_except(name, ncs,
                                           NET_CLIENT_DRIVER_NIC,
@@ -235,15 +222,8 @@ static void chr_closed_bh(void *opaque)
 
     s = DO_UPCAST(NetVhostUserState, nc, ncs[0]);
 
-    for (i = queues -1; i >= 0; i--) {
-        s = DO_UPCAST(NetVhostUserState, nc, ncs[i]);
-
-        if (s->vhost_net) {
-            s->acked_features = vhost_net_get_acked_features(s->vhost_net);
-        }
-    }
-
     qmp_set_link(name, false, &err);
+    vhost_user_stop(queues, ncs);
 
     qemu_chr_fe_set_handlers(&s->chr, NULL, NULL, net_vhost_user_event,
                              NULL, opaque, NULL, true);
@@ -253,7 +233,7 @@ static void chr_closed_bh(void *opaque)
     }
 }
 
-static void net_vhost_user_event(void *opaque, QEMUChrEvent event)
+static void net_vhost_user_event(void *opaque, int event)
 {
     const char *name = opaque;
     NetClientState *ncs[MAX_QUEUE_NUM];
@@ -298,11 +278,6 @@ static void net_vhost_user_event(void *opaque, QEMUChrEvent event)
             aio_bh_schedule_oneshot(ctx, chr_closed_bh, opaque);
         }
         break;
-    case CHR_EVENT_BREAK:
-    case CHR_EVENT_MUX_IN:
-    case CHR_EVENT_MUX_OUT:
-        /* Ignore */
-        break;
     }
 
     if (err) {
@@ -316,14 +291,19 @@ static int net_vhost_user_init(NetClientState *peer, const char *device,
 {
     Error *err = NULL;
     NetClientState *nc, *nc0 = NULL;
+    VhostUserState *user = NULL;
     NetVhostUserState *s = NULL;
-    VhostUserState *user;
     int i;
 
     assert(name);
     assert(queues > 0);
 
-    user = g_new0(struct VhostUserState, 1);
+    user = vhost_user_init();
+    if (!user) {
+        error_report("failed to init vhost_user");
+        goto err;
+    }
+
     for (i = 0; i < queues; i++) {
         nc = qemu_new_net_client(&net_vhost_user_info, peer, device, name);
         snprintf(nc->info_str, sizeof(nc->info_str), "vhost-user%d to %s",
@@ -332,11 +312,11 @@ static int net_vhost_user_init(NetClientState *peer, const char *device,
         if (!nc0) {
             nc0 = nc;
             s = DO_UPCAST(NetVhostUserState, nc, nc);
-            if (!qemu_chr_fe_init(&s->chr, chr, &err) ||
-                !vhost_user_init(user, &s->chr, &err)) {
+            if (!qemu_chr_fe_init(&s->chr, chr, &err)) {
                 error_report_err(err);
                 goto err;
             }
+            user->chr = &s->chr;
         }
         s = DO_UPCAST(NetVhostUserState, nc, nc);
         s->vhost_user = user;

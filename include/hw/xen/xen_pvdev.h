@@ -6,7 +6,7 @@
 
 #define XEN_BUFSIZE 1024
 
-struct XenLegacyDevice;
+struct XenDevice;
 
 /* driver uses grant tables  ->  open gntdev device (xendev->gnttabdev) */
 #define DEVOPS_FLAG_NEED_GNTDEV   1
@@ -16,21 +16,19 @@ struct XenLegacyDevice;
 struct XenDevOps {
     size_t    size;
     uint32_t  flags;
-    void      (*alloc)(struct XenLegacyDevice *xendev);
-    int       (*init)(struct XenLegacyDevice *xendev);
-    int       (*initialise)(struct XenLegacyDevice *xendev);
-    void      (*connected)(struct XenLegacyDevice *xendev);
-    void      (*event)(struct XenLegacyDevice *xendev);
-    void      (*disconnect)(struct XenLegacyDevice *xendev);
-    int       (*free)(struct XenLegacyDevice *xendev);
-    void      (*backend_changed)(struct XenLegacyDevice *xendev,
-                                 const char *node);
-    void      (*frontend_changed)(struct XenLegacyDevice *xendev,
-                                  const char *node);
+    void      (*alloc)(struct XenDevice *xendev);
+    int       (*init)(struct XenDevice *xendev);
+    int       (*initialise)(struct XenDevice *xendev);
+    void      (*connected)(struct XenDevice *xendev);
+    void      (*event)(struct XenDevice *xendev);
+    void      (*disconnect)(struct XenDevice *xendev);
+    int       (*free)(struct XenDevice *xendev);
+    void      (*backend_changed)(struct XenDevice *xendev, const char *node);
+    void      (*frontend_changed)(struct XenDevice *xendev, const char *node);
     int       (*backend_register)(void);
 };
 
-struct XenLegacyDevice {
+struct XenDevice {
     DeviceState        qdev;
     const char         *type;
     int                dom;
@@ -51,7 +49,7 @@ struct XenLegacyDevice {
     xengnttab_handle   *gnttabdev;
 
     struct XenDevOps   *ops;
-    QTAILQ_ENTRY(XenLegacyDevice) next;
+    QTAILQ_ENTRY(XenDevice) next;
 };
 
 /* ------------------------------------------------------------- */
@@ -68,14 +66,14 @@ void xenstore_update(void *unused);
 const char *xenbus_strstate(enum xenbus_state state);
 
 void xen_pv_evtchn_event(void *opaque);
-void xen_pv_insert_xendev(struct XenLegacyDevice *xendev);
-void xen_pv_del_xendev(struct XenLegacyDevice *xendev);
-struct XenLegacyDevice *xen_pv_find_xendev(const char *type, int dom, int dev);
+void xen_pv_insert_xendev(struct XenDevice *xendev);
+void xen_pv_del_xendev(struct XenDevice *xendev);
+struct XenDevice *xen_pv_find_xendev(const char *type, int dom, int dev);
 
-void xen_pv_unbind_evtchn(struct XenLegacyDevice *xendev);
-int xen_pv_send_notify(struct XenLegacyDevice *xendev);
+void xen_pv_unbind_evtchn(struct XenDevice *xendev);
+int xen_pv_send_notify(struct XenDevice *xendev);
 
-void xen_pv_printf(struct XenLegacyDevice *xendev, int msg_level,
+void xen_pv_printf(struct XenDevice *xendev, int msg_level,
                    const char *fmt, ...)  GCC_FMT_ATTR(3, 4);
 
 #endif /* QEMU_HW_XEN_PVDEV_H */

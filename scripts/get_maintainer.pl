@@ -81,7 +81,7 @@ my %VCS_cmds;
 
 my %VCS_cmds_git = (
     "execute_cmd" => \&git_execute_cmd,
-    "available" => '(which("git") ne "") && (-e ".git")',
+    "available" => '(which("git") ne "") && (-d ".git")',
     "find_signers_cmd" =>
 	"git log --no-color --follow --since=\$email_git_since " .
 	    '--format="GitCommit: %H%n' .
@@ -795,8 +795,7 @@ sub top_of_tree {
         && (-f "${lk_path}Makefile")
         && (-d "${lk_path}docs")
         && (-f "${lk_path}VERSION")
-        && (-d "${lk_path}linux-user/")
-        && (-d "${lk_path}softmmu/")) {
+        && (-f "${lk_path}vl.c")) {
 	return 1;
     }
     return 0;

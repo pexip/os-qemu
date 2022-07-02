@@ -26,18 +26,16 @@
 #ifndef HW_SERIAL_H
 #define HW_SERIAL_H
 
+#include "hw/hw.h"
+#include "sysemu/sysemu.h"
 #include "chardev/char-fe.h"
 #include "exec/memory.h"
 #include "qemu/fifo8.h"
 #include "chardev/char.h"
-#include "hw/sysbus.h"
-#include "qom/object.h"
 
 #define UART_FIFO_LENGTH    16      /* 16550A Fifo Length */
 
 struct SerialState {
-    DeviceState parent;
-
     uint16_t divider;
     uint8_t rbr; /* receive register */
     uint8_t thr; /* transmit holding register */
@@ -58,10 +56,11 @@ struct SerialState {
     qemu_irq irq;
     CharBackend chr;
     int last_break_enable;
-    uint32_t baudbase;
+    int it_shift;
+    int baudbase;
     uint32_t tsr_retry;
     guint watch_tag;
-    bool wakeup;
+    uint32_t wakeup;
 
     /* Time when the last byte was successfully sent out of the tsr */
     uint64_t last_xmit_ts;
@@ -79,32 +78,21 @@ struct SerialState {
     QEMUTimer *modem_status_poll;
     MemoryRegion io;
 };
-typedef struct SerialState SerialState;
-
-struct SerialMM {
-    SysBusDevice parent;
-
-    SerialState serial;
-
-    uint8_t regshift;
-    uint8_t endianness;
-};
 
 extern const VMStateDescription vmstate_serial;
 extern const MemoryRegionOps serial_io_ops;
 
+void serial_realize_core(SerialState *s, Error **errp);
+void serial_exit_core(SerialState *s);
 void serial_set_frequency(SerialState *s, uint32_t frequency);
 
-#define TYPE_SERIAL "serial"
-OBJECT_DECLARE_SIMPLE_TYPE(SerialState, SERIAL)
-
-#define TYPE_SERIAL_MM "serial-mm"
-OBJECT_DECLARE_SIMPLE_TYPE(SerialMM, SERIAL_MM)
-
-SerialMM *serial_mm_init(MemoryRegion *address_space,
-                         hwaddr base, int regshift,
-                         qemu_irq irq, int baudbase,
-                         Chardev *chr, enum device_endian end);
+/* legacy pre qom */
+SerialState *serial_init(int base, qemu_irq irq, int baudbase,
+                         Chardev *chr, MemoryRegion *system_io);
+SerialState *serial_mm_init(MemoryRegion *address_space,
+                            hwaddr base, int it_shift,
+                            qemu_irq irq, int baudbase,
+                            Chardev *chr, enum device_endian end);
 
 /* serial-isa.c */
 

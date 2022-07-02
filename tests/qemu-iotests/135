@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Test VPC open of image with large Max Table Entries value.
 #

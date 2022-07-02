@@ -93,8 +93,6 @@ struct list_element {
     QSIMPLEQ_ENTRY(list_element) entry;
 #elif TEST_LIST_TYPE == 3
     QTAILQ_ENTRY(list_element) entry;
-#elif TEST_LIST_TYPE == 4
-    QSLIST_ENTRY(list_element) entry;
 #else
 #error Invalid TEST_LIST_TYPE
 #endif
@@ -106,11 +104,11 @@ static void reclaim_list_el(struct rcu_head *prcu)
     struct list_element *el = container_of(prcu, struct list_element, rcu);
     g_free(el);
     /* Accessed only from call_rcu thread.  */
-    qatomic_set_i64(&n_reclaims, n_reclaims + 1);
+    atomic_set_i64(&n_reclaims, n_reclaims + 1);
 }
 
 #if TEST_LIST_TYPE == 1
-static QLIST_HEAD(, list_element) Q_list_head;
+static QLIST_HEAD(q_list_head, list_element) Q_list_head;
 
 #define TEST_NAME "qlist"
 #define TEST_LIST_REMOVE_RCU        QLIST_REMOVE_RCU
@@ -146,20 +144,6 @@ static QTAILQ_HEAD(, list_element) Q_list_head;
 #define TEST_LIST_INSERT_HEAD_RCU   QTAILQ_INSERT_HEAD_RCU
 #define TEST_LIST_FOREACH_RCU       QTAILQ_FOREACH_RCU
 #define TEST_LIST_FOREACH_SAFE_RCU  QTAILQ_FOREACH_SAFE_RCU
-
-#elif TEST_LIST_TYPE == 4
-static QSLIST_HEAD(, list_element) Q_list_head;
-
-#define TEST_NAME "qslist"
-#define TEST_LIST_REMOVE_RCU(el, f)                              \
-	 QSLIST_REMOVE_RCU(&Q_list_head, el, list_element, f)
-
-#define TEST_LIST_INSERT_AFTER_RCU(list_el, el, f)               \
-         QSLIST_INSERT_AFTER_RCU(&Q_list_head, list_el, el, f)
-
-#define TEST_LIST_INSERT_HEAD_RCU   QSLIST_INSERT_HEAD_RCU
-#define TEST_LIST_FOREACH_RCU       QSLIST_FOREACH_RCU
-#define TEST_LIST_FOREACH_SAFE_RCU  QSLIST_FOREACH_SAFE_RCU
 #else
 #error Invalid TEST_LIST_TYPE
 #endif
@@ -172,16 +156,16 @@ static void *rcu_q_reader(void *arg)
     rcu_register_thread();
 
     *(struct rcu_reader_data **)arg = &rcu_reader;
-    qatomic_inc(&nthreadsrunning);
-    while (qatomic_read(&goflag) == GOFLAG_INIT) {
+    atomic_inc(&nthreadsrunning);
+    while (atomic_read(&goflag) == GOFLAG_INIT) {
         g_usleep(1000);
     }
 
-    while (qatomic_read(&goflag) == GOFLAG_RUN) {
+    while (atomic_read(&goflag) == GOFLAG_RUN) {
         rcu_read_lock();
         TEST_LIST_FOREACH_RCU(el, &Q_list_head, entry) {
             n_reads_local++;
-            if (qatomic_read(&goflag) == GOFLAG_STOP) {
+            if (atomic_read(&goflag) == GOFLAG_STOP) {
                 break;
             }
         }
@@ -207,12 +191,12 @@ static void *rcu_q_updater(void *arg)
     struct list_element *el, *prev_el;
 
     *(struct rcu_reader_data **)arg = &rcu_reader;
-    qatomic_inc(&nthreadsrunning);
-    while (qatomic_read(&goflag) == GOFLAG_INIT) {
+    atomic_inc(&nthreadsrunning);
+    while (atomic_read(&goflag) == GOFLAG_INIT) {
         g_usleep(1000);
     }
 
-    while (qatomic_read(&goflag) == GOFLAG_RUN) {
+    while (atomic_read(&goflag) == GOFLAG_RUN) {
         target_el = select_random_el(RCU_Q_LEN);
         j = 0;
         /* FOREACH_RCU could work here but let's use both macros */
@@ -226,7 +210,7 @@ static void *rcu_q_updater(void *arg)
                 break;
             }
         }
-        if (qatomic_read(&goflag) == GOFLAG_STOP) {
+        if (atomic_read(&goflag) == GOFLAG_STOP) {
             break;
         }
         target_el = select_random_el(RCU_Q_LEN);
@@ -235,7 +219,7 @@ static void *rcu_q_updater(void *arg)
             j++;
             if (target_el == j) {
                 struct list_element *new_el = g_new(struct list_element, 1);
-                n_nodes_local++;
+                n_nodes += n_nodes_local;
                 TEST_LIST_INSERT_AFTER_RCU(el, new_el, entry);
                 break;
             }
@@ -248,7 +232,7 @@ static void *rcu_q_updater(void *arg)
     qemu_mutex_lock(&counts_mutex);
     n_nodes += n_nodes_local;
     n_updates += n_updates_local;
-    qatomic_set_i64(&n_nodes_removed, n_nodes_removed + n_removed_local);
+    atomic_set_i64(&n_nodes_removed, n_nodes_removed + n_removed_local);
     qemu_mutex_unlock(&counts_mutex);
     return NULL;
 }
@@ -271,13 +255,13 @@ static void rcu_qtest_init(void)
 static void rcu_qtest_run(int duration, int nreaders)
 {
     int nthreads = nreaders + 1;
-    while (qatomic_read(&nthreadsrunning) < nthreads) {
+    while (atomic_read(&nthreadsrunning) < nthreads) {
         g_usleep(1000);
     }
 
-    qatomic_set(&goflag, GOFLAG_RUN);
+    atomic_set(&goflag, GOFLAG_RUN);
     sleep(duration);
-    qatomic_set(&goflag, GOFLAG_STOP);
+    atomic_set(&goflag, GOFLAG_STOP);
     wait_all_threads();
 }
 
@@ -302,23 +286,21 @@ static void rcu_qtest(const char *test, int duration, int nreaders)
         n_removed_local++;
     }
     qemu_mutex_lock(&counts_mutex);
-    qatomic_set_i64(&n_nodes_removed, n_nodes_removed + n_removed_local);
+    atomic_set_i64(&n_nodes_removed, n_nodes_removed + n_removed_local);
     qemu_mutex_unlock(&counts_mutex);
     synchronize_rcu();
-    while (qatomic_read_i64(&n_nodes_removed) >
-           qatomic_read_i64(&n_reclaims)) {
+    while (atomic_read_i64(&n_nodes_removed) > atomic_read_i64(&n_reclaims)) {
         g_usleep(100);
         synchronize_rcu();
     }
     if (g_test_in_charge) {
-        g_assert_cmpint(qatomic_read_i64(&n_nodes_removed), ==,
-                        qatomic_read_i64(&n_reclaims));
+        g_assert_cmpint(atomic_read_i64(&n_nodes_removed), ==,
+                        atomic_read_i64(&n_reclaims));
     } else {
         printf("%s: %d readers; 1 updater; nodes read: "  \
                "%lld, nodes removed: %"PRIi64"; nodes reclaimed: %"PRIi64"\n",
                test, nthreadsrunning - 1, n_reads,
-               qatomic_read_i64(&n_nodes_removed),
-               qatomic_read_i64(&n_reclaims));
+               atomic_read_i64(&n_nodes_removed), atomic_read_i64(&n_reclaims));
         exit(0);
     }
 }

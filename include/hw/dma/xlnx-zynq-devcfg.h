@@ -25,15 +25,14 @@
  */
 
 #ifndef XLNX_ZYNQ_DEVCFG_H
-#define XLNX_ZYNQ_DEVCFG_H
 
 #include "hw/register.h"
 #include "hw/sysbus.h"
-#include "qom/object.h"
 
 #define TYPE_XLNX_ZYNQ_DEVCFG "xlnx.ps7-dev-cfg"
 
-OBJECT_DECLARE_SIMPLE_TYPE(XlnxZynqDevcfg, XLNX_ZYNQ_DEVCFG)
+#define XLNX_ZYNQ_DEVCFG(obj) \
+    OBJECT_CHECK(XlnxZynqDevcfg, (obj), TYPE_XLNX_ZYNQ_DEVCFG)
 
 #define XLNX_ZYNQ_DEVCFG_R_MAX (0x100 / 4)
 
@@ -46,7 +45,7 @@ typedef struct XlnxZynqDevcfgDMACmd {
     uint32_t dest_len;
 } XlnxZynqDevcfgDMACmd;
 
-struct XlnxZynqDevcfg {
+typedef struct XlnxZynqDevcfg {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -57,6 +56,7 @@ struct XlnxZynqDevcfg {
 
     uint32_t regs[XLNX_ZYNQ_DEVCFG_R_MAX];
     RegisterInfo regs_info[XLNX_ZYNQ_DEVCFG_R_MAX];
-};
+} XlnxZynqDevcfg;
 
+#define XLNX_ZYNQ_DEVCFG_H
 #endif

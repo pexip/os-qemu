@@ -102,12 +102,12 @@ void egl_fb_blit(egl_fb *dst, egl_fb *src, bool flip)
                       GL_COLOR_BUFFER_BIT, GL_LINEAR);
 }
 
-void egl_fb_read(DisplaySurface *dst, egl_fb *src)
+void egl_fb_read(void *dst, egl_fb *src)
 {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, src->framebuffer);
     glReadBuffer(GL_COLOR_ATTACHMENT0_EXT);
-    glReadPixels(0, 0, surface_width(dst), surface_height(dst),
-                 GL_BGRA, GL_UNSIGNED_BYTE, surface_data(dst));
+    glReadPixels(0, 0, src->width, src->height,
+                 GL_BGRA, GL_UNSIGNED_BYTE, dst);
 }
 
 void egl_texture_blit(QemuGLShader *gls, egl_fb *dst, egl_fb *src, bool flip)
@@ -120,15 +120,14 @@ void egl_texture_blit(QemuGLShader *gls, egl_fb *dst, egl_fb *src, bool flip)
 }
 
 void egl_texture_blend(QemuGLShader *gls, egl_fb *dst, egl_fb *src, bool flip,
-                       int x, int y, double scale_x, double scale_y)
+                       int x, int y)
 {
     glBindFramebuffer(GL_FRAMEBUFFER_EXT, dst->framebuffer);
-    int w = scale_x * src->width;
-    int h = scale_y * src->height;
     if (flip) {
-        glViewport(x, y, w, h);
+        glViewport(x, y, src->width, src->height);
     } else {
-        glViewport(x, dst->height - h - y, w, h);
+        glViewport(x, dst->height - src->height - y,
+                   src->width, src->height);
     }
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, src->texture);
@@ -200,8 +199,7 @@ err:
     return -1;
 }
 
-int egl_get_fd_for_texture(uint32_t tex_id, EGLint *stride, EGLint *fourcc,
-                           EGLuint64KHR *modifier)
+int egl_get_fd_for_texture(uint32_t tex_id, EGLint *stride, EGLint *fourcc)
 {
     EGLImageKHR image;
     EGLint num_planes, fd;
@@ -215,7 +213,7 @@ int egl_get_fd_for_texture(uint32_t tex_id, EGLint *stride, EGLint *fourcc,
     }
 
     eglExportDMABUFImageQueryMESA(qemu_egl_display, image, fourcc,
-                                  &num_planes, modifier);
+                                  &num_planes, NULL);
     if (num_planes != 1) {
         eglDestroyImageKHR(qemu_egl_display, image);
         return -1;
@@ -229,35 +227,19 @@ int egl_get_fd_for_texture(uint32_t tex_id, EGLint *stride, EGLint *fourcc,
 void egl_dmabuf_import_texture(QemuDmaBuf *dmabuf)
 {
     EGLImageKHR image = EGL_NO_IMAGE_KHR;
-    EGLint attrs[64];
-    int i = 0;
+    EGLint attrs[] = {
+        EGL_DMA_BUF_PLANE0_FD_EXT,      dmabuf->fd,
+        EGL_DMA_BUF_PLANE0_PITCH_EXT,   dmabuf->stride,
+        EGL_DMA_BUF_PLANE0_OFFSET_EXT,  0,
+        EGL_WIDTH,                      dmabuf->width,
+        EGL_HEIGHT,                     dmabuf->height,
+        EGL_LINUX_DRM_FOURCC_EXT,       dmabuf->fourcc,
+        EGL_NONE, /* end of list */
+    };
 
     if (dmabuf->texture != 0) {
         return;
     }
-
-    attrs[i++] = EGL_WIDTH;
-    attrs[i++] = dmabuf->width;
-    attrs[i++] = EGL_HEIGHT;
-    attrs[i++] = dmabuf->height;
-    attrs[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-    attrs[i++] = dmabuf->fourcc;
-
-    attrs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-    attrs[i++] = dmabuf->fd;
-    attrs[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-    attrs[i++] = dmabuf->stride;
-    attrs[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-    attrs[i++] = 0;
-#ifdef EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT
-    if (dmabuf->modifier) {
-        attrs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
-        attrs[i++] = (dmabuf->modifier >>  0) & 0xffffffff;
-        attrs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
-        attrs[i++] = (dmabuf->modifier >> 32) & 0xffffffff;
-    }
-#endif
-    attrs[i++] = EGL_NONE;
 
     image = eglCreateImageKHR(qemu_egl_display,
                               EGL_NO_CONTEXT,
@@ -291,14 +273,14 @@ void egl_dmabuf_release_texture(QemuDmaBuf *dmabuf)
 
 /* ---------------------------------------------------------------------- */
 
-EGLSurface qemu_egl_init_surface_x11(EGLContext ectx, EGLNativeWindowType win)
+EGLSurface qemu_egl_init_surface_x11(EGLContext ectx, Window win)
 {
     EGLSurface esurface;
     EGLBoolean b;
 
     esurface = eglCreateWindowSurface(qemu_egl_display,
                                       qemu_egl_config,
-                                      win, NULL);
+                                      (EGLNativeWindowType)win, NULL);
     if (esurface == EGL_NO_SURFACE) {
         error_report("egl: eglCreateWindowSurface failed");
         return NULL;

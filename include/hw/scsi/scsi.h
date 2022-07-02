@@ -1,12 +1,11 @@
 #ifndef QEMU_HW_SCSI_H
 #define QEMU_HW_SCSI_H
 
-#include "block/aio.h"
+#include "hw/qdev.h"
 #include "hw/block/block.h"
-#include "hw/qdev-core.h"
+#include "sysemu/sysemu.h"
 #include "scsi/utils.h"
 #include "qemu/notify.h"
-#include "qom/object.h"
 
 #define MAX_SCSI_DEVS	255
 
@@ -50,18 +49,22 @@ struct SCSIRequest {
 };
 
 #define TYPE_SCSI_DEVICE "scsi-device"
-OBJECT_DECLARE_TYPE(SCSIDevice, SCSIDeviceClass, SCSI_DEVICE)
+#define SCSI_DEVICE(obj) \
+     OBJECT_CHECK(SCSIDevice, (obj), TYPE_SCSI_DEVICE)
+#define SCSI_DEVICE_CLASS(klass) \
+     OBJECT_CLASS_CHECK(SCSIDeviceClass, (klass), TYPE_SCSI_DEVICE)
+#define SCSI_DEVICE_GET_CLASS(obj) \
+     OBJECT_GET_CLASS(SCSIDeviceClass, (obj), TYPE_SCSI_DEVICE)
 
-struct SCSIDeviceClass {
+typedef struct SCSIDeviceClass {
     DeviceClass parent_class;
     void (*realize)(SCSIDevice *dev, Error **errp);
-    void (*unrealize)(SCSIDevice *dev);
     int (*parse_cdb)(SCSIDevice *dev, SCSICommand *cmd, uint8_t *buf,
                      void *hba_private);
     SCSIRequest *(*alloc_req)(SCSIDevice *s, uint32_t tag, uint32_t lun,
                               uint8_t *buf, void *hba_private);
     void (*unit_attention_reported)(SCSIDevice *s);
-};
+} SCSIDeviceClass;
 
 struct SCSIDevice
 {
@@ -85,7 +88,6 @@ struct SCSIDevice
     int scsi_version;
     int default_scsi_version;
     bool needs_vpd_bl_emulation;
-    bool hba_supports_iothread;
 };
 
 extern const VMStateDescription vmstate_scsi_device;
@@ -132,7 +134,7 @@ struct SCSIBusInfo {
 };
 
 #define TYPE_SCSI_BUS "SCSI"
-OBJECT_DECLARE_SIMPLE_TYPE(SCSIBus, SCSI_BUS)
+#define SCSI_BUS(obj) OBJECT_CHECK(SCSIBus, (obj), TYPE_SCSI_BUS)
 
 struct SCSIBus {
     BusState qbus;
@@ -190,7 +192,6 @@ int scsi_device_get_sense(SCSIDevice *dev, uint8_t *buf, int len, bool fixed);
 int scsi_SG_IO_FROM_DEV(BlockBackend *blk, uint8_t *cmd, uint8_t cmd_size,
                         uint8_t *buf, uint8_t buf_size);
 SCSIDevice *scsi_device_find(SCSIBus *bus, int channel, int target, int lun);
-SCSIDevice *scsi_device_get(SCSIBus *bus, int channel, int target, int lun);
 
 /* scsi-generic.c. */
 extern const SCSIReqOps scsi_generic_req_ops;

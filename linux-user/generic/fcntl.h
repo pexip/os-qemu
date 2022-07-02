@@ -99,10 +99,6 @@
 #define TARGET_F_SETLKW64      14
 #endif
 
-#define TARGET_F_OFD_GETLK     36
-#define TARGET_F_OFD_SETLK     37
-#define TARGET_F_OFD_SETLKW    38
-
 #ifndef TARGET_F_SETOWN_EX
 #define TARGET_F_SETOWN_EX     15
 #define TARGET_F_GETOWN_EX     16
@@ -124,7 +120,6 @@ struct target_f_owner_ex {
 #define TARGET_F_SHLCK         8
 #endif
 
-#ifndef TARGET_HAVE_ARCH_STRUCT_FLOCK
 #ifndef TARGET_ARCH_FLOCK_PAD
 #define TARGET_ARCH_FLOCK_PAD
 #endif
@@ -134,12 +129,13 @@ struct target_flock {
     short l_whence;
     abi_long l_start;
     abi_long l_len;
+#if defined(TARGET_MIPS)
+    abi_long l_sysid;
+#endif
     int l_pid;
     TARGET_ARCH_FLOCK_PAD
 };
-#endif
 
-#ifndef TARGET_HAVE_ARCH_STRUCT_FLOCK64
 #ifndef TARGET_ARCH_FLOCK64_PAD
 #define TARGET_ARCH_FLOCK64_PAD
 #endif
@@ -152,6 +148,4 @@ struct target_flock64 {
     abi_int   l_pid;
     TARGET_ARCH_FLOCK64_PAD
 };
-#endif
-
 #endif

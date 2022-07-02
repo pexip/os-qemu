@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
@@ -36,6 +37,7 @@ def generate(events, backend, group):
         '     defined(TRACEPOINT_HEADER_MULTI_READ)',
         '#define TRACE_%s_GENERATED_UST_H' % group.upper(),
         '',
+        '#include "qemu-common.h"',
         '#include <lttng/tracepoint.h>',
         '',
         '/*',

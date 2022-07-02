@@ -2,12 +2,10 @@
 
 test_suite windowed
 
-#if XCHAL_HAVE_WINDOWED
-
 .altmacro
 
 .macro reset_window start
-    movi    a2, 0xffff
+    movi    a2, 0xff
     wsr     a2, windowstart
     rsync
     movi    a2, 0
@@ -107,8 +105,7 @@ test_end
     movi    a3, 0x4001f
     assert  eq, a2, a3
     rsr     a2, windowbase
-    movi    a3, (XCHAL_NUM_AREGS - (\window)) / 4
-    assert  eq, a2, a3
+    assert  eqi, a2, 8 - ((\window) / 4)
     rsr     a2, windowstart
     assert  eqi, a2, 1
     rfwu
@@ -119,8 +116,8 @@ test_end
     rsr     a2, windowbase
     assert  eqi, a2, 0
     rsr     a2, windowstart
-    assert  bsi.l, a2, 0
-    assert  bsi.l, a2, (XCHAL_NUM_AREGS - (\window)) / 4
+    assert  bsi, a2, 0
+    assert  bsi, a2, 8 - ((\window) / 4)
 .endm
 
 test underflow
@@ -135,7 +132,7 @@ test_end
 
 
 .macro retw_test window
-    reset_window %(1 | (1 << ((XCHAL_NUM_AREGS - \window) / 4)))
+    reset_window %(1 | (1 << (8 - (\window) / 4)))
     reset_ps
 
     ssai    2
@@ -150,11 +147,10 @@ test_end
     movi    a3, 0x4000f
     assert  eq, a2, a3
     rsr     a2, windowbase
-    movi    a3, (XCHAL_NUM_AREGS - (\window)) / 4
-    assert  eq, a2, a3
+    assert  eqi, a2, 8 - ((\window) / 4)
     rsr     a2, windowstart
-    assert  bci.l, a2, 0
-    assert  bsi.l, a2, (XCHAL_NUM_AREGS - (\window)) / 4
+    assert  bci, a2, 0
+    assert  bsi, a2, 8 - ((\window) / 4)
 .endm
 
 test retw
@@ -184,7 +180,7 @@ test movsp
 
     set_vector kernel, 0
 
-    reset_window %(0x1 | (1 << ((XCHAL_NUM_AREGS / 4) - 1)))
+    reset_window 0x81
     reset_ps
 
     movsp   a2, a3
@@ -215,16 +211,8 @@ test rotw
     movi    a3, 0x16
     movi    a7, 0x17
 
-#if XCHAL_NUM_AREGS == 32
     movi    a2, 0x44
     wsr     a2, windowstart
-#elif XCHAL_NUM_AREGS == 64
-    movi    a2, 0x4004
-    wsr     a2, windowstart
-    rotw    -8
-#else
-#error XCHAL_NUM_AREGS unsupported
-#endif
     rsync
 
     movi    a2, 0x10
@@ -361,7 +349,5 @@ test_end
 test entry_overflow
     all_entry_overflow_tests
 test_end
-
-#endif
 
 test_suite_end

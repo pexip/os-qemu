@@ -23,7 +23,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/module.h"
 #include "qemu/option.h"
 #include "qemu/sockets.h"
 #include "io/channel-file.h"
@@ -53,12 +52,12 @@ static void qmp_chardev_open_serial(Chardev *chr,
 
 #elif defined(__linux__) || defined(__sun__) || defined(__FreeBSD__)      \
     || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__) \
-    || defined(__GLIBC__) || defined(__APPLE__)
+    || defined(__GLIBC__)
 
 static void tty_serial_init(int fd, int speed,
                             int parity, int data_bits, int stop_bits)
 {
-    struct termios tty = {0};
+    struct termios tty;
     speed_t spd;
 
 #if 0

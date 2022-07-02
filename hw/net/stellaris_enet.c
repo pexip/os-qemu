@@ -6,17 +6,11 @@
  *
  * This code is licensed under the GPL.
  */
-
 #include "qemu/osdep.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
 #include "net/net.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 #include <zlib.h>
-#include "qom/object.h"
 
 //#define DEBUG_STELLARIS_ENET 1
 
@@ -51,14 +45,15 @@ do { fprintf(stderr, "stellaris_enet: error: " fmt , ## __VA_ARGS__);} while (0)
 #define SE_TCTL_DUPLEX  0x08
 
 #define TYPE_STELLARIS_ENET "stellaris_enet"
-OBJECT_DECLARE_SIMPLE_TYPE(stellaris_enet_state, STELLARIS_ENET)
+#define STELLARIS_ENET(obj) \
+    OBJECT_CHECK(stellaris_enet_state, (obj), TYPE_STELLARIS_ENET)
 
 typedef struct {
     uint8_t data[2048];
     uint32_t len;
 } StellarisEnetRxFrame;
 
-struct stellaris_enet_state {
+typedef struct {
     SysBusDevice parent_obj;
 
     uint32_t ris;
@@ -82,7 +77,7 @@ struct stellaris_enet_state {
     NICConf conf;
     qemu_irq irq;
     MemoryRegion mmio;
-};
+} stellaris_enet_state;
 
 static const VMStateDescription vmstate_rx_frame = {
     .name = "stellaris_enet/rx_frame",
@@ -507,7 +502,7 @@ static void stellaris_enet_class_init(ObjectClass *klass, void *data)
 
     dc->realize = stellaris_enet_realize;
     dc->reset = stellaris_enet_reset;
-    device_class_set_props(dc, stellaris_enet_properties);
+    dc->props = stellaris_enet_properties;
     dc->vmsd = &vmstate_stellaris_enet;
 }
 

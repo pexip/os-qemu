@@ -10,6 +10,7 @@
 #include "qemu/osdep.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
+#include "hw/qdev.h"
 #include "hw/s390x/ap-device.h"
 
 static void ap_class_init(ObjectClass *klass, void *data)
@@ -21,7 +22,7 @@ static void ap_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo ap_device_info = {
-    .name = TYPE_AP_DEVICE,
+    .name = AP_DEVICE_TYPE,
     .parent = TYPE_DEVICE,
     .instance_size = sizeof(APDevice),
     .class_size = sizeof(DeviceClass),

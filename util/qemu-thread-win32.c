@@ -11,6 +11,10 @@
  *
  */
 
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+
 #include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/thread.h"
@@ -145,23 +149,6 @@ void qemu_cond_wait_impl(QemuCond *cond, QemuMutex *mutex, const char *file, con
     qemu_mutex_post_lock(mutex, file, line);
 }
 
-bool qemu_cond_timedwait_impl(QemuCond *cond, QemuMutex *mutex, int ms,
-                              const char *file, const int line)
-{
-    int rc = 0;
-
-    assert(cond->initialized);
-    trace_qemu_mutex_unlock(mutex, file, line);
-    if (!SleepConditionVariableSRW(&cond->var, &mutex->lock, ms, 0)) {
-        rc = GetLastError();
-    }
-    trace_qemu_mutex_locked(mutex, file, line);
-    if (rc && rc != ERROR_TIMEOUT) {
-        error_exit(rc, __func__);
-    }
-    return rc != ERROR_TIMEOUT;
-}
-
 void qemu_sem_init(QemuSemaphore *sem, int init)
 {
     /* Manual reset.  */
@@ -250,8 +237,8 @@ void qemu_event_set(QemuEvent *ev)
      * ev->value we need a full memory barrier here.
      */
     smp_mb();
-    if (qatomic_read(&ev->value) != EV_SET) {
-        if (qatomic_xchg(&ev->value, EV_SET) == EV_BUSY) {
+    if (atomic_read(&ev->value) != EV_SET) {
+        if (atomic_xchg(&ev->value, EV_SET) == EV_BUSY) {
             /* There were waiters, wake them up.  */
             SetEvent(ev->event);
         }
@@ -263,13 +250,13 @@ void qemu_event_reset(QemuEvent *ev)
     unsigned value;
 
     assert(ev->initialized);
-    value = qatomic_read(&ev->value);
+    value = atomic_read(&ev->value);
     smp_mb_acquire();
     if (value == EV_SET) {
         /* If there was a concurrent reset (or even reset+wait),
          * do nothing.  Otherwise change EV_SET->EV_FREE.
          */
-        qatomic_or(&ev->value, EV_FREE);
+        atomic_or(&ev->value, EV_FREE);
     }
 }
 
@@ -278,7 +265,7 @@ void qemu_event_wait(QemuEvent *ev)
     unsigned value;
 
     assert(ev->initialized);
-    value = qatomic_read(&ev->value);
+    value = atomic_read(&ev->value);
     smp_mb_acquire();
     if (value != EV_SET) {
         if (value == EV_FREE) {
@@ -289,10 +276,10 @@ void qemu_event_wait(QemuEvent *ev)
             ResetEvent(ev->event);
 
             /* Tell qemu_event_set that there are waiters.  No need to retry
-             * because there cannot be a concurrent busy->free transition.
+             * because there cannot be a concurent busy->free transition.
              * After the CAS, the event will be either set or busy.
              */
-            if (qatomic_cmpxchg(&ev->value, EV_FREE, EV_BUSY) == EV_SET) {
+            if (atomic_cmpxchg(&ev->value, EV_FREE, EV_BUSY) == EV_SET) {
                 value = EV_SET;
             } else {
                 value = EV_BUSY;

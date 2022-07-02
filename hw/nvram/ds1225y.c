@@ -23,13 +23,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/qdev-properties.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
 #include "trace.h"
-#include "qemu/error-report.h"
-#include "qemu/module.h"
-#include "qom/object.h"
 
 typedef struct {
     MemoryRegion iomem;
@@ -110,15 +105,15 @@ static const VMStateDescription vmstate_nvram = {
 };
 
 #define TYPE_DS1225Y "ds1225y"
-OBJECT_DECLARE_SIMPLE_TYPE(SysBusNvRamState, DS1225Y)
+#define DS1225Y(obj) OBJECT_CHECK(SysBusNvRamState, (obj), TYPE_DS1225Y)
 
-struct SysBusNvRamState {
+typedef struct {
     SysBusDevice parent_obj;
 
     NvRamState nvram;
-};
+} SysBusNvRamState;
 
-static void nvram_sysbus_realize(DeviceState *dev, Error **errp)
+static int nvram_sysbus_initfn(SysBusDevice *dev)
 {
     SysBusNvRamState *sys = DS1225Y(dev);
     NvRamState *s = &sys->nvram;
@@ -128,18 +123,20 @@ static void nvram_sysbus_realize(DeviceState *dev, Error **errp)
 
     memory_region_init_io(&s->iomem, OBJECT(s), &nvram_ops, s,
                           "nvram", s->chip_size);
-    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
+    sysbus_init_mmio(dev, &s->iomem);
 
     /* Read current file */
     file = s->filename ? fopen(s->filename, "rb") : NULL;
     if (file) {
         /* Read nvram contents */
         if (fread(s->contents, s->chip_size, 1, file) != 1) {
-            error_report("nvram_sysbus_realize: short read");
+            printf("nvram_sysbus_initfn: short read\n");
         }
         fclose(file);
     }
     nvram_post_load(s, 0);
+
+    return 0;
 }
 
 static Property nvram_sysbus_properties[] = {
@@ -151,10 +148,11 @@ static Property nvram_sysbus_properties[] = {
 static void nvram_sysbus_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
-    dc->realize = nvram_sysbus_realize;
+    k->init = nvram_sysbus_initfn;
     dc->vmsd = &vmstate_nvram;
-    device_class_set_props(dc, nvram_sysbus_properties);
+    dc->props = nvram_sysbus_properties;
 }
 
 static const TypeInfo nvram_sysbus_info = {

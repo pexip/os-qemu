@@ -25,11 +25,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/isa/pc87312.h"
-#include "hw/qdev-properties.h"
-#include "migration/vmstate.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
-#include "qemu/module.h"
 #include "trace.h"
 
 
@@ -342,7 +339,7 @@ static void pc87312_class_init(ObjectClass *klass, void *data)
     dc->realize = pc87312_realize;
     dc->reset = pc87312_reset;
     dc->vmsd = &vmstate_pc87312;
-    device_class_set_props(dc, pc87312_properties);
+    dc->props = pc87312_properties;
 
     sc->parallel = (ISASuperIOFuncs){
         .count = 1,
@@ -371,7 +368,7 @@ static void pc87312_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo pc87312_type_info = {
-    .name          = TYPE_PC87312,
+    .name          = TYPE_PC87312_SUPERIO,
     .parent        = TYPE_ISA_SUPERIO,
     .instance_size = sizeof(PC87312State),
     .instance_init = pc87312_initfn,

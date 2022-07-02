@@ -9,21 +9,21 @@
 #ifndef HW_CPU_CORE_H
 #define HW_CPU_CORE_H
 
-#include "hw/qdev-core.h"
-#include "qom/object.h"
+#include "hw/qdev.h"
 
 #define TYPE_CPU_CORE "cpu-core"
 
-OBJECT_DECLARE_SIMPLE_TYPE(CPUCore, CPU_CORE)
+#define CPU_CORE(obj) \
+    OBJECT_CHECK(CPUCore, (obj), TYPE_CPU_CORE)
 
-struct CPUCore {
+typedef struct CPUCore {
     /*< private >*/
     DeviceState parent_obj;
 
     /*< public >*/
     int core_id;
     int nr_threads;
-};
+} CPUCore;
 
 /* Note: topology field names need to be kept in sync with
  * 'CpuInstanceProperties' */

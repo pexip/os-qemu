@@ -34,7 +34,6 @@
 #define TARGET_SIGURG          29
 #define TARGET_SIGXFSZ         30
 #define TARGET_SIGSYS          31
-#define TARGET_SIGRTMIN        32
 
 #define TARGET_SIG_BLOCK       0
 #define TARGET_SIG_UNBLOCK     1
@@ -44,7 +43,7 @@
 
 typedef struct target_sigaltstack {
     abi_ulong ss_sp;
-    abi_int ss_flags;
+    int32_t ss_flags;
     abi_ulong ss_size;
 } target_stack_t;
 

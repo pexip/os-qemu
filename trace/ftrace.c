@@ -53,11 +53,7 @@ bool ftrace_init(void)
     }
 
     if (tracefs_found) {
-        if (snprintf(path, PATH_MAX, "%s%s/tracing_on", mount_point, subdir)
-                >= sizeof(path)) {
-            fprintf(stderr, "Using tracefs mountpoint would exceed PATH_MAX\n");
-            return false;
-        }
+        snprintf(path, PATH_MAX, "%s%s/tracing_on", mount_point, subdir);
         trace_fd = open(path, O_WRONLY);
         if (trace_fd < 0) {
             if (errno == EACCES) {
@@ -76,11 +72,7 @@ bool ftrace_init(void)
             }
             close(trace_fd);
         }
-        if (snprintf(path, PATH_MAX, "%s%s/trace_marker", mount_point, subdir)
-                >= sizeof(path)) {
-            fprintf(stderr, "Using tracefs mountpoint would exceed PATH_MAX\n");
-            return false;
-        }
+        snprintf(path, PATH_MAX, "%s%s/trace_marker", mount_point, subdir);
         trace_marker_fd = open(path, O_WRONLY);
         if (trace_marker_fd < 0) {
             perror("Could not open ftrace 'trace_marker' file");

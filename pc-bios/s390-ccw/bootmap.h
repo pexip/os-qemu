@@ -64,16 +64,11 @@ typedef struct BootMapTable {
     BootMapPointer entry[];
 } __attribute__ ((packed)) BootMapTable;
 
-typedef union ComponentEntryData {
-    uint64_t load_psw;
-    uint64_t load_addr;
-} ComponentEntryData;
-
 typedef struct ComponentEntry {
     ScsiBlockPtr data;
     uint8_t pad[7];
     uint8_t component_type;
-    ComponentEntryData compdat;
+    uint64_t load_address;
 } __attribute((packed)) ComponentEntry;
 
 typedef struct ComponentHeader {
@@ -103,9 +98,8 @@ typedef struct ScsiMbr {
 #define ZIPL_COMP_HEADER_IPL    0x00
 #define ZIPL_COMP_HEADER_DUMP   0x01
 
-#define ZIPL_COMP_ENTRY_EXEC      0x01
-#define ZIPL_COMP_ENTRY_LOAD      0x02
-#define ZIPL_COMP_ENTRY_SIGNATURE 0x03
+#define ZIPL_COMP_ENTRY_LOAD    0x02
+#define ZIPL_COMP_ENTRY_EXEC    0x01
 
 typedef struct XEckdMbr {
     uint8_t magic[4];   /* == "xIPL"        */
@@ -123,9 +117,8 @@ typedef struct BootMapScriptEntry {
     BootMapPointer blkptr;
     uint8_t pad[7];
     uint8_t type;   /* == BOOT_SCRIPT_* */
-#define BOOT_SCRIPT_EXEC      0x01
-#define BOOT_SCRIPT_LOAD      0x02
-#define BOOT_SCRIPT_SIGNATURE 0x03
+#define BOOT_SCRIPT_EXEC 0x01
+#define BOOT_SCRIPT_LOAD 0x02
     union {
         uint64_t load_address;
         uint64_t load_psw;
@@ -141,7 +134,7 @@ typedef struct BootMapScriptHeader {
 
 typedef struct BootMapScript {
     BootMapScriptHeader header;
-    BootMapScriptEntry  entry[];
+    BootMapScriptEntry  entry[0];
 } __attribute__ ((packed)) BootMapScript;
 
 /*

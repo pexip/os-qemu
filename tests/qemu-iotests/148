@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 #
 # Test the rate limit of QMP events
 #
@@ -47,7 +47,6 @@ sector = "%d"
 ''' % bad_sector)
         file.close()
 
-    @iotests.skip_if_unsupported(['quorum'])
     def setUp(self):
         driveopts = ['driver=quorum', 'vote-threshold=2']
         driveopts.append('read-pattern=%s' % self.read_pattern)
@@ -138,5 +137,4 @@ class TestFifoQuorumEvents(TestQuorumEvents):
 
 if __name__ == '__main__':
     iotests.verify_quorum()
-    iotests.main(supported_fmts=["raw"],
-                 supported_protocols=["file"])
+    iotests.main(supported_fmts=["raw"])

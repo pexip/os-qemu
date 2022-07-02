@@ -43,70 +43,67 @@ typedef enum VisitorType {
 
 struct Visitor
 {
-    /*
-     * Only input visitors may fail!
-     */
-
     /* Must be set to visit structs */
-    bool (*start_struct)(Visitor *v, const char *name, void **obj,
+    void (*start_struct)(Visitor *v, const char *name, void **obj,
                          size_t size, Error **errp);
 
     /* Optional; intended for input visitors */
-    bool (*check_struct)(Visitor *v, Error **errp);
+    void (*check_struct)(Visitor *v, Error **errp);
 
     /* Must be set to visit structs */
     void (*end_struct)(Visitor *v, void **obj);
 
     /* Must be set; implementations may require @list to be non-null,
      * but must document it. */
-    bool (*start_list)(Visitor *v, const char *name, GenericList **list,
+    void (*start_list)(Visitor *v, const char *name, GenericList **list,
                        size_t size, Error **errp);
 
     /* Must be set */
     GenericList *(*next_list)(Visitor *v, GenericList *tail, size_t size);
 
     /* Optional; intended for input visitors */
-    bool (*check_list)(Visitor *v, Error **errp);
+    void (*check_list)(Visitor *v, Error **errp);
 
     /* Must be set */
     void (*end_list)(Visitor *v, void **list);
 
-    /* Must be set by input and clone visitors to visit alternates */
-    bool (*start_alternate)(Visitor *v, const char *name,
+    /* Must be set by input and dealloc visitors to visit alternates;
+     * optional for output visitors. */
+    void (*start_alternate)(Visitor *v, const char *name,
                             GenericAlternate **obj, size_t size,
                             Error **errp);
 
-    /* Optional */
+    /* Optional, needed for dealloc visitor */
     void (*end_alternate)(Visitor *v, void **obj);
 
     /* Must be set */
-    bool (*type_int64)(Visitor *v, const char *name, int64_t *obj,
+    void (*type_int64)(Visitor *v, const char *name, int64_t *obj,
                        Error **errp);
 
     /* Must be set */
-    bool (*type_uint64)(Visitor *v, const char *name, uint64_t *obj,
+    void (*type_uint64)(Visitor *v, const char *name, uint64_t *obj,
                         Error **errp);
 
     /* Optional; fallback is type_uint64() */
-    bool (*type_size)(Visitor *v, const char *name, uint64_t *obj,
+    void (*type_size)(Visitor *v, const char *name, uint64_t *obj,
                       Error **errp);
 
     /* Must be set */
-    bool (*type_bool)(Visitor *v, const char *name, bool *obj, Error **errp);
+    void (*type_bool)(Visitor *v, const char *name, bool *obj, Error **errp);
 
     /* Must be set */
-    bool (*type_str)(Visitor *v, const char *name, char **obj, Error **errp);
+    void (*type_str)(Visitor *v, const char *name, char **obj, Error **errp);
 
     /* Must be set to visit numbers */
-    bool (*type_number)(Visitor *v, const char *name, double *obj,
+    void (*type_number)(Visitor *v, const char *name, double *obj,
                         Error **errp);
 
     /* Must be set to visit arbitrary QTypes */
-    bool (*type_any)(Visitor *v, const char *name, QObject **obj,
+    void (*type_any)(Visitor *v, const char *name, QObject **obj,
                      Error **errp);
 
     /* Must be set to visit explicit null values.  */
-    bool (*type_null)(Visitor *v, const char *name, QNull **obj,
+    void (*type_null)(Visitor *v, const char *name, QNull **obj,
                       Error **errp);
 
     /* Must be set for input visitors to visit structs, optional otherwise.

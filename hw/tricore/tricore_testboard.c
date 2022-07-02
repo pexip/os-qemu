@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -21,8 +21,12 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
+#include "qemu-common.h"
 #include "cpu.h"
+#include "hw/hw.h"
+#include "hw/devices.h"
 #include "net/net.h"
+#include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "hw/loader.h"
 #include "exec/address-spaces.h"
@@ -41,8 +45,8 @@ static void tricore_load_kernel(CPUTriCoreState *env)
     long kernel_size;
 
     kernel_size = load_elf(tricoretb_binfo.kernel_filename, NULL,
-                           NULL, NULL, &entry, NULL,
-                           NULL, NULL, 0,
+                           NULL, &entry, NULL,
+                           NULL, 0,
                            EM_TRICORE, 1, 0);
     if (kernel_size <= 0) {
         error_report("no kernel file '%s'",
@@ -105,6 +109,7 @@ static void ttb_machine_init(MachineClass *mc)
 {
     mc->desc = "a minimal TriCore board";
     mc->init = tricoreboard_init;
+    mc->is_default = 0;
     mc->default_cpu_type = TRICORE_CPU_TYPE_NAME("tc1796");
 }
 

@@ -17,19 +17,21 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qemu-common.h"
 #include "exec/address-spaces.h"
 #include "hw/boards.h"
+#include "hw/qdev-properties.h"
 #include "cpu.h"
 #include "boot.h"
 
 #include "hw/intc/xlnx-zynqmp-ipi.h"
 #include "hw/intc/xlnx-pmu-iomod-intc.h"
-#include "qom/object.h"
 
 /* Define the PMU device */
 
 #define TYPE_XLNX_ZYNQMP_PMU_SOC "xlnx,zynqmp-pmu-soc"
-OBJECT_DECLARE_SIMPLE_TYPE(XlnxZynqMPPMUSoCState, XLNX_ZYNQMP_PMU_SOC)
+#define XLNX_ZYNQMP_PMU_SOC(obj) OBJECT_CHECK(XlnxZynqMPPMUSoCState, (obj), \
+                                              TYPE_XLNX_ZYNQMP_PMU_SOC)
 
 #define XLNX_ZYNQMP_PMU_ROM_SIZE    0x8000
 #define XLNX_ZYNQMP_PMU_ROM_ADDR    0xFFD00000
@@ -46,79 +48,70 @@ static const uint64_t ipi_irq[XLNX_ZYNQMP_PMU_NUM_IPIS] = {
     19, 20, 21, 22,
 };
 
-struct XlnxZynqMPPMUSoCState {
+typedef struct XlnxZynqMPPMUSoCState {
     /*< private >*/
     DeviceState parent_obj;
 
     /*< public >*/
     MicroBlazeCPU cpu;
     XlnxPMUIOIntc intc;
-    XlnxZynqMPIPI ipi[XLNX_ZYNQMP_PMU_NUM_IPIS];
-};
+}  XlnxZynqMPPMUSoCState;
 
 
 static void xlnx_zynqmp_pmu_soc_init(Object *obj)
 {
     XlnxZynqMPPMUSoCState *s = XLNX_ZYNQMP_PMU_SOC(obj);
 
-    object_initialize_child(obj, "pmu-cpu", &s->cpu, TYPE_MICROBLAZE_CPU);
+    object_initialize_child(obj, "pmu-cpu", &s->cpu, sizeof(s->cpu),
+                            TYPE_MICROBLAZE_CPU, &error_abort, NULL);
 
-    object_initialize_child(obj, "intc", &s->intc, TYPE_XLNX_PMU_IO_INTC);
-
-    /* Create the IPI device */
-    for (int i = 0; i < XLNX_ZYNQMP_PMU_NUM_IPIS; i++) {
-        char *name = g_strdup_printf("ipi%d", i);
-        object_initialize_child(obj, name, &s->ipi[i], TYPE_XLNX_ZYNQMP_IPI);
-        g_free(name);
-    }
+    sysbus_init_child_obj(obj, "intc", &s->intc, sizeof(s->intc),
+                          TYPE_XLNX_PMU_IO_INTC);
 }
 
 static void xlnx_zynqmp_pmu_soc_realize(DeviceState *dev, Error **errp)
 {
     XlnxZynqMPPMUSoCState *s = XLNX_ZYNQMP_PMU_SOC(dev);
+    Error *err = NULL;
 
-    object_property_set_uint(OBJECT(&s->cpu), "base-vectors",
-                             XLNX_ZYNQMP_PMU_ROM_ADDR, &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "use-stack-protection", true,
+    object_property_set_uint(OBJECT(&s->cpu), XLNX_ZYNQMP_PMU_ROM_ADDR,
+                             "base-vectors", &error_abort);
+    object_property_set_bool(OBJECT(&s->cpu), true, "use-stack-protection",
                              &error_abort);
-    object_property_set_uint(OBJECT(&s->cpu), "use-fpu", 0, &error_abort);
-    object_property_set_uint(OBJECT(&s->cpu), "use-hw-mul", 0, &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "use-barrel", true,
+    object_property_set_uint(OBJECT(&s->cpu), 0, "use-fpu", &error_abort);
+    object_property_set_uint(OBJECT(&s->cpu), 0, "use-hw-mul", &error_abort);
+    object_property_set_bool(OBJECT(&s->cpu), true, "use-barrel",
                              &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "use-msr-instr", true,
+    object_property_set_bool(OBJECT(&s->cpu), true, "use-msr-instr",
                              &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "use-pcmp-instr", true,
+    object_property_set_bool(OBJECT(&s->cpu), true, "use-pcmp-instr",
                              &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "use-mmu", false, &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "endianness", true,
+    object_property_set_bool(OBJECT(&s->cpu), false, "use-mmu", &error_abort);
+    object_property_set_bool(OBJECT(&s->cpu), true, "endianness",
                              &error_abort);
-    object_property_set_str(OBJECT(&s->cpu), "version", "8.40.b",
+    object_property_set_str(OBJECT(&s->cpu), "8.40.b", "version",
                             &error_abort);
-    object_property_set_uint(OBJECT(&s->cpu), "pvr", 0, &error_abort);
-    if (!qdev_realize(DEVICE(&s->cpu), NULL, errp)) {
+    object_property_set_uint(OBJECT(&s->cpu), 0, "pvr", &error_abort);
+    object_property_set_bool(OBJECT(&s->cpu), true, "realized", &err);
+    if (err) {
+        error_propagate(errp, err);
         return;
     }
 
-    object_property_set_uint(OBJECT(&s->intc), "intc-intr-size", 0x10,
+    object_property_set_uint(OBJECT(&s->intc), 0x10, "intc-intr-size",
                              &error_abort);
-    object_property_set_uint(OBJECT(&s->intc), "intc-level-edge", 0x0,
+    object_property_set_uint(OBJECT(&s->intc), 0x0, "intc-level-edge",
                              &error_abort);
-    object_property_set_uint(OBJECT(&s->intc), "intc-positive", 0xffff,
+    object_property_set_uint(OBJECT(&s->intc), 0xffff, "intc-positive",
                              &error_abort);
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->intc), errp)) {
+    object_property_set_bool(OBJECT(&s->intc), true, "realized", &err);
+    if (err) {
+        error_propagate(errp, err);
         return;
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->intc), 0, XLNX_ZYNQMP_PMU_INTC_ADDR);
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->intc), 0,
                        qdev_get_gpio_in(DEVICE(&s->cpu), MB_CPU_IRQ));
-
-    /* Connect the IPI device */
-    for (int i = 0; i < XLNX_ZYNQMP_PMU_NUM_IPIS; i++) {
-        sysbus_realize(SYS_BUS_DEVICE(&s->ipi[i]), &error_abort);
-        sysbus_mmio_map(SYS_BUS_DEVICE(&s->ipi[i]), 0, ipi_addr[i]);
-        sysbus_connect_irq(SYS_BUS_DEVICE(&s->ipi[i]), 0,
-                           qdev_get_gpio_in(DEVICE(&s->intc), ipi_irq[i]));
-    }
 }
 
 static void xlnx_zynqmp_pmu_soc_class_init(ObjectClass *oc, void *data)
@@ -151,6 +144,9 @@ static void xlnx_zynqmp_pmu_init(MachineState *machine)
     MemoryRegion *address_space_mem = get_system_memory();
     MemoryRegion *pmu_rom = g_new(MemoryRegion, 1);
     MemoryRegion *pmu_ram = g_new(MemoryRegion, 1);
+    XlnxZynqMPIPI *ipi[XLNX_ZYNQMP_PMU_NUM_IPIS];
+    qemu_irq irq[32];
+    int i;
 
     /* Create the ROM */
     memory_region_init_rom(pmu_rom, NULL, "xlnx-zynqmp-pmu.rom",
@@ -165,9 +161,28 @@ static void xlnx_zynqmp_pmu_init(MachineState *machine)
                                 pmu_ram);
 
     /* Create the PMU device */
-    object_initialize_child(OBJECT(machine), "pmu", pmu,
-                            TYPE_XLNX_ZYNQMP_PMU_SOC);
-    qdev_realize(DEVICE(pmu), NULL, &error_fatal);
+    object_initialize(pmu, sizeof(XlnxZynqMPPMUSoCState), TYPE_XLNX_ZYNQMP_PMU_SOC);
+    object_property_add_child(OBJECT(machine), "pmu", OBJECT(pmu),
+                              &error_abort);
+    object_property_set_bool(OBJECT(pmu), true, "realized", &error_fatal);
+
+    for (i = 0; i < 32; i++) {
+        irq[i] = qdev_get_gpio_in(DEVICE(&pmu->intc), i);
+    }
+
+    /* Create and connect the IPI device */
+    for (i = 0; i < XLNX_ZYNQMP_PMU_NUM_IPIS; i++) {
+        ipi[i] = g_new0(XlnxZynqMPIPI, 1);
+        object_initialize(ipi[i], sizeof(XlnxZynqMPIPI), TYPE_XLNX_ZYNQMP_IPI);
+        qdev_set_parent_bus(DEVICE(ipi[i]), sysbus_get_default());
+    }
+
+    for (i = 0; i < XLNX_ZYNQMP_PMU_NUM_IPIS; i++) {
+        object_property_set_bool(OBJECT(ipi[i]), true, "realized",
+                                 &error_abort);
+        sysbus_mmio_map(SYS_BUS_DEVICE(ipi[i]), 0, ipi_addr[i]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(ipi[i]), 0, irq[ipi_irq[i]]);
+    }
 
     /* Load the kernel */
     microblaze_load_kernel(&pmu->cpu, XLNX_ZYNQMP_PMU_RAM_ADDR,

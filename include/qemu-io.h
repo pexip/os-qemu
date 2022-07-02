@@ -18,6 +18,7 @@
 #ifndef QEMU_IO_H
 #define QEMU_IO_H
 
+#include "qemu-common.h"
 
 #define CMD_FLAG_GLOBAL ((int)0x80000000) /* don't iterate "args" */
 

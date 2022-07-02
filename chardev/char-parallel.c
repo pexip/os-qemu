@@ -25,7 +25,6 @@
 #include "qemu/osdep.h"
 #include "chardev/char.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
 #include "qemu/option.h"
 #include <sys/ioctl.h>
 

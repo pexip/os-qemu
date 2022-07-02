@@ -20,13 +20,16 @@
 #ifndef QEMU_HPPA_CPU_QOM_H
 #define QEMU_HPPA_CPU_QOM_H
 
-#include "hw/core/cpu.h"
-#include "qom/object.h"
+#include "qom/cpu.h"
 
 #define TYPE_HPPA_CPU "hppa-cpu"
 
-OBJECT_DECLARE_TYPE(HPPACPU, HPPACPUClass,
-                    HPPA_CPU)
+#define HPPA_CPU_CLASS(klass) \
+    OBJECT_CLASS_CHECK(HPPACPUClass, (klass), TYPE_HPPA_CPU)
+#define HPPA_CPU(obj) \
+    OBJECT_CHECK(HPPACPU, (obj), TYPE_HPPA_CPU)
+#define HPPA_CPU_GET_CLASS(obj) \
+    OBJECT_GET_CLASS(HPPACPUClass, (obj), TYPE_HPPA_CPU)
 
 /**
  * HPPACPUClass:
@@ -35,14 +38,15 @@ OBJECT_DECLARE_TYPE(HPPACPU, HPPACPUClass,
  *
  * An HPPA CPU model.
  */
-struct HPPACPUClass {
+typedef struct HPPACPUClass {
     /*< private >*/
     CPUClass parent_class;
     /*< public >*/
 
     DeviceRealize parent_realize;
-    DeviceReset parent_reset;
-};
+    void (*parent_reset)(CPUState *cpu);
+} HPPACPUClass;
 
+typedef struct HPPACPU HPPACPU;
 
 #endif

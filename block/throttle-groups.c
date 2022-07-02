@@ -26,7 +26,6 @@
 #include "sysemu/block-backend.h"
 #include "block/throttle-groups.h"
 #include "qemu/throttle-options.h"
-#include "qemu/main-loop.h"
 #include "qemu/queue.h"
 #include "qemu/thread.h"
 #include "sysemu/qtest.h"
@@ -63,7 +62,7 @@ static void timer_cb(ThrottleGroupMember *tgm, bool is_write);
  * access some other ThrottleGroupMember's timers only after verifying that
  * that ThrottleGroupMember has throttled requests in the queue.
  */
-struct ThrottleGroup {
+typedef struct ThrottleGroup {
     Object parent_obj;
 
     /* refuse individual property change if initialization is complete */
@@ -79,7 +78,7 @@ struct ThrottleGroup {
 
     /* This field is protected by the global QEMU mutex */
     QTAILQ_ENTRY(ThrottleGroup) list;
-};
+} ThrottleGroup;
 
 /* This is protected by the global QEMU mutex */
 static QTAILQ_HEAD(, ThrottleGroup) throttle_groups =
@@ -228,7 +227,7 @@ static ThrottleGroupMember *next_throttle_token(ThrottleGroupMember *tgm,
      * immediately if it has pending requests. Otherwise we could be
      * forcing it to wait for other member's throttled requests. */
     if (tgm_has_pending_reqs(tgm, is_write) &&
-        qatomic_read(&tgm->io_limits_disabled)) {
+        atomic_read(&tgm->io_limits_disabled)) {
         return tgm;
     }
 
@@ -272,7 +271,7 @@ static bool throttle_group_schedule_timer(ThrottleGroupMember *tgm,
     ThrottleTimers *tt = &tgm->throttle_timers;
     bool must_wait;
 
-    if (qatomic_read(&tgm->io_limits_disabled)) {
+    if (atomic_read(&tgm->io_limits_disabled)) {
         return false;
     }
 
@@ -416,9 +415,6 @@ static void coroutine_fn throttle_group_restart_queue_entry(void *opaque)
     }
 
     g_free(data);
-
-    qatomic_dec(&tgm->restart_pending);
-    aio_wait_kick();
 }
 
 static void throttle_group_restart_queue(ThrottleGroupMember *tgm, bool is_write)
@@ -433,8 +429,6 @@ static void throttle_group_restart_queue(ThrottleGroupMember *tgm, bool is_write
      * throttle_group_restart_tgm() is called. Either way, there can
      * be no timer pending on this tgm at this point */
     assert(!timer_pending(tgm->throttle_timers.timers[is_write]));
-
-    qatomic_inc(&tgm->restart_pending);
 
     co = qemu_coroutine_create(throttle_group_restart_queue_entry, rd);
     aio_co_enter(tgm->aio_context, co);
@@ -544,7 +538,6 @@ void throttle_group_register_tgm(ThrottleGroupMember *tgm,
 
     tgm->throttle_state = ts;
     tgm->aio_context = ctx;
-    qatomic_set(&tgm->restart_pending, 0);
 
     qemu_mutex_lock(&tg->lock);
     /* If the ThrottleGroup is new set this ThrottleGroupMember as the token */
@@ -590,9 +583,6 @@ void throttle_group_unregister_tgm(ThrottleGroupMember *tgm)
         /* Discard already unregistered tgm */
         return;
     }
-
-    /* Wait for throttle_group_restart_queue_entry() coroutines to finish */
-    AIO_WAIT_WHILE(tgm->aio_context, qatomic_read(&tgm->restart_pending) > 0);
 
     qemu_mutex_lock(&tg->lock);
     for (i = 0; i < 2; i++) {
@@ -771,7 +761,7 @@ static void throttle_group_obj_complete(UserCreatable *obj, Error **errp)
 
     /* set group name to object id if it exists */
     if (!tg->name && tg->parent_obj.parent) {
-        tg->name = g_strdup(object_get_canonical_path_component(OBJECT(obj)));
+        tg->name = object_get_canonical_path_component(OBJECT(obj));
     }
     /* We must have a group name at this point */
     assert(tg->name);
@@ -811,6 +801,7 @@ static void throttle_group_set(Object *obj, Visitor *v, const char * name,
     ThrottleGroup *tg = THROTTLE_GROUP(obj);
     ThrottleConfig *cfg;
     ThrottleParamInfo *info = opaque;
+    Error *local_err = NULL;
     int64_t value;
 
     /* If we have finished initialization, don't accept individual property
@@ -818,16 +809,17 @@ static void throttle_group_set(Object *obj, Visitor *v, const char * name,
      * transaction, as certain combinations are invalid.
      */
     if (tg->is_initialized) {
-        error_setg(errp, "Property cannot be set after initialization");
-        return;
+        error_setg(&local_err, "Property cannot be set after initialization");
+        goto ret;
     }
 
-    if (!visit_type_int64(v, name, &value, errp)) {
-        return;
+    visit_type_int64(v, name, &value, &local_err);
+    if (local_err) {
+        goto ret;
     }
     if (value < 0) {
-        error_setg(errp, "Property values cannot be negative");
-        return;
+        error_setg(&local_err, "Property values cannot be negative");
+        goto ret;
     }
 
     cfg = &tg->ts.cfg;
@@ -840,9 +832,9 @@ static void throttle_group_set(Object *obj, Visitor *v, const char * name,
         break;
     case BURST_LENGTH:
         if (value > UINT_MAX) {
-            error_setg(errp, "%s value must be in the" "range [0, %u]",
-                       info->name, UINT_MAX);
-            return;
+            error_setg(&local_err, "%s value must be in the"
+                       "range [0, %u]", info->name, UINT_MAX);
+            goto ret;
         }
         cfg->buckets[info->type].burst_length = value;
         break;
@@ -850,6 +842,11 @@ static void throttle_group_set(Object *obj, Visitor *v, const char * name,
         cfg->op_size = value;
         break;
     }
+
+ret:
+    error_propagate(errp, local_err);
+    return;
+
 }
 
 static void throttle_group_get(Object *obj, Visitor *v, const char *name,
@@ -886,11 +883,13 @@ static void throttle_group_set_limits(Object *obj, Visitor *v,
 {
     ThrottleGroup *tg = THROTTLE_GROUP(obj);
     ThrottleConfig cfg;
-    ThrottleLimits *argp;
+    ThrottleLimits arg = { 0 };
+    ThrottleLimits *argp = &arg;
     Error *local_err = NULL;
 
-    if (!visit_type_ThrottleLimits(v, name, &argp, errp)) {
-        return;
+    visit_type_ThrottleLimits(v, name, &argp, &local_err);
+    if (local_err) {
+        goto ret;
     }
     qemu_mutex_lock(&tg->lock);
     throttle_get_config(&tg->ts, &cfg);
@@ -902,7 +901,7 @@ static void throttle_group_set_limits(Object *obj, Visitor *v,
 
 unlock:
     qemu_mutex_unlock(&tg->lock);
-    qapi_free_ThrottleLimits(argp);
+ret:
     error_propagate(errp, local_err);
     return;
 }
@@ -945,7 +944,8 @@ static void throttle_group_obj_class_init(ObjectClass *klass, void *class_data)
                                   "int",
                                   throttle_group_get,
                                   throttle_group_set,
-                                  NULL, &properties[i]);
+                                  NULL, &properties[i],
+                                  &error_abort);
     }
 
     /* ThrottleLimits */
@@ -953,7 +953,8 @@ static void throttle_group_obj_class_init(ObjectClass *klass, void *class_data)
                               "limits", "ThrottleLimits",
                               throttle_group_get_limits,
                               throttle_group_set_limits,
-                              NULL, NULL);
+                              NULL, NULL,
+                              &error_abort);
 }
 
 static const TypeInfo throttle_group_info = {

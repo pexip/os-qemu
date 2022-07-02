@@ -3,7 +3,6 @@
  *
  * Copyright (C) 2009 Hewlett-Packard Development Company, L.P.
  * Copyright (C) 2013 Red Hat, Inc.
- * Copyright (c) 2015,2016 Corey Minyard, MontaVista Software, LLC
  *
  * Authors:
  *  Alex Williamson <alex.williamson@hp.com>
@@ -96,8 +95,5 @@ extern unsigned smbios_table_cnt;
         /* update smbios element count */                                 \
         smbios_table_cnt++;                                               \
     } while (0)
-
-/* IPMI SMBIOS firmware handling */
-void smbios_build_type_38_table(void);
 
 #endif /* QEMU_SMBIOS_BUILD_H */

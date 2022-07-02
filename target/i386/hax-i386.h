@@ -10,13 +10,13 @@
  *
  */
 
-#ifndef HAX_I386_H
-#define HAX_I386_H
+#ifndef _HAX_I386_H
+#define _HAX_I386_H
 
 #include "cpu.h"
 #include "sysemu/hax.h"
 
-#ifdef CONFIG_POSIX
+#ifdef CONFIG_DARWIN
 typedef int hax_fd;
 #endif
 
@@ -41,12 +41,13 @@ struct hax_state {
 };
 
 #define HAX_MAX_VCPU 0x10
+#define MAX_VM_ID 0x40
+#define MAX_VCPU_ID 0x40
 
 struct hax_vm {
     hax_fd fd;
     int id;
-    int numvcpus;
-    struct hax_vcpu_state **vcpus;
+    struct hax_vcpu_state *vcpus[HAX_MAX_VCPU];
 };
 
 #ifdef NEED_CPU_H
@@ -57,11 +58,9 @@ int valid_hax_tunnel_size(uint16_t size);
 /* Host specific functions */
 int hax_mod_version(struct hax_state *hax, struct hax_module_version *version);
 int hax_inject_interrupt(CPUArchState *env, int vector);
-struct hax_vm *hax_vm_create(struct hax_state *hax, int max_cpus);
+struct hax_vm *hax_vm_create(struct hax_state *hax);
 int hax_vcpu_run(struct hax_vcpu_state *vcpu);
 int hax_vcpu_create(int id);
-void hax_kick_vcpu_thread(CPUState *cpu);
-
 int hax_sync_vcpu_state(CPUArchState *env, struct vcpu_state_t *state,
                         int set);
 int hax_sync_msr(CPUArchState *env, struct hax_msr_data *msrs, int set);
@@ -83,8 +82,8 @@ hax_fd hax_mod_open(void);
 void hax_memory_init(void);
 
 
-#ifdef CONFIG_POSIX
-#include "target/i386/hax-posix.h"
+#ifdef CONFIG_DARWIN
+#include "target/i386/hax-darwin.h"
 #endif
 
 #ifdef CONFIG_WIN32

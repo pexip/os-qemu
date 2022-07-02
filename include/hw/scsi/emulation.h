@@ -1,5 +1,5 @@
 #ifndef HW_SCSI_EMULATION_H
-#define HW_SCSI_EMULATION_H
+#define HW_SCSI_EMULATION_H 1
 
 typedef struct SCSIBlockLimits {
     bool wsnz;

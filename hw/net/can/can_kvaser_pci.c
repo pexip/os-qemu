@@ -31,25 +31,20 @@
 
 #include "qemu/osdep.h"
 #include "qemu/event_notifier.h"
-#include "qemu/module.h"
 #include "qemu/thread.h"
 #include "qemu/sockets.h"
 #include "qapi/error.h"
 #include "chardev/char.h"
-#include "hw/irq.h"
+#include "hw/hw.h"
 #include "hw/pci/pci.h"
-#include "hw/qdev-properties.h"
-#include "migration/vmstate.h"
 #include "net/can_emu.h"
 
 #include "can_sja1000.h"
-#include "qom/object.h"
 
 #define TYPE_CAN_PCI_DEV "kvaser_pci"
 
-typedef struct KvaserPCIState KvaserPCIState;
-DECLARE_INSTANCE_CHECKER(KvaserPCIState, KVASER_PCI_DEV,
-                         TYPE_CAN_PCI_DEV)
+#define KVASER_PCI_DEV(obj) \
+    OBJECT_CHECK(KvaserPCIState, (obj), TYPE_CAN_PCI_DEV)
 
 #ifndef KVASER_PCI_VENDOR_ID1
 #define KVASER_PCI_VENDOR_ID1     0x10e8    /* the PCI device and vendor IDs */
@@ -80,7 +75,7 @@ DECLARE_INSTANCE_CHECKER(KvaserPCIState, KVASER_PCI_DEV,
 
 #define KVASER_PCI_XILINX_VERSION_NUMBER 13
 
-struct KvaserPCIState {
+typedef struct KvaserPCIState {
     /*< private >*/
     PCIDevice       dev;
     /*< public >*/
@@ -95,7 +90,7 @@ struct KvaserPCIState {
     uint32_t        s5920_irqstate;
 
     CanBusState     *canbus;
-};
+} KvaserPCIState;
 
 static void kvaser_pci_irq_handler(void *opaque, int irq_num, int level)
 {
@@ -284,7 +279,7 @@ static void kvaser_pci_instance_init(Object *obj)
     object_property_add_link(obj, "canbus", TYPE_CAN_BUS,
                              (Object **)&d->canbus,
                              qdev_prop_allow_set_link_before_realize,
-                             0);
+                             0, &error_abort);
 }
 
 static void kvaser_pci_class_init(ObjectClass *klass, void *data)

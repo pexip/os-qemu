@@ -22,9 +22,6 @@
  * THE SOFTWARE.
  */
 
-#ifndef HW_INPUT_ADB_INTERNAL_H
-#define HW_INPUT_ADB_INTERNAL_H
-
 /* ADB commands */
 
 #define ADB_BUSRESET            0x00
@@ -50,4 +47,3 @@
 
 extern const VMStateDescription vmstate_adb_device;
 
-#endif

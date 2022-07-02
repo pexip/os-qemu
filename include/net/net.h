@@ -4,6 +4,7 @@
 #include "qemu/queue.h"
 #include "qapi/qapi-types-net.h"
 #include "net/queue.h"
+#include "migration/vmstate.h"
 
 #define MAC_FMT "%02X:%02X:%02X:%02X:%02X:%02X"
 #define MAC_ARG(x) ((uint8_t *)(x))[0], ((uint8_t *)(x))[1], \
@@ -42,7 +43,7 @@ typedef struct NICConf {
 /* Net clients */
 
 typedef void (NetPoll)(NetClientState *, bool enable);
-typedef bool (NetCanReceive)(NetClientState *);
+typedef int (NetCanReceive)(NetClientState *);
 typedef ssize_t (NetReceive)(NetClientState *, const uint8_t *, size_t);
 typedef ssize_t (NetReceiveIOV)(NetClientState *, const struct iovec *, int);
 typedef void (NetCleanup) (NetClientState *);
@@ -59,7 +60,6 @@ typedef int (SetVnetLE)(NetClientState *, bool);
 typedef int (SetVnetBE)(NetClientState *, bool);
 typedef struct SocketReadState SocketReadState;
 typedef void (SocketReadStateFinalize)(SocketReadState *rs);
-typedef void (NetAnnounce)(NetClientState *);
 
 typedef struct NetClientInfo {
     NetClientDriver type;
@@ -80,7 +80,6 @@ typedef struct NetClientInfo {
     SetVnetHdrLen *set_vnet_hdr_len;
     SetVnetLE *set_vnet_le;
     SetVnetBE *set_vnet_be;
-    NetAnnounce *announce;
 } NetClientInfo;
 
 struct NetClientState {
@@ -98,8 +97,7 @@ struct NetClientState {
     unsigned rxfilter_notify_enabled:1;
     int vring_enable;
     int vnet_hdr_len;
-    bool is_netdev;
-    QTAILQ_HEAD(, NetFilterState) filters;
+    QTAILQ_HEAD(NetFilterHead, NetFilterState) filters;
 };
 
 typedef struct NICState {
@@ -148,7 +146,7 @@ ssize_t qemu_sendv_packet(NetClientState *nc, const struct iovec *iov,
                           int iovcnt);
 ssize_t qemu_sendv_packet_async(NetClientState *nc, const struct iovec *iov,
                                 int iovcnt, NetPacketSent *sent_cb);
-ssize_t qemu_send_packet(NetClientState *nc, const uint8_t *buf, int size);
+void qemu_send_packet(NetClientState *nc, const uint8_t *buf, int size);
 ssize_t qemu_send_packet_raw(NetClientState *nc, const uint8_t *buf, int size);
 ssize_t qemu_send_packet_async(NetClientState *nc, const uint8_t *buf,
                                int size, NetPacketSent *sent_cb);
@@ -176,7 +174,6 @@ void hmp_info_network(Monitor *mon, const QDict *qdict);
 void net_socket_rs_init(SocketReadState *rs,
                         SocketReadStateFinalize *finalize,
                         bool vnet_hdr);
-NetClientState *qemu_get_peer(NetClientState *nc, int queue_index);
 
 /* NIC info */
 
@@ -199,19 +196,19 @@ extern const char *host_net_devices[];
 
 /* from net.c */
 int net_client_parse(QemuOptsList *opts_list, const char *str);
-void show_netdevs(void);
 int net_init_clients(Error **errp);
 void net_check_clients(void);
 void net_cleanup(void);
 void hmp_host_net_add(Monitor *mon, const QDict *qdict);
 void hmp_host_net_remove(Monitor *mon, const QDict *qdict);
 void netdev_add(QemuOpts *opts, Error **errp);
+void qmp_netdev_add(QDict *qdict, QObject **ret, Error **errp);
 
 int net_hub_id_for_client(NetClientState *nc, int *id);
 NetClientState *net_hub_port_find(int hub_id);
 
-#define DEFAULT_NETWORK_SCRIPT CONFIG_SYSCONFDIR "/qemu-ifup"
-#define DEFAULT_NETWORK_DOWN_SCRIPT CONFIG_SYSCONFDIR "/qemu-ifdown"
+#define DEFAULT_NETWORK_SCRIPT "/etc/qemu-ifup"
+#define DEFAULT_NETWORK_DOWN_SCRIPT "/etc/qemu-ifdown"
 #define DEFAULT_BRIDGE_HELPER CONFIG_QEMU_HELPERDIR "/qemu-bridge-helper"
 #define DEFAULT_BRIDGE_INTERFACE "br0"
 

@@ -37,7 +37,7 @@ void tap_set_sndbuf(int fd, const NetdevTapOptions *tap, Error **errp)
 {
 }
 
-int tap_probe_vnet_hdr(int fd, Error **errp)
+int tap_probe_vnet_hdr(int fd)
 {
     return 0;
 }

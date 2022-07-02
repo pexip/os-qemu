@@ -31,14 +31,11 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/core/cpu.h"
+#include "qom/cpu.h"
 #include "hw/sysbus.h"
 #include "sysemu/dma.h"
-#include "sysemu/reset.h"
 #include "hw/loader.h"
-#include "hw/qdev-properties.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
 #include "hw/core/generic-loader.h"
 
 #define CPU_NONE 0xFFFFFFFF
@@ -139,8 +136,8 @@ static void generic_loader_realize(DeviceState *dev, Error **errp)
         AddressSpace *as = s->cpu ? s->cpu->as :  NULL;
 
         if (!s->force_raw) {
-            size = load_elf_as(s->file, NULL, NULL, NULL, &entry, NULL, NULL,
-                               NULL, big_endian, 0, 0, 0, as);
+            size = load_elf_as(s->file, NULL, NULL, &entry, NULL, NULL,
+                               big_endian, 0, 0, 0, as);
 
             if (size < 0) {
                 size = load_uimage_as(s->file, &entry, NULL, NULL, NULL, NULL,
@@ -173,7 +170,7 @@ static void generic_loader_realize(DeviceState *dev, Error **errp)
     }
 }
 
-static void generic_loader_unrealize(DeviceState *dev)
+static void generic_loader_unrealize(DeviceState *dev, Error **errp)
 {
     qemu_unregister_reset(generic_loader_reset, dev);
 }
@@ -201,7 +198,7 @@ static void generic_loader_class_init(ObjectClass *klass, void *data)
      */
     dc->realize = generic_loader_realize;
     dc->unrealize = generic_loader_unrealize;
-    device_class_set_props(dc, generic_loader_props);
+    dc->props = generic_loader_props;
     dc->desc = "Generic Loader";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }

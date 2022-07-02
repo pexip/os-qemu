@@ -17,12 +17,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/irq.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
-#include "qemu/module.h"
 #include "qemu/timer.h"
-#include "qom/object.h"
 
 #ifdef CADENCE_TTC_ERR_DEBUG
 #define DB_PRINT(...) do { \
@@ -70,14 +66,15 @@ typedef struct {
 } CadenceTimerState;
 
 #define TYPE_CADENCE_TTC "cadence_ttc"
-OBJECT_DECLARE_SIMPLE_TYPE(CadenceTTCState, CADENCE_TTC)
+#define CADENCE_TTC(obj) \
+    OBJECT_CHECK(CadenceTTCState, (obj), TYPE_CADENCE_TTC)
 
-struct CadenceTTCState {
+typedef struct CadenceTTCState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
     CadenceTimerState timer[3];
-};
+} CadenceTTCState;
 
 static void cadence_timer_update(CadenceTimerState *s)
 {
@@ -412,21 +409,16 @@ static void cadence_timer_init(uint32_t freq, CadenceTimerState *s)
 static void cadence_ttc_init(Object *obj)
 {
     CadenceTTCState *s = CADENCE_TTC(obj);
-
-    memory_region_init_io(&s->iomem, obj, &cadence_ttc_ops, s,
-                          "timer", 0x1000);
-    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
-}
-
-static void cadence_ttc_realize(DeviceState *dev, Error **errp)
-{
-    CadenceTTCState *s = CADENCE_TTC(dev);
     int i;
 
     for (i = 0; i < 3; ++i) {
         cadence_timer_init(133000000, &s->timer[i]);
-        sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->timer[i].irq);
+        sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->timer[i].irq);
     }
+
+    memory_region_init_io(&s->iomem, obj, &cadence_ttc_ops, s,
+                          "timer", 0x1000);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
 }
 
 static int cadence_timer_pre_save(void *opaque)
@@ -484,7 +476,6 @@ static void cadence_ttc_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->vmsd = &vmstate_cadence_ttc;
-    dc->realize = cadence_ttc_realize;
 }
 
 static const TypeInfo cadence_ttc_info = {

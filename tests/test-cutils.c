@@ -1950,7 +1950,7 @@ static void test_qemu_strtou64_full_max(void)
 static void test_qemu_strtosz_simple(void)
 {
     const char *str;
-    const char *endptr;
+    char *endptr = NULL;
     int err;
     uint64_t res = 0xbaadf00d;
 
@@ -2017,7 +2017,7 @@ static void test_qemu_strtosz_units(void)
     const char *p = "1P";
     const char *e = "1E";
     int err;
-    const char *endptr;
+    char *endptr = NULL;
     uint64_t res = 0xbaadf00d;
 
     /* default is M */
@@ -2066,7 +2066,7 @@ static void test_qemu_strtosz_float(void)
 {
     const char *str = "12.345M";
     int err;
-    const char *endptr;
+    char *endptr = NULL;
     uint64_t res = 0xbaadf00d;
 
     err = qemu_strtosz(str, &endptr, &res);
@@ -2078,7 +2078,7 @@ static void test_qemu_strtosz_float(void)
 static void test_qemu_strtosz_invalid(void)
 {
     const char *str;
-    const char *endptr;
+    char *endptr = NULL;
     int err;
     uint64_t res = 0xbaadf00d;
 
@@ -2096,22 +2096,12 @@ static void test_qemu_strtosz_invalid(void)
     err = qemu_strtosz(str, &endptr, &res);
     g_assert_cmpint(err, ==, -EINVAL);
     g_assert(endptr == str);
-
-    str = "inf";
-    err = qemu_strtosz(str, &endptr, &res);
-    g_assert_cmpint(err, ==, -EINVAL);
-    g_assert(endptr == str);
-
-    str = "NaN";
-    err = qemu_strtosz(str, &endptr, &res);
-    g_assert_cmpint(err, ==, -EINVAL);
-    g_assert(endptr == str);
 }
 
 static void test_qemu_strtosz_trailing(void)
 {
     const char *str;
-    const char *endptr;
+    char *endptr = NULL;
     int err;
     uint64_t res = 0xbaadf00d;
 
@@ -2136,7 +2126,7 @@ static void test_qemu_strtosz_trailing(void)
 static void test_qemu_strtosz_erange(void)
 {
     const char *str;
-    const char *endptr;
+    char *endptr = NULL;
     int err;
     uint64_t res = 0xbaadf00d;
 
@@ -2170,7 +2160,7 @@ static void test_qemu_strtosz_metric(void)
 {
     const char *str = "12345k";
     int err;
-    const char *endptr;
+    char *endptr = NULL;
     uint64_t res = 0xbaadf00d;
 
     err = qemu_strtosz_metric(str, &endptr, &res);

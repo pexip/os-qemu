@@ -25,15 +25,11 @@ typedef struct DBGKD_GET_VERSION64 {
     uint64_t DebuggerDataList;
 } DBGKD_GET_VERSION64;
 
-#ifndef _WIN32
-typedef struct LIST_ENTRY64 {
-    struct LIST_ENTRY64 *Flink;
-    struct LIST_ENTRY64 *Blink;
-} LIST_ENTRY64;
-#endif
-
 typedef struct DBGKD_DEBUG_DATA_HEADER64 {
-    LIST_ENTRY64    List;
+    struct LIST_ENTRY64 {
+       struct LIST_ENTRY64 *Flink;
+       struct LIST_ENTRY64 *Blink;
+    } List;
     uint32_t           OwnerTag;
     uint32_t           Size;
 } DBGKD_DEBUG_DATA_HEADER64;

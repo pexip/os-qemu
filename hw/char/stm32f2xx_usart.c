@@ -24,10 +24,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/char/stm32f2xx_usart.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 
 #ifndef STM_USART_ERR_DEBUG
 #define STM_USART_ERR_DEBUG 0
@@ -56,13 +53,14 @@ static void stm32f2xx_usart_receive(void *opaque, const uint8_t *buf, int size)
 {
     STM32F2XXUsartState *s = opaque;
 
+    s->usart_dr = *buf;
+
     if (!(s->usart_cr1 & USART_CR1_UE && s->usart_cr1 & USART_CR1_RE)) {
         /* USART not enabled - drop the chars */
         DB_PRINT("Dropping the chars\n");
         return;
     }
 
-    s->usart_dr = *buf;
     s->usart_sr |= USART_SR_RXNE;
 
     if (s->usart_cr1 & USART_CR1_RXNEIE) {
@@ -222,7 +220,7 @@ static void stm32f2xx_usart_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->reset = stm32f2xx_usart_reset;
-    device_class_set_props(dc, stm32f2xx_usart_properties);
+    dc->props = stm32f2xx_usart_properties;
     dc->realize = stm32f2xx_usart_realize;
 }
 

@@ -2,8 +2,6 @@
 
 test_suite mac16
 
-#if XCHAL_HAVE_MAC16
-
 #define ext16(v) (((v) & 0xffff) | (((v) & 0x8000) * 0x1ffffffe))
 #define mul16(a, b) ((ext16(a) * ext16(b)))
 
@@ -241,7 +239,5 @@ test mula_dd_lddec
 1:
 .text
 test_end
-
-#endif
 
 test_suite_end

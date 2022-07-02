@@ -21,20 +21,17 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/module.h"
 #include "qemu/timer.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
 #include "hw/i2c/i2c.h"
-#include "hw/irq.h"
-#include "qom/object.h"
 
 #ifndef EXYNOS4_I2C_DEBUG
 #define EXYNOS4_I2C_DEBUG                 0
 #endif
 
 #define TYPE_EXYNOS4_I2C                  "exynos4210.i2c"
-OBJECT_DECLARE_SIMPLE_TYPE(Exynos4210I2CState, EXYNOS4_I2C)
+#define EXYNOS4_I2C(obj)                  \
+    OBJECT_CHECK(Exynos4210I2CState, (obj), TYPE_EXYNOS4_I2C)
 
 /* Exynos4210 I2C memory map */
 #define EXYNOS4_I2C_MEM_SIZE              0x14
@@ -83,7 +80,7 @@ static const char *exynos4_i2c_get_regname(unsigned offset)
 #define DPRINT(fmt, args...)              do { } while (0)
 #endif
 
-struct Exynos4210I2CState {
+typedef struct Exynos4210I2CState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -96,7 +93,7 @@ struct Exynos4210I2CState {
     uint8_t i2cds;
     uint8_t i2clc;
     bool scl_free;
-};
+} Exynos4210I2CState;
 
 static inline void exynos4210_i2c_raise_interrupt(Exynos4210I2CState *s)
 {
@@ -109,10 +106,16 @@ static inline void exynos4210_i2c_raise_interrupt(Exynos4210I2CState *s)
 static void exynos4210_i2c_data_receive(void *opaque)
 {
     Exynos4210I2CState *s = (Exynos4210I2CState *)opaque;
+    int ret;
 
     s->i2cstat &= ~I2CSTAT_LAST_BIT;
     s->scl_free = false;
-    s->i2cds = i2c_recv(s->bus);
+    ret = i2c_recv(s->bus);
+    if (ret < 0 && (s->i2ccon & I2CCON_ACK_GEN)) {
+        s->i2cstat |= I2CSTAT_LAST_BIT;  /* Data is not acknowledged */
+    } else {
+        s->i2cds = ret;
+    }
     exynos4210_i2c_raise_interrupt(s);
 }
 

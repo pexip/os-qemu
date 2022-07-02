@@ -43,14 +43,10 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qapi/error.h"
-#include "trace.h"
 #include "hw/hw.h"
 #include "disas/disas.h"
-#include "migration/vmstate.h"
 #include "monitor/monitor.h"
-#include "sysemu/reset.h"
 #include "sysemu/sysemu.h"
 #include "uboot_image.h"
 #include "hw/loader.h"
@@ -59,7 +55,6 @@
 #include "exec/address-spaces.h"
 #include "hw/boards.h"
 #include "qemu/cutils.h"
-#include "sysemu/runstate.h"
 
 #include <zlib.h>
 
@@ -79,23 +74,49 @@ int64_t get_image_size(const char *filename)
 }
 
 /* return the size or -1 if error */
+/* deprecated, because caller does not specify buffer size! */
+int load_image(const char *filename, uint8_t *addr)
+{
+    int fd, size;
+    fd = open(filename, O_RDONLY | O_BINARY);
+    if (fd < 0)
+        return -1;
+    size = lseek(fd, 0, SEEK_END);
+    if (size == -1) {
+        fprintf(stderr, "file %-20s: get size error: %s\n",
+                filename, strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    lseek(fd, 0, SEEK_SET);
+    if (read(fd, addr, size) != size) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    return size;
+}
+
+/* return the size or -1 if error */
 ssize_t load_image_size(const char *filename, void *addr, size_t size)
 {
     int fd;
-    ssize_t actsize, l = 0;
+    ssize_t actsize;
 
     fd = open(filename, O_RDONLY | O_BINARY);
     if (fd < 0) {
         return -1;
     }
 
-    while ((actsize = read(fd, addr + l, size - l)) > 0) {
-        l += actsize;
+    actsize = read(fd, addr, size);
+    if (actsize < 0) {
+        close(fd);
+        return -1;
     }
-
     close(fd);
 
-    return actsize < 0 ? -1 : l;
+    return actsize;
 }
 
 /* read()-like version */
@@ -248,26 +269,26 @@ int load_aout(const char *filename, hwaddr addr, int max_sz,
     case OMAGIC:
         if (e.a_text + e.a_data > max_sz)
             goto fail;
-        lseek(fd, N_TXTOFF(e), SEEK_SET);
-        size = read_targphys(filename, fd, addr, e.a_text + e.a_data);
-        if (size < 0)
-            goto fail;
-        break;
+	lseek(fd, N_TXTOFF(e), SEEK_SET);
+	size = read_targphys(filename, fd, addr, e.a_text + e.a_data);
+	if (size < 0)
+	    goto fail;
+	break;
     case NMAGIC:
         if (N_DATADDR(e, target_page_size) + e.a_data > max_sz)
             goto fail;
-        lseek(fd, N_TXTOFF(e), SEEK_SET);
-        size = read_targphys(filename, fd, addr, e.a_text);
-        if (size < 0)
-            goto fail;
+	lseek(fd, N_TXTOFF(e), SEEK_SET);
+	size = read_targphys(filename, fd, addr, e.a_text);
+	if (size < 0)
+	    goto fail;
         ret = read_targphys(filename, fd, addr + N_DATADDR(e, target_page_size),
                             e.a_data);
-        if (ret < 0)
-            goto fail;
-        size += ret;
-        break;
+	if (ret < 0)
+	    goto fail;
+	size += ret;
+	break;
     default:
-        goto fail;
+	goto fail;
     }
     close(fd);
     return size;
@@ -339,8 +360,6 @@ const char *load_elf_strerror(int error)
         return "The image is from incompatible architecture";
     case ELF_LOAD_WRONG_ENDIAN:
         return "The image has incorrect endianness";
-    case ELF_LOAD_TOO_BIG:
-        return "The image segments are too big to load";
     default:
         return "Unknown error";
     }
@@ -402,55 +421,48 @@ fail:
 }
 
 /* return < 0 if error, otherwise the number of bytes loaded in memory */
-int load_elf(const char *filename,
-             uint64_t (*elf_note_fn)(void *, void *, bool),
-             uint64_t (*translate_fn)(void *, uint64_t),
+int load_elf(const char *filename, uint64_t (*translate_fn)(void *, uint64_t),
              void *translate_opaque, uint64_t *pentry, uint64_t *lowaddr,
-             uint64_t *highaddr, uint32_t *pflags, int big_endian,
-             int elf_machine, int clear_lsb, int data_swab)
+             uint64_t *highaddr, int big_endian, int elf_machine,
+             int clear_lsb, int data_swab)
 {
-    return load_elf_as(filename, elf_note_fn, translate_fn, translate_opaque,
-                       pentry, lowaddr, highaddr, pflags, big_endian,
-                       elf_machine, clear_lsb, data_swab, NULL);
+    return load_elf_as(filename, translate_fn, translate_opaque, pentry,
+                       lowaddr, highaddr, big_endian, elf_machine, clear_lsb,
+                       data_swab, NULL);
 }
 
 /* return < 0 if error, otherwise the number of bytes loaded in memory */
 int load_elf_as(const char *filename,
-                uint64_t (*elf_note_fn)(void *, void *, bool),
                 uint64_t (*translate_fn)(void *, uint64_t),
                 void *translate_opaque, uint64_t *pentry, uint64_t *lowaddr,
-                uint64_t *highaddr, uint32_t *pflags, int big_endian,
-                int elf_machine, int clear_lsb, int data_swab, AddressSpace *as)
+                uint64_t *highaddr, int big_endian, int elf_machine,
+                int clear_lsb, int data_swab, AddressSpace *as)
 {
-    return load_elf_ram(filename, elf_note_fn, translate_fn, translate_opaque,
-                        pentry, lowaddr, highaddr, pflags, big_endian,
-                        elf_machine, clear_lsb, data_swab, as, true);
+    return load_elf_ram(filename, translate_fn, translate_opaque,
+                        pentry, lowaddr, highaddr, big_endian, elf_machine,
+                        clear_lsb, data_swab, as, true);
 }
 
 /* return < 0 if error, otherwise the number of bytes loaded in memory */
 int load_elf_ram(const char *filename,
-                 uint64_t (*elf_note_fn)(void *, void *, bool),
                  uint64_t (*translate_fn)(void *, uint64_t),
                  void *translate_opaque, uint64_t *pentry, uint64_t *lowaddr,
-                 uint64_t *highaddr, uint32_t *pflags, int big_endian,
-                 int elf_machine, int clear_lsb, int data_swab,
-                 AddressSpace *as, bool load_rom)
+                 uint64_t *highaddr, int big_endian, int elf_machine,
+                 int clear_lsb, int data_swab, AddressSpace *as,
+                 bool load_rom)
 {
-    return load_elf_ram_sym(filename, elf_note_fn,
-                            translate_fn, translate_opaque,
-                            pentry, lowaddr, highaddr, pflags, big_endian,
+    return load_elf_ram_sym(filename, translate_fn, translate_opaque,
+                            pentry, lowaddr, highaddr, big_endian,
                             elf_machine, clear_lsb, data_swab, as,
                             load_rom, NULL);
 }
 
 /* return < 0 if error, otherwise the number of bytes loaded in memory */
 int load_elf_ram_sym(const char *filename,
-                     uint64_t (*elf_note_fn)(void *, void *, bool),
                      uint64_t (*translate_fn)(void *, uint64_t),
                      void *translate_opaque, uint64_t *pentry,
-                     uint64_t *lowaddr, uint64_t *highaddr, uint32_t *pflags,
-                     int big_endian, int elf_machine,
-                     int clear_lsb, int data_swab,
+                     uint64_t *lowaddr, uint64_t *highaddr, int big_endian,
+                     int elf_machine, int clear_lsb, int data_swab,
                      AddressSpace *as, bool load_rom, symbol_fn_t sym_cb)
 {
     int fd, data_order, target_data_order, must_swab, ret = ELF_LOAD_FAILED;
@@ -489,15 +501,13 @@ int load_elf_ram_sym(const char *filename,
 
     lseek(fd, 0, SEEK_SET);
     if (e_ident[EI_CLASS] == ELFCLASS64) {
-        ret = load_elf64(filename, fd, elf_note_fn,
-                         translate_fn, translate_opaque, must_swab,
-                         pentry, lowaddr, highaddr, pflags, elf_machine,
-                         clear_lsb, data_swab, as, load_rom, sym_cb);
+        ret = load_elf64(filename, fd, translate_fn, translate_opaque, must_swab,
+                         pentry, lowaddr, highaddr, elf_machine, clear_lsb,
+                         data_swab, as, load_rom, sym_cb);
     } else {
-        ret = load_elf32(filename, fd, elf_note_fn,
-                         translate_fn, translate_opaque, must_swab,
-                         pentry, lowaddr, highaddr, pflags, elf_machine,
-                         clear_lsb, data_swab, as, load_rom, sym_cb);
+        ret = load_elf32(filename, fd, translate_fn, translate_opaque, must_swab,
+                         pentry, lowaddr, highaddr, elf_machine, clear_lsb,
+                         data_swab, as, load_rom, sym_cb);
     }
 
  fail:
@@ -628,26 +638,13 @@ static int load_uboot_image(const char *filename, hwaddr *ep, hwaddr *loadaddr,
         goto out;
 
     if (hdr->ih_type != image_type) {
-        if (!(image_type == IH_TYPE_KERNEL &&
-            hdr->ih_type == IH_TYPE_KERNEL_NOLOAD)) {
-            fprintf(stderr, "Wrong image type %d, expected %d\n", hdr->ih_type,
-                    image_type);
-            goto out;
-        }
+        fprintf(stderr, "Wrong image type %d, expected %d\n", hdr->ih_type,
+                image_type);
+        goto out;
     }
 
     /* TODO: Implement other image types.  */
     switch (hdr->ih_type) {
-    case IH_TYPE_KERNEL_NOLOAD:
-        if (!loadaddr || *loadaddr == LOAD_UIMAGE_LOADADDR_INVALID) {
-            fprintf(stderr, "this image format (kernel_noload) cannot be "
-                    "loaded on this machine type");
-            goto out;
-        }
-
-        hdr->ih_load = *loadaddr + sizeof(*hdr);
-        hdr->ih_ep += hdr->ih_load;
-        /* fall through */
     case IH_TYPE_KERNEL:
         address = hdr->ih_load;
         if (translate_fn) {
@@ -843,7 +840,6 @@ struct Rom {
     int isrom;
     char *fw_dir;
     char *fw_file;
-    GMappedFile *mapped_file;
 
     bool committed;
 
@@ -854,25 +850,10 @@ struct Rom {
 static FWCfgState *fw_cfg;
 static QTAILQ_HEAD(, Rom) roms = QTAILQ_HEAD_INITIALIZER(roms);
 
-/*
- * rom->data can be heap-allocated or memory-mapped (e.g. when added with
- * rom_add_elf_program())
- */
-static void rom_free_data(Rom *rom)
-{
-    if (rom->mapped_file) {
-        g_mapped_file_unref(rom->mapped_file);
-        rom->mapped_file = NULL;
-    } else {
-        g_free(rom->data);
-    }
-
-    rom->data = NULL;
-}
-
+/* rom->data must be heap-allocated (do not use with rom_add_elf_program()) */
 static void rom_free(Rom *rom)
 {
-    rom_free_data(rom);
+    g_free(rom->data);
     g_free(rom->path);
     g_free(rom->name);
     g_free(rom->fw_dir);
@@ -1049,7 +1030,6 @@ MemoryRegion *rom_add_blob(const char *name, const void *blob, size_t len,
     rom->addr     = addr;
     rom->romsize  = max_len ? max_len : len;
     rom->datasize = len;
-    g_assert(rom->romsize >= rom->datasize);
     rom->data     = g_malloc0(rom->datasize);
     memcpy(rom->data, blob, len);
     rom_insert(rom);
@@ -1079,12 +1059,11 @@ MemoryRegion *rom_add_blob(const char *name, const void *blob, size_t len,
 
 /* This function is specific for elf program because we don't need to allocate
  * all the rom. We just allocate the first part and the rest is just zeros. This
- * is why romsize and datasize are different. Also, this function takes its own
- * reference to "mapped_file", so we don't have to allocate and copy the buffer.
+ * is why romsize and datasize are different. Also, this function seize the
+ * memory ownership of "data", so we don't have to allocate and copy the buffer.
  */
-int rom_add_elf_program(const char *name, GMappedFile *mapped_file, void *data,
-                        size_t datasize, size_t romsize, hwaddr addr,
-                        AddressSpace *as)
+int rom_add_elf_program(const char *name, void *data, size_t datasize,
+                        size_t romsize, hwaddr addr, AddressSpace *as)
 {
     Rom *rom;
 
@@ -1095,12 +1074,6 @@ int rom_add_elf_program(const char *name, GMappedFile *mapped_file, void *data,
     rom->romsize  = romsize;
     rom->data     = data;
     rom->as       = as;
-
-    if (mapped_file && data) {
-        g_mapped_file_ref(mapped_file);
-        rom->mapped_file = mapped_file;
-    }
-
     rom_insert(rom);
     return 0;
 }
@@ -1123,22 +1096,6 @@ static void rom_reset(void *unused)
         if (rom->fw_file) {
             continue;
         }
-        /*
-         * We don't need to fill in the RAM with ROM data because we'll fill
-         * the data in during the next incoming migration in all cases.  Note
-         * that some of those RAMs can actually be modified by the guest.
-         */
-        if (runstate_check(RUN_STATE_INMIGRATE)) {
-            if (rom->data && rom->isrom) {
-                /*
-                 * Free it so that a rom_reset after migration doesn't
-                 * overwrite a potentially modified 'rom'.
-                 */
-                rom_free_data(rom);
-            }
-            continue;
-        }
-
         if (rom->data == NULL) {
             continue;
         }
@@ -1146,12 +1103,13 @@ static void rom_reset(void *unused)
             void *host = memory_region_get_ram_ptr(rom->mr);
             memcpy(host, rom->data, rom->datasize);
         } else {
-            address_space_write_rom(rom->as, rom->addr, MEMTXATTRS_UNSPECIFIED,
-                                    rom->data, rom->datasize);
+            cpu_physical_memory_write_rom(rom->as, rom->addr, rom->data,
+                                          rom->datasize);
         }
         if (rom->isrom) {
             /* rom needs to be written only once */
-            rom_free_data(rom);
+            g_free(rom->data);
+            rom->data = NULL;
         }
         /*
          * The rom loader is really on the same level as firmware in the guest
@@ -1160,8 +1118,6 @@ static void rom_reset(void *unused)
          * CPU definitely fetches its instructions from the just written data.
          */
         cpu_flush_icache_range(rom->addr, rom->datasize);
-
-        trace_loader_write_rom(rom->name, rom->addr, rom->datasize, rom->isrom);
     }
 }
 
@@ -1289,7 +1245,7 @@ int rom_copy(uint8_t *dest, hwaddr addr, size_t size)
         if (rom->addr + rom->romsize < addr) {
             continue;
         }
-        if (rom->addr > end || rom->addr < addr) {
+        if (rom->addr > end) {
             break;
         }
 
@@ -1447,7 +1403,6 @@ typedef struct {
     uint32_t current_rom_index;
     uint32_t rom_start_address;
     AddressSpace *as;
-    bool complete;
 } HexParser;
 
 /* return size or -1 if error */
@@ -1485,7 +1440,6 @@ static int handle_record_type(HexParser *parser)
                                   parser->current_rom_index,
                                   parser->rom_start_address, parser->as);
         }
-        parser->complete = true;
         return parser->total_size;
     case EXT_SEG_ADDR_RECORD:
     case EXT_LINEAR_ADDR_RECORD:
@@ -1550,12 +1504,11 @@ static int parse_hex_blob(const char *filename, hwaddr *addr, uint8_t *hex_blob,
         .bin_buf = g_malloc(hex_blob_size),
         .start_addr = addr,
         .as = as,
-        .complete = false
     };
 
     rom_transaction_begin();
 
-    for (; hex_blob < end && !parser.complete; ++hex_blob) {
+    for (; hex_blob < end; ++hex_blob) {
         switch (*hex_blob) {
         case '\r':
         case '\n':

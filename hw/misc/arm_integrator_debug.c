@@ -15,19 +15,19 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "hw/misc/arm_integrator_debug.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
-#include "qom/object.h"
 
-OBJECT_DECLARE_SIMPLE_TYPE(IntegratorDebugState, INTEGRATOR_DEBUG)
+#define INTEGRATOR_DEBUG(obj) \
+    OBJECT_CHECK(IntegratorDebugState, (obj), TYPE_INTEGRATOR_DEBUG)
 
-struct IntegratorDebugState {
+typedef struct {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
-};
+} IntegratorDebugState;
 
 static uint64_t intdbg_control_read(void *opaque, hwaddr offset,
                                     unsigned size)

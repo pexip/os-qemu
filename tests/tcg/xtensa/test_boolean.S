@@ -2,8 +2,6 @@
 
 test_suite boolean
 
-#if XCHAL_HAVE_BOOLEANS
-
 test all4
     movi    a2, 0xfec0
     wsr     a2, br
@@ -21,7 +19,5 @@ test all4
     addi    a2, a2, 1
     assert  eq, a2, a3
 test_end
-
-#endif
 
 test_suite_end

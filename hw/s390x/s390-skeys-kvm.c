@@ -13,7 +13,6 @@
 #include "hw/s390x/storage-keys.h"
 #include "sysemu/kvm.h"
 #include "qemu/error-report.h"
-#include "qemu/module.h"
 
 static int kvm_s390_skeys_enabled(S390SKeysState *ss)
 {

@@ -7,7 +7,7 @@
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -36,6 +36,16 @@ static uint64_t xgetbv(uint32_t xcr)
                       : "c" (xcr));
 
     return (((uint64_t)edx) << 32) | eax;
+}
+
+static bool vmx_mpx_supported()
+{
+    uint64_t cap_exit, cap_entry;
+
+    hv_vmx_read_capability(HV_VMX_CAP_ENTRY, &cap_entry);
+    hv_vmx_read_capability(HV_VMX_CAP_EXIT, &cap_exit);
+
+    return ((cap_exit & (1 << 23)) && (cap_entry & (1 << 16)));
 }
 
 uint32_t hvf_get_supported_cpuid(uint32_t func, uint32_t idx,
@@ -82,14 +92,17 @@ uint32_t hvf_get_supported_cpuid(uint32_t func, uint32_t idx,
                     CPUID_7_0_EBX_CLFLUSHOPT | CPUID_7_0_EBX_CLWB |
                     CPUID_7_0_EBX_AVX512DQ | CPUID_7_0_EBX_SHA_NI |
                     CPUID_7_0_EBX_AVX512BW | CPUID_7_0_EBX_AVX512VL |
-                    CPUID_7_0_EBX_INVPCID;
+                    CPUID_7_0_EBX_INVPCID | CPUID_7_0_EBX_MPX;
 
+            if (!vmx_mpx_supported()) {
+                ebx &= ~CPUID_7_0_EBX_MPX;
+            }
             hv_vmx_read_capability(HV_VMX_CAP_PROCBASED2, &cap);
             if (!(cap & CPU_BASED2_INVPCID)) {
                 ebx &= ~CPUID_7_0_EBX_INVPCID;
             }
 
-            ecx &= CPUID_7_0_ECX_AVX512_VBMI | CPUID_7_0_ECX_AVX512_VPOPCNTDQ;
+            ecx &= CPUID_7_0_ECX_AVX512BMI | CPUID_7_0_ECX_AVX512_VPOPCNTDQ;
             edx &= CPUID_7_0_EDX_AVX512_4VNNIW | CPUID_7_0_EDX_AVX512_4FMAPS;
         } else {
             ebx = 0;
@@ -106,6 +119,9 @@ uint32_t hvf_get_supported_cpuid(uint32_t func, uint32_t idx,
                                   XSTATE_BNDCSR_MASK | XSTATE_OPMASK_MASK |
                                   XSTATE_ZMM_Hi256_MASK | XSTATE_Hi16_ZMM_MASK);
             eax &= supp_xcr0;
+            if (!vmx_mpx_supported()) {
+                eax &= ~(XSTATE_BNDREGS_MASK | XSTATE_BNDCSR_MASK);
+            }
         } else if (idx == 1) {
             hv_vmx_read_capability(HV_VMX_CAP_PROCBASED2, &cap);
             eax &= CPUID_XSAVE_XSAVEOPT | CPUID_XSAVE_XGETBV1;
@@ -122,10 +138,6 @@ uint32_t hvf_get_supported_cpuid(uint32_t func, uint32_t idx,
                 CPUID_PAT | CPUID_PSE36 | CPUID_EXT2_MMXEXT | CPUID_MMX |
                 CPUID_FXSR | CPUID_EXT2_FXSR | CPUID_EXT2_PDPE1GB | CPUID_EXT2_3DNOWEXT |
                 CPUID_EXT2_3DNOW | CPUID_EXT2_LM | CPUID_EXT2_RDTSCP | CPUID_EXT2_NX;
-        hv_vmx_read_capability(HV_VMX_CAP_PROCBASED2, &cap);
-        if (!(cap & CPU_BASED2_RDTSCP)) {
-            edx &= ~CPUID_EXT2_RDTSCP;
-        }
         hv_vmx_read_capability(HV_VMX_CAP_PROCBASED, &cap);
         if (!(cap & CPU_BASED_TSC_OFFSET)) {
             edx &= ~CPUID_EXT2_RDTSCP;

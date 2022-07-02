@@ -19,8 +19,8 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, see <http://www.gnu.org/licenses/>.  */
 
-#ifndef TARGET_CRIS_OPCODE_CRIS_H
-#define TARGET_CRIS_OPCODE_CRIS_H
+#ifndef __CRIS_H_INCLUDED_
+#define __CRIS_H_INCLUDED_
 
 #if !defined(__STDC__) && !defined(const)
 #define const
@@ -345,7 +345,7 @@ extern const struct cris_opcode cris_opcodes[];
    sign-extended before adding to "target".  */
 #define CRIS_DIS_FLAG_MEM_TARGET2_MEM_WORD (1 << 7)
 
-#endif /* TARGET_CRIS_OPCODE_CRIS_H */
+#endif /* __CRIS_H_INCLUDED_ */
 
 /*
  * Local variables:

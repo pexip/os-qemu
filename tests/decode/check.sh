@@ -15,10 +15,4 @@ for i in err_*.decode; do
     fi
 done
 
-for i in succ_*.decode; do
-    if ! $PYTHON $DECODETREE $i > /dev/null 2> /dev/null; then
-        echo FAIL:$i 1>&2
-    fi
-done
-
 exit $E

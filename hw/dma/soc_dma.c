@@ -19,6 +19,7 @@
  */
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
+#include "qemu-common.h"
 #include "qemu/timer.h"
 #include "hw/arm/soc_dma.h"
 
@@ -80,7 +81,7 @@ struct dma_s {
     } *memmap;
     int memmap_size;
 
-    struct soc_dma_ch_s ch[];
+    struct soc_dma_ch_s ch[0];
 };
 
 static void soc_dma_ch_schedule(struct soc_dma_ch_s *ch, int delay_bytes)
@@ -344,7 +345,7 @@ void soc_dma_port_add_mem(struct soc_dma_s *soc, uint8_t *phys_base,
             while (entry < dma->memmap + dma->memmap_size &&
                             entry->addr <= virt_base)
                 entry ++;
-        }
+	}
 
         memmove(entry + 1, entry,
                         (uint8_t *) (dma->memmap + dma->memmap_size ++) -

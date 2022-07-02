@@ -17,7 +17,6 @@
 #include "hw/virtio/virtio-net.h"
 #include "hw/virtio/virtio-serial.h"
 #include "hw/virtio/virtio-scsi.h"
-#include "qom/object.h"
 #ifdef CONFIG_VHOST_SCSI
 #include "hw/virtio/vhost-scsi.h"
 #endif
@@ -54,22 +53,32 @@
 #define CCW_CMD_SET_VIRTIO_REV 0x83
 
 #define TYPE_VIRTIO_CCW_DEVICE "virtio-ccw-device"
-OBJECT_DECLARE_TYPE(VirtioCcwDevice, VirtIOCCWDeviceClass, VIRTIO_CCW_DEVICE)
+#define VIRTIO_CCW_DEVICE(obj) \
+     OBJECT_CHECK(VirtioCcwDevice, (obj), TYPE_VIRTIO_CCW_DEVICE)
+#define VIRTIO_CCW_DEVICE_CLASS(klass) \
+     OBJECT_CLASS_CHECK(VirtIOCCWDeviceClass, (klass), TYPE_VIRTIO_CCW_DEVICE)
+#define VIRTIO_CCW_DEVICE_GET_CLASS(obj) \
+     OBJECT_GET_CLASS(VirtIOCCWDeviceClass, (obj), TYPE_VIRTIO_CCW_DEVICE)
 
 typedef struct VirtioBusState VirtioCcwBusState;
 typedef struct VirtioBusClass VirtioCcwBusClass;
 
 #define TYPE_VIRTIO_CCW_BUS "virtio-ccw-bus"
-DECLARE_OBJ_CHECKERS(VirtioCcwBusState, VirtioCcwBusClass,
-                     VIRTIO_CCW_BUS, TYPE_VIRTIO_CCW_BUS)
+#define VIRTIO_CCW_BUS(obj) \
+     OBJECT_CHECK(VirtioCcwBus, (obj), TYPE_VIRTIO_CCW_BUS)
+#define VIRTIO_CCW_BUS_GET_CLASS(obj) \
+    OBJECT_CHECK(VirtioCcwBusState, (obj), TYPE_VIRTIO_CCW_BUS)
+#define VIRTIO_CCW_BUS_CLASS(klass) \
+    OBJECT_CLASS_CHECK(VirtioCcwBusClass, klass, TYPE_VIRTIO_CCW_BUS)
 
+typedef struct VirtioCcwDevice VirtioCcwDevice;
 
-struct VirtIOCCWDeviceClass {
+typedef struct VirtIOCCWDeviceClass {
     CCWDeviceClass parent_class;
     void (*realize)(VirtioCcwDevice *dev, Error **errp);
-    void (*unrealize)(VirtioCcwDevice *dev);
+    void (*unrealize)(VirtioCcwDevice *dev, Error **errp);
     void (*parent_reset)(DeviceState *dev);
-};
+} VirtIOCCWDeviceClass;
 
 /* Performance improves when virtqueue kick processing is decoupled from the
  * vcpu thread using ioeventfd for some devices. */
@@ -102,84 +111,92 @@ static inline int virtio_ccw_rev_max(VirtioCcwDevice *dev)
 /* virtio-scsi-ccw */
 
 #define TYPE_VIRTIO_SCSI_CCW "virtio-scsi-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIOSCSICcw, VIRTIO_SCSI_CCW)
+#define VIRTIO_SCSI_CCW(obj) \
+        OBJECT_CHECK(VirtIOSCSICcw, (obj), TYPE_VIRTIO_SCSI_CCW)
 
-struct VirtIOSCSICcw {
+typedef struct VirtIOSCSICcw {
     VirtioCcwDevice parent_obj;
     VirtIOSCSI vdev;
-};
+} VirtIOSCSICcw;
 
 #ifdef CONFIG_VHOST_SCSI
 /* vhost-scsi-ccw */
 
 #define TYPE_VHOST_SCSI_CCW "vhost-scsi-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VHostSCSICcw, VHOST_SCSI_CCW)
+#define VHOST_SCSI_CCW(obj) \
+        OBJECT_CHECK(VHostSCSICcw, (obj), TYPE_VHOST_SCSI_CCW)
 
-struct VHostSCSICcw {
+typedef struct VHostSCSICcw {
     VirtioCcwDevice parent_obj;
     VHostSCSI vdev;
-};
+} VHostSCSICcw;
 #endif
 
 /* virtio-blk-ccw */
 
 #define TYPE_VIRTIO_BLK_CCW "virtio-blk-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIOBlkCcw, VIRTIO_BLK_CCW)
+#define VIRTIO_BLK_CCW(obj) \
+        OBJECT_CHECK(VirtIOBlkCcw, (obj), TYPE_VIRTIO_BLK_CCW)
 
-struct VirtIOBlkCcw {
+typedef struct VirtIOBlkCcw {
     VirtioCcwDevice parent_obj;
     VirtIOBlock vdev;
-};
+} VirtIOBlkCcw;
 
 /* virtio-balloon-ccw */
 
 #define TYPE_VIRTIO_BALLOON_CCW "virtio-balloon-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIOBalloonCcw, VIRTIO_BALLOON_CCW)
+#define VIRTIO_BALLOON_CCW(obj) \
+        OBJECT_CHECK(VirtIOBalloonCcw, (obj), TYPE_VIRTIO_BALLOON_CCW)
 
-struct VirtIOBalloonCcw {
+typedef struct VirtIOBalloonCcw {
     VirtioCcwDevice parent_obj;
     VirtIOBalloon vdev;
-};
+} VirtIOBalloonCcw;
 
 /* virtio-serial-ccw */
 
 #define TYPE_VIRTIO_SERIAL_CCW "virtio-serial-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtioSerialCcw, VIRTIO_SERIAL_CCW)
+#define VIRTIO_SERIAL_CCW(obj) \
+        OBJECT_CHECK(VirtioSerialCcw, (obj), TYPE_VIRTIO_SERIAL_CCW)
 
-struct VirtioSerialCcw {
+typedef struct VirtioSerialCcw {
     VirtioCcwDevice parent_obj;
     VirtIOSerial vdev;
-};
+} VirtioSerialCcw;
 
 /* virtio-net-ccw */
 
 #define TYPE_VIRTIO_NET_CCW "virtio-net-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIONetCcw, VIRTIO_NET_CCW)
+#define VIRTIO_NET_CCW(obj) \
+        OBJECT_CHECK(VirtIONetCcw, (obj), TYPE_VIRTIO_NET_CCW)
 
-struct VirtIONetCcw {
+typedef struct VirtIONetCcw {
     VirtioCcwDevice parent_obj;
     VirtIONet vdev;
-};
+} VirtIONetCcw;
 
 /* virtio-rng-ccw */
 
 #define TYPE_VIRTIO_RNG_CCW "virtio-rng-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIORNGCcw, VIRTIO_RNG_CCW)
+#define VIRTIO_RNG_CCW(obj) \
+        OBJECT_CHECK(VirtIORNGCcw, (obj), TYPE_VIRTIO_RNG_CCW)
 
-struct VirtIORNGCcw {
+typedef struct VirtIORNGCcw {
     VirtioCcwDevice parent_obj;
     VirtIORNG vdev;
-};
+} VirtIORNGCcw;
 
 /* virtio-crypto-ccw */
 
 #define TYPE_VIRTIO_CRYPTO_CCW "virtio-crypto-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIOCryptoCcw, VIRTIO_CRYPTO_CCW)
+#define VIRTIO_CRYPTO_CCW(obj) \
+        OBJECT_CHECK(VirtIOCryptoCcw, (obj), TYPE_VIRTIO_CRYPTO_CCW)
 
-struct VirtIOCryptoCcw {
+typedef struct VirtIOCryptoCcw {
     VirtioCcwDevice parent_obj;
     VirtIOCrypto vdev;
-};
+} VirtIOCryptoCcw;
 
 VirtIODevice *virtio_ccw_get_vdev(SubchDev *sch);
 
@@ -187,51 +204,56 @@ VirtIODevice *virtio_ccw_get_vdev(SubchDev *sch);
 #include "hw/9pfs/virtio-9p.h"
 
 #define TYPE_VIRTIO_9P_CCW "virtio-9p-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(V9fsCCWState, VIRTIO_9P_CCW)
+#define VIRTIO_9P_CCW(obj) \
+    OBJECT_CHECK(V9fsCCWState, (obj), TYPE_VIRTIO_9P_CCW)
 
-struct V9fsCCWState {
+typedef struct V9fsCCWState {
     VirtioCcwDevice parent_obj;
     V9fsVirtioState vdev;
-};
+} V9fsCCWState;
 
 #endif /* CONFIG_VIRTFS */
 
 #ifdef CONFIG_VHOST_VSOCK
 #define TYPE_VHOST_VSOCK_CCW "vhost-vsock-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VHostVSockCCWState, VHOST_VSOCK_CCW)
+#define VHOST_VSOCK_CCW(obj) \
+    OBJECT_CHECK(VHostVSockCCWState, (obj), TYPE_VHOST_VSOCK_CCW)
 
-struct VHostVSockCCWState {
+typedef struct VHostVSockCCWState {
     VirtioCcwDevice parent_obj;
     VHostVSock vdev;
-};
+} VHostVSockCCWState;
 
 #endif /* CONFIG_VHOST_VSOCK */
 
 #define TYPE_VIRTIO_GPU_CCW "virtio-gpu-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIOGPUCcw, VIRTIO_GPU_CCW)
+#define VIRTIO_GPU_CCW(obj) \
+        OBJECT_CHECK(VirtIOGPUCcw, (obj), TYPE_VIRTIO_GPU_CCW)
 
-struct VirtIOGPUCcw {
+typedef struct VirtIOGPUCcw {
     VirtioCcwDevice parent_obj;
     VirtIOGPU vdev;
-};
+} VirtIOGPUCcw;
 
 #define TYPE_VIRTIO_INPUT_CCW "virtio-input-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIOInputCcw, VIRTIO_INPUT_CCW)
+#define VIRTIO_INPUT_CCW(obj) \
+        OBJECT_CHECK(VirtIOInputCcw, (obj), TYPE_VIRTIO_INPUT_CCW)
 
-struct VirtIOInputCcw {
+typedef struct VirtIOInputCcw {
     VirtioCcwDevice parent_obj;
     VirtIOInput vdev;
-};
+} VirtIOInputCcw;
 
 #define TYPE_VIRTIO_INPUT_HID_CCW "virtio-input-hid-ccw"
 #define TYPE_VIRTIO_KEYBOARD_CCW "virtio-keyboard-ccw"
 #define TYPE_VIRTIO_MOUSE_CCW "virtio-mouse-ccw"
 #define TYPE_VIRTIO_TABLET_CCW "virtio-tablet-ccw"
-OBJECT_DECLARE_SIMPLE_TYPE(VirtIOInputHIDCcw, VIRTIO_INPUT_HID_CCW)
+#define VIRTIO_INPUT_HID_CCW(obj) \
+        OBJECT_CHECK(VirtIOInputHIDCcw, (obj), TYPE_VIRTIO_INPUT_HID_CCW)
 
-struct VirtIOInputHIDCcw {
+typedef struct VirtIOInputHIDCcw {
     VirtioCcwDevice parent_obj;
     VirtIOInputHID vdev;
-};
+} VirtIOInputHIDCcw;
 
 #endif

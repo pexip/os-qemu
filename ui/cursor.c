@@ -1,4 +1,5 @@
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "ui/console.h"
 
 #include "cursor_hidden.xpm"

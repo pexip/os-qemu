@@ -26,6 +26,7 @@
 #ifndef QEMU_NET_TAP_H
 #define QEMU_NET_TAP_H
 
+#include "qemu-common.h"
 #include "standard-headers/linux/virtio_net.h"
 
 int tap_enable(NetClientState *nc);

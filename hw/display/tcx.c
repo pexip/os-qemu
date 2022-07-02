@@ -23,17 +23,13 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qapi/error.h"
+#include "qemu-common.h"
 #include "ui/console.h"
 #include "ui/pixel_ops.h"
 #include "hw/loader.h"
-#include "hw/qdev-properties.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
 #include "qemu/error-report.h"
-#include "qemu/module.h"
-#include "qom/object.h"
 
 #define TCX_ROM_FILE "QEMU,tcx.bin"
 #define FCODE_MAX_ROM_SIZE 0x10000
@@ -56,9 +52,9 @@
 #define TCX_THC_CURSBITS 0x980
 
 #define TYPE_TCX "SUNW,tcx"
-OBJECT_DECLARE_SIMPLE_TYPE(TCXState, TCX)
+#define TCX(obj) OBJECT_CHECK(TCXState, (obj), TYPE_TCX)
 
-struct TCXState {
+typedef struct TCXState {
     SysBusDevice parent_obj;
 
     QemuConsole *con;
@@ -94,7 +90,7 @@ struct TCXState {
     uint32_t cursbits[32];
     uint16_t cursx;
     uint16_t cursy;
-};
+} TCXState;
 
 static void tcx_set_dirty(TCXState *s, ram_addr_t addr, int len)
 {
@@ -411,7 +407,6 @@ static uint64_t tcx_dac_readl(void *opaque, hwaddr addr,
     case 2:
         val = s->b[s->dac_index] << 24;
         s->dac_index = (s->dac_index + 1) & 0xff; /* Index autoincrement */
-        /* fall through */
     default:
         s->dac_state = 0;
         break;
@@ -453,7 +448,6 @@ static void tcx_dac_writel(void *opaque, hwaddr addr, uint64_t val,
             s->b[index] = val >> 24;
             update_palette_entries(s, index, index + 1);
             s->dac_index = (s->dac_index + 1) & 0xff; /* Index autoincrement */
-            /* fall through */
         default:
             s->dac_state = 0;
             break;
@@ -549,13 +543,9 @@ static const MemoryRegionOps tcx_stip_ops = {
     .read = tcx_stip_readl,
     .write = tcx_stip_writel,
     .endianness = DEVICE_NATIVE_ENDIAN,
-    .impl = {
-        .min_access_size = 4,
-        .max_access_size = 4,
-    },
     .valid = {
         .min_access_size = 4,
-        .max_access_size = 8,
+        .max_access_size = 4,
     },
 };
 
@@ -563,13 +553,9 @@ static const MemoryRegionOps tcx_rstip_ops = {
     .read = tcx_stip_readl,
     .write = tcx_rstip_writel,
     .endianness = DEVICE_NATIVE_ENDIAN,
-    .impl = {
-        .min_access_size = 4,
-        .max_access_size = 4,
-    },
     .valid = {
         .min_access_size = 4,
-        .max_access_size = 8,
+        .max_access_size = 4,
     },
 };
 
@@ -649,13 +635,9 @@ static const MemoryRegionOps tcx_blit_ops = {
     .read = tcx_blit_readl,
     .write = tcx_blit_writel,
     .endianness = DEVICE_NATIVE_ENDIAN,
-    .impl = {
-        .min_access_size = 4,
-        .max_access_size = 4,
-    },
     .valid = {
         .min_access_size = 4,
-        .max_access_size = 8,
+        .max_access_size = 4,
     },
 };
 
@@ -663,13 +645,9 @@ static const MemoryRegionOps tcx_rblit_ops = {
     .read = tcx_blit_readl,
     .write = tcx_rblit_writel,
     .endianness = DEVICE_NATIVE_ENDIAN,
-    .impl = {
-        .min_access_size = 4,
-        .max_access_size = 4,
-    },
     .valid = {
         .min_access_size = 4,
-        .max_access_size = 8,
+        .max_access_size = 4,
     },
 };
 
@@ -772,8 +750,9 @@ static void tcx_initfn(Object *obj)
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
     TCXState *s = TCX(obj);
 
-    memory_region_init_rom_nomigrate(&s->rom, obj, "tcx.prom",
-                                     FCODE_MAX_ROM_SIZE, &error_fatal);
+    memory_region_init_ram_nomigrate(&s->rom, obj, "tcx.prom", FCODE_MAX_ROM_SIZE,
+                           &error_fatal);
+    memory_region_set_readonly(&s->rom, true);
     sysbus_init_mmio(sbd, &s->rom);
 
     /* 2/STIP : Stippler */
@@ -885,9 +864,9 @@ static void tcx_realizefn(DeviceState *dev, Error **errp)
     sysbus_init_irq(sbd, &s->irq);
 
     if (s->depth == 8) {
-        s->con = graphic_console_init(dev, 0, &tcx_ops, s);
+        s->con = graphic_console_init(DEVICE(dev), 0, &tcx_ops, s);
     } else {
-        s->con = graphic_console_init(dev, 0, &tcx24_ops, s);
+        s->con = graphic_console_init(DEVICE(dev), 0, &tcx24_ops, s);
     }
     s->thcmisc = 0;
 
@@ -909,7 +888,7 @@ static void tcx_class_init(ObjectClass *klass, void *data)
     dc->realize = tcx_realizefn;
     dc->reset = tcx_reset;
     dc->vmsd = &vmstate_tcx;
-    device_class_set_props(dc, tcx_properties);
+    dc->props = tcx_properties;
 }
 
 static const TypeInfo tcx_info = {

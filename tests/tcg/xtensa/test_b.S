@@ -84,24 +84,12 @@ test_end
 
 test bbc
     movi    a2, 0xfffffffd
-#undef BIT
-#if XCHAL_HAVE_BE
-#define BIT 0xfffffffe
-#else
-#define BIT 0xffffff01
-#endif
-    movi    a3, BIT
+    movi    a3, 0xffffff01
     bbc     a2, a3, 1f
     test_fail
 1:
     movi    a2, 8
-#undef BIT
-#if XCHAL_HAVE_BE
-#define BIT 0xfffffffc
-#else
-#define BIT 0xffffff03
-#endif
-    movi    a3, BIT
+    movi    a3, 0xffffff03
     bbc     a2, a3, 1f
     j       2f
 1:
@@ -111,11 +99,11 @@ test_end
 
 test bbci
     movi    a2, 0xfffdffff
-    bbci.l  a2, 17, 1f
+    bbci    a2, 17, 1f
     test_fail
 1:
     movi    a2, 0x00020000
-    bbci.l  a2, 17, 1f
+    bbci    a2, 17, 1f
     j       2f
 1:
     test_fail
@@ -204,24 +192,12 @@ test_end
 
 test bbs
     movi    a2, 8
-#undef BIT
-#if XCHAL_HAVE_BE
-#define BIT 0xfffffffc
-#else
-#define BIT 0xffffff03
-#endif
-    movi    a3, BIT
+    movi    a3, 0xffffff03
     bbs     a2, a3, 1f
     test_fail
 1:
     movi    a2, 0xfffffffd
-#undef BIT
-#if XCHAL_HAVE_BE
-#define BIT 0xfffffffe
-#else
-#define BIT 0xffffff01
-#endif
-    movi    a3, BIT
+    movi    a3, 0xffffff01
     bbs     a2, a3, 1f
     j       2f
 1:
@@ -231,11 +207,11 @@ test_end
 
 test bbsi
     movi    a2, 0x00020000
-    bbsi.l  a2, 17, 1f
+    bbsi    a2, 17, 1f
     test_fail
 1:
     movi    a2, 0xfffdffff
-    bbsi.l  a2, 17, 1f
+    bbsi    a2, 17, 1f
     j       2f
 1:
     test_fail

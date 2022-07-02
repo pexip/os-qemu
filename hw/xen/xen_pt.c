@@ -57,25 +57,12 @@
 #include <sys/ioctl.h>
 
 #include "hw/pci/pci.h"
-#include "hw/qdev-properties.h"
 #include "hw/xen/xen.h"
 #include "hw/i386/pc.h"
-#include "hw/xen/xen-legacy-backend.h"
+#include "hw/xen/xen_backend.h"
 #include "xen_pt.h"
 #include "qemu/range.h"
 #include "exec/address-spaces.h"
-
-static bool has_igd_gfx_passthru;
-
-bool xen_igd_gfx_pt_enabled(void)
-{
-    return has_igd_gfx_passthru;
-}
-
-void xen_igd_gfx_pt_set(bool value, Error **errp)
-{
-    has_igd_gfx_passthru = value;
-}
 
 #define XEN_PT_NR_IRQS (256)
 static uint8_t xen_pt_mapped_machine_irq[XEN_PT_NR_IRQS] = {0};
@@ -777,12 +764,12 @@ static void xen_pt_destroy(PCIDevice *d) {
 
 static void xen_pt_realize(PCIDevice *d, Error **errp)
 {
-    ERRP_GUARD();
     XenPCIPassthroughState *s = XEN_PT_DEVICE(d);
     int i, rc = 0;
     uint8_t machine_irq = 0, scratch;
     uint16_t cmd = 0;
     int pirq = XEN_PT_UNASSIGNED_PIRQ;
+    Error *err = NULL;
 
     /* register real device */
     XEN_PT_LOG(d, "Assigning real physical device %02x:%02x.%d"
@@ -793,9 +780,10 @@ static void xen_pt_realize(PCIDevice *d, Error **errp)
     xen_host_pci_device_get(&s->real_device,
                             s->hostaddr.domain, s->hostaddr.bus,
                             s->hostaddr.slot, s->hostaddr.function,
-                            errp);
-    if (*errp) {
-        error_append_hint(errp, "Failed to \"open\" the real pci device");
+                            &err);
+    if (err) {
+        error_append_hint(&err, "Failed to \"open\" the real pci device");
+        error_propagate(errp, err);
         return;
     }
 
@@ -822,10 +810,11 @@ static void xen_pt_realize(PCIDevice *d, Error **errp)
             return;
         }
 
-        xen_pt_setup_vga(s, &s->real_device, errp);
-        if (*errp) {
-            error_append_hint(errp, "Setup VGA BIOS of passthrough"
-                              " GFX failed");
+        xen_pt_setup_vga(s, &s->real_device, &err);
+        if (err) {
+            error_append_hint(&err, "Setup VGA BIOS of passthrough"
+                    " GFX failed");
+            error_propagate(errp, err);
             xen_host_pci_device_put(&s->real_device);
             return;
         }
@@ -838,9 +827,10 @@ static void xen_pt_realize(PCIDevice *d, Error **errp)
     xen_pt_register_regions(s, &cmd);
 
     /* reinitialize each config register to be emulated */
-    xen_pt_config_init(s, errp);
-    if (*errp) {
-        error_append_hint(errp, "PCI Config space initialisation failed");
+    xen_pt_config_init(s, &err);
+    if (err) {
+        error_append_hint(&err, "PCI Config space initialisation failed");
+        error_propagate(errp, err);
         rc = -1;
         goto err_out;
     }
@@ -857,16 +847,10 @@ static void xen_pt_realize(PCIDevice *d, Error **errp)
     }
 
     machine_irq = s->real_device.irq;
-    if (machine_irq == 0) {
-        XEN_PT_LOG(d, "machine irq is 0\n");
-        cmd |= PCI_COMMAND_INTX_DISABLE;
-        goto out;
-    }
-
     rc = xc_physdev_map_pirq(xen_xc, xen_domid, machine_irq, &pirq);
     if (rc < 0) {
-        XEN_PT_ERR(d, "Mapping machine irq %u to pirq %i failed, (err: %d)\n",
-                   machine_irq, pirq, errno);
+        error_setg_errno(errp, errno, "Mapping machine irq %u to"
+                         " pirq %i failed", machine_irq, pirq);
 
         /* Disable PCI intx assertion (turn on bit10 of devctl) */
         cmd |= PCI_COMMAND_INTX_DISABLE;
@@ -887,8 +871,8 @@ static void xen_pt_realize(PCIDevice *d, Error **errp)
                                        PCI_SLOT(d->devfn),
                                        e_intx);
         if (rc < 0) {
-            XEN_PT_ERR(d, "Binding of interrupt %i failed! (err: %d)\n",
-                       e_intx, errno);
+            error_setg_errno(errp, errno, "Binding of interrupt %u failed",
+                             e_intx);
 
             /* Disable PCI intx assertion (turn on bit10 of devctl) */
             cmd |= PCI_COMMAND_INTX_DISABLE;
@@ -896,8 +880,8 @@ static void xen_pt_realize(PCIDevice *d, Error **errp)
 
             if (xen_pt_mapped_machine_irq[machine_irq] == 0) {
                 if (xc_physdev_unmap_pirq(xen_xc, xen_domid, machine_irq)) {
-                    XEN_PT_ERR(d, "Unmapping of machine interrupt %i failed!"
-                               " (err: %d)\n", machine_irq, errno);
+                    error_setg_errno(errp, errno, "Unmapping of machine"
+                            " interrupt %u failed", machine_irq);
                 }
             }
             s->machine_irq = 0;
@@ -971,7 +955,7 @@ static void xen_pci_passthrough_class_init(ObjectClass *klass, void *data)
     k->config_write = xen_pt_pci_write_config;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "Assign an host PCI device with Xen";
-    device_class_set_props(dc, xen_pci_passthrough_properties);
+    dc->props = xen_pci_passthrough_properties;
 };
 
 static void xen_pci_passthrough_finalize(Object *obj)

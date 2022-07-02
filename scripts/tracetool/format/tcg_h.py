@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
@@ -9,7 +10,7 @@ __copyright__  = "Copyright 2012-2017, Lluís Vilanova <vilanova@ac.upc.edu>"
 __license__    = "GPL version 2 or (at your option) any later version"
 
 __maintainer__ = "Stefan Hajnoczi"
-__email__      = "stefanha@redhat.com"
+__email__      = "stefanha@linux.vnet.ibm.com"
 
 
 from tracetool import out, Arguments
@@ -28,7 +29,7 @@ def vcpu_transform_args(args):
 
 def generate(events, backend, group):
     if group == "root":
-        header = "trace/trace-root.h"
+        header = "trace-root.h"
     else:
         header = "trace.h"
 

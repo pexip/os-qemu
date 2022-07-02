@@ -10,11 +10,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
 #include "hw/ipack/ipack.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties.h"
-#include "migration/vmstate.h"
 
 IPackDevice *ipack_device_find(IPackBus *bus, int32_t slot)
 {
@@ -60,13 +56,15 @@ static void ipack_device_realize(DeviceState *dev, Error **errp)
     k->realize(dev, errp);
 }
 
-static void ipack_device_unrealize(DeviceState *dev)
+static void ipack_device_unrealize(DeviceState *dev, Error **errp)
 {
     IPackDevice *idev = IPACK_DEVICE(dev);
     IPackDeviceClass *k = IPACK_DEVICE_GET_CLASS(dev);
+    Error *err = NULL;
 
     if (k->unrealize) {
-        k->unrealize(dev);
+        k->unrealize(dev, &err);
+        error_propagate(errp, err);
         return;
     }
 
@@ -86,7 +84,7 @@ static void ipack_device_class_init(ObjectClass *klass, void *data)
     k->bus_type = TYPE_IPACK_BUS;
     k->realize = ipack_device_realize;
     k->unrealize = ipack_device_unrealize;
-    device_class_set_props(k, ipack_device_props);
+    k->props = ipack_device_props;
 }
 
 const VMStateDescription vmstate_ipack_device = {

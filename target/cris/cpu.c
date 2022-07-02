@@ -23,8 +23,8 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu/qemu-print.h"
 #include "cpu.h"
+#include "qemu-common.h"
 #include "mmu.h"
 
 
@@ -40,15 +40,15 @@ static bool cris_cpu_has_work(CPUState *cs)
     return cs->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
 }
 
-static void cris_cpu_reset(DeviceState *dev)
+/* CPUClass::reset() */
+static void cris_cpu_reset(CPUState *s)
 {
-    CPUState *s = CPU(dev);
     CRISCPU *cpu = CRIS_CPU(s);
     CRISCPUClass *ccc = CRIS_CPU_GET_CLASS(cpu);
     CPUCRISState *env = &cpu->env;
     uint32_t vr;
 
-    ccc->parent_reset(dev);
+    ccc->parent_reset(s);
 
     vr = env->pregs[PR_VR];
     memset(env, 0, offsetof(CPUCRISState, end_reset_fields));
@@ -103,22 +103,27 @@ static gint cris_cpu_list_compare(gconstpointer a, gconstpointer b)
 static void cris_cpu_list_entry(gpointer data, gpointer user_data)
 {
     ObjectClass *oc = data;
+    CPUListState *s = user_data;
     const char *typename = object_class_get_name(oc);
     char *name;
 
     name = g_strndup(typename, strlen(typename) - strlen(CRIS_CPU_TYPE_SUFFIX));
-    qemu_printf("  %s\n", name);
+    (*s->cpu_fprintf)(s->file, "  %s\n", name);
     g_free(name);
 }
 
-void cris_cpu_list(void)
+void cris_cpu_list(FILE *f, fprintf_function cpu_fprintf)
 {
+    CPUListState s = {
+        .file = f,
+        .cpu_fprintf = cpu_fprintf,
+    };
     GSList *list;
 
     list = object_class_get_list(TYPE_CRIS_CPU, false);
     list = g_slist_sort(list, cris_cpu_list_compare);
-    qemu_printf("Available CPUs:\n");
-    g_slist_foreach(list, cris_cpu_list_entry, NULL);
+    (*cpu_fprintf)(f, "Available CPUs:\n");
+    g_slist_foreach(list, cris_cpu_list_entry, &s);
     g_slist_free(list);
 }
 
@@ -147,14 +152,6 @@ static void cris_cpu_set_irq(void *opaque, int irq, int level)
     CPUState *cs = CPU(cpu);
     int type = irq == CRIS_CPU_IRQ ? CPU_INTERRUPT_HARD : CPU_INTERRUPT_NMI;
 
-    if (irq == CRIS_CPU_IRQ) {
-        /*
-         * The PIC passes us the vector for the IRQ as the value it sends
-         * over the qemu_irq line
-         */
-        cpu->env.interrupt_vector = level;
-    }
-
     if (level) {
         cpu_interrupt(cs, type);
     } else {
@@ -179,11 +176,12 @@ static void cris_disas_set_info(CPUState *cpu, disassemble_info *info)
 
 static void cris_cpu_initfn(Object *obj)
 {
+    CPUState *cs = CPU(obj);
     CRISCPU *cpu = CRIS_CPU(obj);
     CRISCPUClass *ccc = CRIS_CPU_GET_CLASS(obj);
     CPUCRISState *env = &cpu->env;
 
-    cpu_set_cpustate_pointers(cpu);
+    cs->env_ptr = env;
 
     env->pregs[PR_VR] = ccc->vr;
 
@@ -264,7 +262,8 @@ static void cris_cpu_class_init(ObjectClass *oc, void *data)
     device_class_set_parent_realize(dc, cris_cpu_realizefn,
                                     &ccc->parent_realize);
 
-    device_class_set_parent_reset(dc, cris_cpu_reset, &ccc->parent_reset);
+    ccc->parent_reset = cc->reset;
+    cc->reset = cris_cpu_reset;
 
     cc->class_by_name = cris_cpu_class_by_name;
     cc->has_work = cris_cpu_has_work;
@@ -274,8 +273,9 @@ static void cris_cpu_class_init(ObjectClass *oc, void *data)
     cc->set_pc = cris_cpu_set_pc;
     cc->gdb_read_register = cris_cpu_gdb_read_register;
     cc->gdb_write_register = cris_cpu_gdb_write_register;
-    cc->tlb_fill = cris_cpu_tlb_fill;
-#ifndef CONFIG_USER_ONLY
+#ifdef CONFIG_USER_ONLY
+    cc->handle_mmu_fault = cris_cpu_handle_mmu_fault;
+#else
     cc->get_phys_page_debug = cris_cpu_get_phys_page_debug;
     dc->vmsd = &vmstate_cris_cpu;
 #endif

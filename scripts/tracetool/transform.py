@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
@@ -9,7 +10,7 @@ __copyright__  = "Copyright 2012-2016, Lluís Vilanova <vilanova@ac.upc.edu>"
 __license__    = "GPL version 2 or (at your option) any later version"
 
 __maintainer__ = "Stefan Hajnoczi"
-__email__      = "stefanha@redhat.com"
+__email__      = "stefanha@linux.vnet.ibm.com"
 
 
 def _transform_type(type_, trans):
@@ -82,7 +83,6 @@ TCG_2_HOST = {
 
 HOST_2_TCG_COMPAT = {
     "uint8_t": "uint32_t",
-    "uint16_t": "uint32_t",
     }
 
 

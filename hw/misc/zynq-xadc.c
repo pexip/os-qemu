@@ -14,12 +14,11 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/irq.h"
+#include "hw/hw.h"
 #include "hw/misc/zynq-xadc.h"
-#include "migration/vmstate.h"
 #include "qemu/timer.h"
+#include "sysemu/sysemu.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 
 enum {
     CFG                = 0x000 / 4,

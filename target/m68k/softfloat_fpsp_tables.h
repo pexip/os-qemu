@@ -14,8 +14,7 @@
  * the Softfloat-2a license unless specifically indicated otherwise.
  */
 
-/*
- * Portions of this work are licensed under the terms of the GNU GPL,
+/* Portions of this work are licensed under the terms of the GNU GPL,
  * version 2 or later. See the COPYING file in the top-level directory.
  */
 

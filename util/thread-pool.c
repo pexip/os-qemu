@@ -15,6 +15,7 @@
  * GNU GPL, version 2 or (at your option) any later version.
  */
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "qemu/queue.h"
 #include "qemu/thread.h"
 #include "qemu/coroutine.h"
@@ -210,7 +211,7 @@ static void thread_pool_cancel(BlockAIOCB *acb)
 
     trace_thread_pool_cancel(elem, elem->common.opaque);
 
-    QEMU_LOCK_GUARD(&pool->lock);
+    qemu_mutex_lock(&pool->lock);
     if (elem->state == THREAD_QUEUED &&
         /* No thread has yet started working on elem. we can try to "steal"
          * the item from the worker if we can get a signal from the
@@ -225,6 +226,7 @@ static void thread_pool_cancel(BlockAIOCB *acb)
         elem->ret = -ECANCELED;
     }
 
+    qemu_mutex_unlock(&pool->lock);
 }
 
 static AioContext *thread_pool_get_aio_context(BlockAIOCB *acb)

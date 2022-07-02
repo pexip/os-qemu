@@ -34,7 +34,6 @@
 #include "migration/blocker.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qstring.h"
-#include "qemu/ctype.h"
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
 
@@ -140,16 +139,48 @@ static inline void* array_insert(array_t* array,unsigned int index,unsigned int 
     return array->pointer+index*array->item_size;
 }
 
+/* this performs a "roll", so that the element which was at index_from becomes
+ * index_to, but the order of all other elements is preserved. */
+static inline int array_roll(array_t* array,int index_to,int index_from,int count)
+{
+    char* buf;
+    char* from;
+    char* to;
+    int is;
+
+    if(!array ||
+            index_to<0 || index_to>=array->next ||
+            index_from<0 || index_from>=array->next)
+        return -1;
+
+    if(index_to==index_from)
+        return 0;
+
+    is=array->item_size;
+    from=array->pointer+index_from*is;
+    to=array->pointer+index_to*is;
+    buf=g_malloc(is*count);
+    memcpy(buf,from,is*count);
+
+    if(index_to<index_from)
+        memmove(to+is*count,to,from-to);
+    else
+        memmove(from,from+is*count,to-from);
+
+    memcpy(to,buf,is*count);
+
+    g_free(buf);
+
+    return 0;
+}
+
 static inline int array_remove_slice(array_t* array,int index, int count)
 {
     assert(index >=0);
     assert(count > 0);
     assert(index + count <= array->next);
-
-    memmove(array->pointer + index * array->item_size,
-            array->pointer + (index + count) * array->item_size,
-            (array->next - index - count) * array->item_size);
-
+    if(array_roll(array,array->next-1,index,count))
+        return -1;
     array->next -= count;
     return 0;
 }
@@ -488,31 +519,12 @@ static void set_begin_of_direntry(direntry_t* direntry, uint32_t begin)
     direntry->begin_hi = cpu_to_le16((begin >> 16) & 0xffff);
 }
 
-static bool valid_filename(const unsigned char *name)
-{
-    unsigned char c;
-    if (!strcmp((const char*)name, ".") || !strcmp((const char*)name, "..")) {
-        return false;
-    }
-    for (; (c = *name); name++) {
-        if (!((c >= '0' && c <= '9') ||
-              (c >= 'A' && c <= 'Z') ||
-              (c >= 'a' && c <= 'z') ||
-              c > 127 ||
-              strchr("$%'-_@~`!(){}^#&.+,;=[]", c) != NULL))
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
 static uint8_t to_valid_short_char(gunichar c)
 {
     c = g_unichar_toupper(c);
     if ((c >= '0' && c <= '9') ||
         (c >= 'A' && c <= 'Z') ||
-        strchr("$%'-_@~`!(){}^#&", c) != NULL) {
+        strchr("$%'-_@~`!(){}^#&", c) != 0) {
         return c;
     } else {
         return 0;
@@ -1141,6 +1153,7 @@ static int vvfat_open(BlockDriverState *bs, QDict *options, int flags,
     bool floppy;
     const char *dirname, *label;
     QemuOpts *opts;
+    Error *local_err = NULL;
     int ret;
 
 #ifdef DEBUG
@@ -1148,7 +1161,9 @@ static int vvfat_open(BlockDriverState *bs, QDict *options, int flags,
 #endif
 
     opts = qemu_opts_create(&runtime_opts, NULL, 0, &error_abort);
-    if (!qemu_opts_absorb_qdict(opts, options, errp)) {
+    qemu_opts_absorb_qdict(opts, options, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
         ret = -EINVAL;
         goto fail;
     }
@@ -1266,8 +1281,9 @@ static int vvfat_open(BlockDriverState *bs, QDict *options, int flags,
                    "The vvfat (rw) format used by node '%s' "
                    "does not support live migration",
                    bdrv_get_device_or_node_name(bs));
-        ret = migrate_add_blocker(s->migration_blocker, errp);
-        if (ret < 0) {
+        ret = migrate_add_blocker(s->migration_blocker, &local_err);
+        if (local_err) {
+            error_propagate(errp, local_err);
             error_free(s->migration_blocker);
             goto fail;
         }
@@ -1352,8 +1368,7 @@ static int open_file(BDRVVVFATState* s,mapping_t* mapping)
     if(!s->current_mapping ||
             strcmp(s->current_mapping->path,mapping->path)) {
         /* open file */
-        int fd = qemu_open_old(mapping->path,
-                               O_RDONLY | O_BINARY | O_LARGEFILE);
+        int fd = qemu_open(mapping->path, O_RDONLY | O_BINARY | O_LARGEFILE);
         if(fd<0)
             return -1;
         vvfat_close_current_file(s);
@@ -1437,7 +1452,7 @@ static void print_direntry(const direntry_t* direntry)
         for(i=0;i<11;i++)
             ADD_CHAR(direntry->name[i]);
         buffer[j] = 0;
-        fprintf(stderr, "%s attributes=0x%02x begin=%u size=%u\n",
+        fprintf(stderr,"%s attributes=0x%02x begin=%d size=%d\n",
                 buffer,
                 direntry->attributes,
                 begin_of_direntry(direntry),le32_to_cpu(direntry->size));
@@ -1446,7 +1461,7 @@ static void print_direntry(const direntry_t* direntry)
 
 static void print_mapping(const mapping_t* mapping)
 {
-    fprintf(stderr, "mapping (%p): begin, end = %u, %u, dir_index = %u, "
+    fprintf(stderr, "mapping (%p): begin, end = %d, %d, dir_index = %d, "
         "first_mapping_index = %d, name = %s, mode = 0x%x, " ,
         mapping, mapping->begin, mapping->end, mapping->dir_index,
         mapping->first_mapping_index, mapping->path, mapping->mode);
@@ -1454,7 +1469,7 @@ static void print_mapping(const mapping_t* mapping)
     if (mapping->mode & MODE_DIRECTORY)
         fprintf(stderr, "parent_mapping_index = %d, first_dir_index = %d\n", mapping->info.dir.parent_mapping_index, mapping->info.dir.first_dir_index);
     else
-        fprintf(stderr, "offset = %u\n", mapping->info.file.offset);
+        fprintf(stderr, "offset = %d\n", mapping->info.file.offset);
 }
 #endif
 
@@ -1479,8 +1494,8 @@ static int vvfat_read(BlockDriverState *bs, int64_t sector_num,
                 DLOG(fprintf(stderr, "sectors %" PRId64 "+%" PRId64
                              " allocated\n", sector_num,
                              n >> BDRV_SECTOR_BITS));
-                if (bdrv_pread(s->qcow, sector_num * BDRV_SECTOR_SIZE,
-                               buf + i * 0x200, n) < 0) {
+                if (bdrv_read(s->qcow, sector_num, buf + i * 0x200,
+                              n >> BDRV_SECTOR_BITS)) {
                     return -1;
                 }
                 i += (n >> BDRV_SECTOR_BITS) - 1;
@@ -1531,8 +1546,8 @@ vvfat_co_preadv(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
     int nb_sectors = bytes >> BDRV_SECTOR_BITS;
     void *buf;
 
-    assert(QEMU_IS_ALIGNED(offset, BDRV_SECTOR_SIZE));
-    assert(QEMU_IS_ALIGNED(bytes, BDRV_SECTOR_SIZE));
+    assert((offset & (BDRV_SECTOR_SIZE - 1)) == 0);
+    assert((bytes & (BDRV_SECTOR_SIZE - 1)) == 0);
 
     buf = g_try_malloc(bytes);
     if (bytes && buf == NULL) {
@@ -1588,7 +1603,7 @@ typedef struct commit_t {
 static void clear_commits(BDRVVVFATState* s)
 {
     int i;
-DLOG(fprintf(stderr, "clear_commits (%u commits)\n", s->commits.next));
+DLOG(fprintf(stderr, "clear_commits (%d commits)\n", s->commits.next));
     for (i = 0; i < s->commits.next; i++) {
         commit_t* commit = array_get(&(s->commits), i);
         assert(commit->path || commit->action == ACTION_WRITEOUT);
@@ -1968,9 +1983,8 @@ static uint32_t get_cluster_count_for_direntry(BDRVVVFATState* s,
                         if (res) {
                             return -1;
                         }
-                        res = bdrv_pwrite(s->qcow, offset * BDRV_SECTOR_SIZE,
-                                          s->cluster_buffer, BDRV_SECTOR_SIZE);
-                        if (res < 0) {
+                        res = bdrv_write(s->qcow, offset, s->cluster_buffer, 1);
+                        if (res) {
                             return -2;
                         }
                     }
@@ -2082,10 +2096,6 @@ DLOG(fprintf(stderr, "check direntry %d:\n", i); print_direntry(direntries + i))
             }
             lfn.checksum = 0x100; /* cannot use long name twice */
 
-            if (!valid_filename(lfn.name)) {
-                fprintf(stderr, "Invalid file name\n");
-                goto fail;
-            }
             if (path_len + 1 + lfn.len >= PATH_MAX) {
                 fprintf(stderr, "Name too long: %s/%s\n", path, lfn.name);
                 goto fail;
@@ -2136,7 +2146,7 @@ DLOG(checkpoint());
      * - get modified FAT
      * - compare the two FATs (TODO)
      * - get buffer for marking used clusters
-     * - recurse direntries from root (using bs->bdrv_pread to make
+     * - recurse direntries from root (using bs->bdrv_read to make
      *    sure to get the new data)
      *   - check that the FAT agrees with the size
      *   - count the number of clusters occupied by this directory and
@@ -2514,7 +2524,7 @@ static int commit_one_file(BDRVVVFATState* s,
     for (i = s->cluster_size; i < offset; i += s->cluster_size)
         c = modified_fat_get(s, c);
 
-    fd = qemu_open_old(mapping->path, O_RDWR | O_CREAT | O_BINARY, 0666);
+    fd = qemu_open(mapping->path, O_RDWR | O_CREAT | O_BINARY, 0666);
     if (fd < 0) {
         fprintf(stderr, "Could not open %s... (%s, %d)\n", mapping->path,
                 strerror(errno), errno);
@@ -2648,9 +2658,7 @@ static int handle_renames_and_mkdirs(BDRVVVFATState* s)
     fprintf(stderr, "handle_renames\n");
     for (i = 0; i < s->commits.next; i++) {
         commit_t* commit = array_get(&(s->commits), i);
-        fprintf(stderr, "%d, %s (%u, %d)\n", i,
-                commit->path ? commit->path : "(null)",
-                commit->param.rename.cluster, commit->action);
+        fprintf(stderr, "%d, %s (%d, %d)\n", i, commit->path ? commit->path : "(null)", commit->param.rename.cluster, commit->action);
     }
 #endif
 
@@ -2903,9 +2911,9 @@ static int handle_deletes(BDRVVVFATState* s)
 /*
  * synchronize mapping with new state:
  *
- * - copy FAT (with bdrv_pread)
+ * - copy FAT (with bdrv_read)
  * - mark all filenames corresponding to mappings as deleted
- * - recurse direntries from root (using bs->bdrv_pread)
+ * - recurse direntries from root (using bs->bdrv_read)
  * - delete files corresponding to mappings marked as deleted
  */
 static int do_commit(BDRVVVFATState* s)
@@ -2925,10 +2933,10 @@ static int do_commit(BDRVVVFATState* s)
         return ret;
     }
 
-    /* copy FAT (with bdrv_pread) */
+    /* copy FAT (with bdrv_read) */
     memcpy(s->fat.pointer, s->fat2, 0x200 * s->sectors_per_fat);
 
-    /* recurse direntries from root (using bs->bdrv_pread) */
+    /* recurse direntries from root (using bs->bdrv_read) */
     ret = commit_direntries(s, 0, -1);
     if (ret) {
         fprintf(stderr, "Fatal: error while committing (%d)\n", ret);
@@ -2950,7 +2958,9 @@ static int do_commit(BDRVVVFATState* s)
         return ret;
     }
 
-    bdrv_make_empty(s->qcow, NULL);
+    if (s->qcow->bs->drv && s->qcow->bs->drv->bdrv_make_empty) {
+        s->qcow->bs->drv->bdrv_make_empty(s->qcow->bs);
+    }
 
     memset(s->used_clusters, 0, sector2cluster(s, s->sector_count));
 
@@ -3040,8 +3050,7 @@ DLOG(checkpoint());
      * Use qcow backend. Commit later.
      */
 DLOG(fprintf(stderr, "Write to qcow backend: %d + %d\n", (int)sector_num, nb_sectors));
-    ret = bdrv_pwrite(s->qcow, sector_num * BDRV_SECTOR_SIZE, buf,
-                      nb_sectors * BDRV_SECTOR_SIZE);
+    ret = bdrv_write(s->qcow, sector_num, buf, nb_sectors);
     if (ret < 0) {
         fprintf(stderr, "Error writing to qcow backend\n");
         return ret;
@@ -3070,8 +3079,8 @@ vvfat_co_pwritev(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
     int nb_sectors = bytes >> BDRV_SECTOR_BITS;
     void *buf;
 
-    assert(QEMU_IS_ALIGNED(offset, BDRV_SECTOR_SIZE));
-    assert(QEMU_IS_ALIGNED(bytes, BDRV_SECTOR_SIZE));
+    assert((offset & (BDRV_SECTOR_SIZE - 1)) == 0);
+    assert((bytes & (BDRV_SECTOR_SIZE - 1)) == 0);
 
     buf = g_try_malloc(bytes);
     if (bytes && buf == NULL) {
@@ -3112,14 +3121,20 @@ write_target_commit(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
     return ret;
 }
 
+static void write_target_close(BlockDriverState *bs) {
+    BDRVVVFATState* s = *((BDRVVVFATState**) bs->opaque);
+    bdrv_unref_child(s->bs, s->qcow);
+    g_free(s->qcow_filename);
+}
+
 static BlockDriver vvfat_write_target = {
     .format_name        = "vvfat_write_target",
     .instance_size      = sizeof(void*),
     .bdrv_co_pwritev    = write_target_commit,
+    .bdrv_close         = write_target_close,
 };
 
-static void vvfat_qcow_options(BdrvChildRole role, bool parent_is_format,
-                               int *child_flags, QDict *child_options,
+static void vvfat_qcow_options(int *child_flags, QDict *child_options,
                                int parent_flags, QDict *parent_options)
 {
     qdict_set_default_str(child_options, BDRV_OPT_READ_ONLY, "off");
@@ -3127,7 +3142,7 @@ static void vvfat_qcow_options(BdrvChildRole role, bool parent_is_format,
     qdict_set_default_str(child_options, BDRV_OPT_CACHE_NO_FLUSH, "on");
 }
 
-static const BdrvChildClass child_vvfat_qcow = {
+static const BdrvChildRole child_vvfat_qcow = {
     .parent_is_bds      = true,
     .inherit_options    = vvfat_qcow_options,
 };
@@ -3174,9 +3189,7 @@ static int enable_write_target(BlockDriverState *bs, Error **errp)
     options = qdict_new();
     qdict_put_str(options, "write-target.driver", "qcow");
     s->qcow = bdrv_open_child(s->qcow_filename, options, "write-target", bs,
-                              &child_vvfat_qcow,
-                              BDRV_CHILD_DATA | BDRV_CHILD_METADATA,
-                              false, errp);
+                              &child_vvfat_qcow, false, errp);
     qobject_unref(options);
     if (!s->qcow) {
         ret = -EINVAL;
@@ -3203,14 +3216,14 @@ err:
 }
 
 static void vvfat_child_perm(BlockDriverState *bs, BdrvChild *c,
-                             BdrvChildRole role,
+                             const BdrvChildRole *role,
                              BlockReopenQueue *reopen_queue,
                              uint64_t perm, uint64_t shared,
                              uint64_t *nperm, uint64_t *nshared)
 {
     BDRVVVFATState *s = bs->opaque;
 
-    assert(c == s->qcow || (role & BDRV_CHILD_COW));
+    assert(c == s->qcow || role == &child_backing);
 
     if (c == s->qcow) {
         /* This is a private node, nobody should try to attach to it */
@@ -3240,16 +3253,6 @@ static void vvfat_close(BlockDriverState *bs)
     }
 }
 
-static const char *const vvfat_strong_runtime_opts[] = {
-    "dir",
-    "fat-type",
-    "floppy",
-    "label",
-    "rw",
-
-    NULL
-};
-
 static BlockDriver bdrv_vvfat = {
     .format_name            = "vvfat",
     .protocol_name          = "fat",
@@ -3264,8 +3267,6 @@ static BlockDriver bdrv_vvfat = {
     .bdrv_co_preadv         = vvfat_co_preadv,
     .bdrv_co_pwritev        = vvfat_co_pwritev,
     .bdrv_co_block_status   = vvfat_co_block_status,
-
-    .strong_runtime_opts    = vvfat_strong_runtime_opts,
 };
 
 static void bdrv_vvfat_init(void)

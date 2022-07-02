@@ -27,11 +27,7 @@ tb_lookup__cpu_state(CPUState *cpu, target_ulong *pc, target_ulong *cs_base,
 
     cpu_get_tb_cpu_state(env, pc, cs_base, flags);
     hash = tb_jmp_cache_hash_func(*pc);
-    tb = qatomic_rcu_read(&cpu->tb_jmp_cache[hash]);
-
-    cf_mask &= ~CF_CLUSTER_MASK;
-    cf_mask |= cpu->cluster_index << CF_CLUSTER_SHIFT;
-
+    tb = atomic_rcu_read(&cpu->tb_jmp_cache[hash]);
     if (likely(tb &&
                tb->pc == *pc &&
                tb->cs_base == *cs_base &&
@@ -44,7 +40,7 @@ tb_lookup__cpu_state(CPUState *cpu, target_ulong *pc, target_ulong *cs_base,
     if (tb == NULL) {
         return NULL;
     }
-    qatomic_set(&cpu->tb_jmp_cache[hash], tb);
+    atomic_set(&cpu->tb_jmp_cache[hash], tb);
     return tb;
 }
 

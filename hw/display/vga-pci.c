@@ -23,18 +23,14 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/pci/pci.h"
-#include "hw/qdev-properties.h"
-#include "migration/vmstate.h"
 #include "vga_int.h"
 #include "ui/pixel_ops.h"
-#include "qemu/module.h"
 #include "qemu/timer.h"
 #include "hw/loader.h"
 #include "hw/display/edid.h"
-#include "qom/object.h"
 
 enum vga_pci_flags {
     PCI_VGA_FLAG_ENABLE_MMIO = 1,
@@ -42,7 +38,7 @@ enum vga_pci_flags {
     PCI_VGA_FLAG_ENABLE_EDID = 3,
 };
 
-struct PCIVGAState {
+typedef struct PCIVGAState {
     PCIDevice dev;
     VGACommonState vga;
     uint32_t flags;
@@ -50,10 +46,10 @@ struct PCIVGAState {
     MemoryRegion mmio;
     MemoryRegion mrs[4];
     uint8_t edid[256];
-};
+} PCIVGAState;
 
 #define TYPE_PCI_VGA "pci-vga"
-OBJECT_DECLARE_SIMPLE_TYPE(PCIVGAState, PCI_VGA)
+#define PCI_VGA(obj) OBJECT_CHECK(PCIVGAState, (obj), TYPE_PCI_VGA)
 
 static const VMStateDescription vmstate_vga_pci = {
     .name = "vga",
@@ -250,8 +246,8 @@ static void pci_std_vga_realize(PCIDevice *dev, Error **errp)
 
     /* mmio bar for vga register access */
     if (d->flags & (1 << PCI_VGA_FLAG_ENABLE_MMIO)) {
-        memory_region_init_io(&d->mmio, OBJECT(dev), &unassigned_io_ops, NULL,
-                              "vga.mmio", PCI_VGA_MMIO_SIZE);
+        memory_region_init(&d->mmio, NULL, "vga.mmio",
+                           PCI_VGA_MMIO_SIZE);
 
         if (d->flags & (1 << PCI_VGA_FLAG_ENABLE_QEXT)) {
             qext = true;
@@ -265,6 +261,18 @@ static void pci_std_vga_realize(PCIDevice *dev, Error **errp)
 
         pci_register_bar(&d->dev, 2, PCI_BASE_ADDRESS_SPACE_MEMORY, &d->mmio);
     }
+
+    if (!dev->rom_bar) {
+        /* compatibility with pc-0.13 and older */
+        vga_init_vbe(s, OBJECT(dev), pci_address_space(dev));
+    }
+}
+
+static void pci_std_vga_init(Object *obj)
+{
+    /* Expose framebuffer byteorder via QOM */
+    object_property_add_bool(obj, "big-endian-framebuffer",
+                             vga_get_big_endian_fb, vga_set_big_endian_fb, NULL);
 }
 
 static void pci_secondary_vga_realize(PCIDevice *dev, Error **errp)
@@ -279,8 +287,8 @@ static void pci_secondary_vga_realize(PCIDevice *dev, Error **errp)
     s->con = graphic_console_init(DEVICE(dev), 0, s->hw_ops, s);
 
     /* mmio bar */
-    memory_region_init_io(&d->mmio, OBJECT(dev), &unassigned_io_ops, NULL,
-                          "vga.mmio", PCI_VGA_MMIO_SIZE);
+    memory_region_init(&d->mmio, OBJECT(dev), "vga.mmio",
+                       PCI_VGA_MMIO_SIZE);
 
     if (d->flags & (1 << PCI_VGA_FLAG_ENABLE_QEXT)) {
         qext = true;
@@ -315,7 +323,7 @@ static void pci_secondary_vga_init(Object *obj)
 {
     /* Expose framebuffer byteorder via QOM */
     object_property_add_bool(obj, "big-endian-framebuffer",
-                             vga_get_big_endian_fb, vga_set_big_endian_fb);
+                             vga_get_big_endian_fb, vga_set_big_endian_fb, NULL);
 }
 
 static void pci_secondary_vga_reset(DeviceState *dev)
@@ -330,7 +338,7 @@ static Property vga_pci_properties[] = {
     DEFINE_PROP_BIT("qemu-extended-regs",
                     PCIVGAState, flags, PCI_VGA_FLAG_ENABLE_QEXT, true),
     DEFINE_PROP_BIT("edid",
-                    PCIVGAState, flags, PCI_VGA_FLAG_ENABLE_EDID, true),
+                    PCIVGAState, flags, PCI_VGA_FLAG_ENABLE_EDID, false),
     DEFINE_EDID_PROPERTIES(PCIVGAState, edid_info),
     DEFINE_PROP_BOOL("global-vmstate", PCIVGAState, vga.global_vmstate, false),
     DEFINE_PROP_END_OF_LIST(),
@@ -341,7 +349,7 @@ static Property secondary_pci_properties[] = {
     DEFINE_PROP_BIT("qemu-extended-regs",
                     PCIVGAState, flags, PCI_VGA_FLAG_ENABLE_QEXT, true),
     DEFINE_PROP_BIT("edid",
-                    PCIVGAState, flags, PCI_VGA_FLAG_ENABLE_EDID, true),
+                    PCIVGAState, flags, PCI_VGA_FLAG_ENABLE_EDID, false),
     DEFINE_EDID_PROPERTIES(PCIVGAState, edid_info),
     DEFINE_PROP_END_OF_LIST(),
 };
@@ -377,12 +385,8 @@ static void vga_class_init(ObjectClass *klass, void *data)
     k->realize = pci_std_vga_realize;
     k->romfile = "vgabios-stdvga.bin";
     k->class_id = PCI_CLASS_DISPLAY_VGA;
-    device_class_set_props(dc, vga_pci_properties);
+    dc->props = vga_pci_properties;
     dc->hotpluggable = false;
-
-    /* Expose framebuffer byteorder via QOM */
-    object_class_property_add_bool(klass, "big-endian-framebuffer",
-                                   vga_get_big_endian_fb, vga_set_big_endian_fb);
 }
 
 static void secondary_class_init(ObjectClass *klass, void *data)
@@ -393,13 +397,14 @@ static void secondary_class_init(ObjectClass *klass, void *data)
     k->realize = pci_secondary_vga_realize;
     k->exit = pci_secondary_vga_exit;
     k->class_id = PCI_CLASS_DISPLAY_OTHER;
-    device_class_set_props(dc, secondary_pci_properties);
+    dc->props = secondary_pci_properties;
     dc->reset = pci_secondary_vga_reset;
 }
 
 static const TypeInfo vga_info = {
     .name          = "VGA",
     .parent        = TYPE_PCI_VGA,
+    .instance_init = pci_std_vga_init,
     .class_init    = vga_class_init,
 };
 

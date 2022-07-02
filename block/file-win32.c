@@ -176,7 +176,7 @@ int qemu_ftruncate64(int fd, int64_t length)
     BOOL res;
 
     if ((GetVersion() & 0x80000000UL) && (length >> 32) != 0)
-        return -1;
+	return -1;
 
     h = (HANDLE)_get_osfhandle(fd);
 
@@ -184,13 +184,13 @@ int qemu_ftruncate64(int fd, int64_t length)
     li.HighPart = 0;
     li.LowPart = SetFilePointer (h, 0, &li.HighPart, FILE_CURRENT);
     if (li.LowPart == INVALID_SET_FILE_POINTER && GetLastError() != NO_ERROR) {
-        return -1;
+	return -1;
     }
 
     high = length >> 32;
     dw = SetFilePointer(h, (DWORD) length, &high, FILE_BEGIN);
     if (dw == INVALID_SET_FILE_POINTER && GetLastError() != NO_ERROR) {
-        return -1;
+	return -1;
     }
     res = SetEndOfFile(h);
 
@@ -203,7 +203,7 @@ static int set_sparse(int fd)
 {
     DWORD returned;
     return (int) DeviceIoControl((HANDLE)_get_osfhandle(fd), FSCTL_SET_SPARSE,
-                                 NULL, 0, NULL, 0, &returned, NULL);
+				 NULL, 0, NULL, 0, &returned, NULL);
 }
 
 static void raw_detach_aio_context(BlockDriverState *bs)
@@ -299,11 +299,6 @@ static QemuOptsList raw_runtime_opts = {
             .type = QEMU_OPT_STRING,
             .help = "host AIO implementation (threads, native)",
         },
-        {
-            .name = "locking",
-            .type = QEMU_OPT_STRING,
-            .help = "file locking mode (on/off/auto, default: auto)",
-        },
         { /* end of list */ }
     },
 };
@@ -338,35 +333,22 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
     Error *local_err = NULL;
     const char *filename;
     bool use_aio;
-    OnOffAuto locking;
     int ret;
 
     s->type = FTYPE_FILE;
 
     opts = qemu_opts_create(&raw_runtime_opts, NULL, 0, &error_abort);
-    if (!qemu_opts_absorb_qdict(opts, options, errp)) {
-        ret = -EINVAL;
-        goto fail;
-    }
-
-    locking = qapi_enum_parse(&OnOffAuto_lookup,
-                              qemu_opt_get(opts, "locking"),
-                              ON_OFF_AUTO_AUTO, &local_err);
+    qemu_opts_absorb_qdict(opts, options, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         ret = -EINVAL;
         goto fail;
     }
-    switch (locking) {
-    case ON_OFF_AUTO_ON:
+
+    if (qdict_get_try_bool(options, "locking", false)) {
         error_setg(errp, "locking=on is not supported on Windows");
         ret = -EINVAL;
         goto fail;
-    case ON_OFF_AUTO_OFF:
-    case ON_OFF_AUTO_AUTO:
-        break;
-    default:
-        g_assert_not_reached();
     }
 
     filename = qemu_opt_get(opts, "filename");
@@ -425,9 +407,6 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
 
         win32_aio_attach_aio_context(s->aio, bdrv_get_aio_context(bs));
     }
-
-    /* When extending regular files, we get zeros from the OS */
-    bs->supported_truncate_flags = BDRV_REQ_ZERO_WRITE;
 
     ret = 0;
 fail:
@@ -489,8 +468,7 @@ static void raw_close(BlockDriverState *bs)
 }
 
 static int coroutine_fn raw_co_truncate(BlockDriverState *bs, int64_t offset,
-                                        bool exact, PreallocMode prealloc,
-                                        BdrvRequestFlags flags, Error **errp)
+                                        PreallocMode prealloc, Error **errp)
 {
     BDRVRawState *s = bs->opaque;
     LONG low, high;
@@ -596,9 +574,10 @@ static int raw_co_create(BlockdevCreateOptions *options, Error **errp)
         return -EINVAL;
     }
 
-    fd = qemu_create(file_opts->filename, O_WRONLY | O_TRUNC | O_BINARY,
-                     0644, errp);
+    fd = qemu_open(file_opts->filename, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY,
+                   0644);
     if (fd < 0) {
+        error_setg_errno(errp, errno, "Could not create file");
         return -EIO;
     }
     set_sparse(fd);
@@ -608,9 +587,7 @@ static int raw_co_create(BlockdevCreateOptions *options, Error **errp)
     return 0;
 }
 
-static int coroutine_fn raw_co_create_opts(BlockDriver *drv,
-                                           const char *filename,
-                                           QemuOpts *opts,
+static int coroutine_fn raw_co_create_opts(const char *filename, QemuOpts *opts,
                                            Error **errp)
 {
     BlockdevCreateOptions options;
@@ -756,7 +733,9 @@ static int hdev_open(BlockDriverState *bs, QDict *options, int flags,
 
     QemuOpts *opts = qemu_opts_create(&raw_runtime_opts, NULL, 0,
                                       &error_abort);
-    if (!qemu_opts_absorb_qdict(opts, options, errp)) {
+    qemu_opts_absorb_qdict(opts, options, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
         ret = -EINVAL;
         goto done;
     }

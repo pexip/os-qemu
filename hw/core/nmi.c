@@ -23,7 +23,6 @@
 #include "hw/nmi.h"
 #include "qapi/error.h"
 #include "qapi/qmp/qerror.h"
-#include "qemu/module.h"
 #include "monitor/monitor.h"
 
 struct do_nmi_s {

@@ -71,9 +71,10 @@ struct sigframe {
 };
 
 struct target_ucontext {
-    abi_ulong tuc_flags;
-    abi_ulong tuc_link;
+    target_ulong tuc_flags;
+    target_ulong tuc_link;
     target_stack_t tuc_stack;
+    target_ulong pad0;
     struct target_sigcontext tuc_mcontext;
     target_sigset_t tuc_sigmask;
 };

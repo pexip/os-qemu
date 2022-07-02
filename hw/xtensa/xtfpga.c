@@ -32,7 +32,6 @@
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "hw/loader.h"
-#include "hw/qdev-properties.h"
 #include "elf.h"
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
@@ -42,14 +41,10 @@
 #include "hw/block/flash.h"
 #include "chardev/char.h"
 #include "sysemu/device_tree.h"
-#include "sysemu/reset.h"
-#include "sysemu/runstate.h"
 #include "qemu/error-report.h"
 #include "qemu/option.h"
 #include "bootparam.h"
 #include "xtensa_memory.h"
-#include "hw/xtensa/mx_pic.h"
-#include "migration/vmstate.h"
 
 typedef struct XtfpgaFlashDesc {
     hwaddr base;
@@ -66,7 +61,6 @@ typedef struct XtfpgaBoardDesc {
 
 typedef struct XtfpgaFpgaState {
     MemoryRegion iomem;
-    uint32_t freq;
     uint32_t leds;
     uint32_t switches;
 } XtfpgaFpgaState;
@@ -89,7 +83,7 @@ static uint64_t xtfpga_fpga_read(void *opaque, hwaddr addr,
         return 0x09272011;
 
     case 0x4: /*processor clock frequency, Hz*/
-        return s->freq;
+        return 10000000;
 
     case 0x8: /*LEDs (off = 0, on = 1)*/
         return s->leds;
@@ -125,14 +119,13 @@ static const MemoryRegionOps xtfpga_fpga_ops = {
 };
 
 static XtfpgaFpgaState *xtfpga_fpga_init(MemoryRegion *address_space,
-                                         hwaddr base, uint32_t freq)
+        hwaddr base)
 {
     XtfpgaFpgaState *s = g_malloc(sizeof(XtfpgaFpgaState));
 
     memory_region_init_io(&s->iomem, NULL, &xtfpga_fpga_ops, s,
-                          "xtfpga.fpga", 0x10000);
+            "xtfpga.fpga", 0x10000);
     memory_region_add_subregion(address_space, base, &s->iomem);
-    s->freq = freq;
     xtfpga_fpga_reset(s);
     qemu_register_reset(xtfpga_fpga_reset, s);
     return s;
@@ -148,11 +141,11 @@ static void xtfpga_net_init(MemoryRegion *address_space,
     SysBusDevice *s;
     MemoryRegion *ram;
 
-    dev = qdev_new("open_eth");
+    dev = qdev_create(NULL, "open_eth");
     qdev_set_nic_properties(dev, nd);
+    qdev_init_nofail(dev);
 
     s = SYS_BUS_DEVICE(dev);
-    sysbus_realize_and_unref(s, &error_fatal);
     sysbus_connect_irq(s, 0, irq);
     memory_region_add_subregion(address_space, base,
             sysbus_mmio_get_region(s, 0));
@@ -166,25 +159,26 @@ static void xtfpga_net_init(MemoryRegion *address_space,
     memory_region_add_subregion(address_space, buffers, ram);
 }
 
-static PFlashCFI01 *xtfpga_flash_init(MemoryRegion *address_space,
-                                      const XtfpgaBoardDesc *board,
-                                      DriveInfo *dinfo, int be)
+static pflash_t *xtfpga_flash_init(MemoryRegion *address_space,
+                                   const XtfpgaBoardDesc *board,
+                                   DriveInfo *dinfo, int be)
 {
     SysBusDevice *s;
-    DeviceState *dev = qdev_new(TYPE_PFLASH_CFI01);
+    DeviceState *dev = qdev_create(NULL, "cfi.pflash01");
 
-    qdev_prop_set_drive(dev, "drive", blk_by_legacy_dinfo(dinfo));
+    qdev_prop_set_drive(dev, "drive", blk_by_legacy_dinfo(dinfo),
+                        &error_abort);
     qdev_prop_set_uint32(dev, "num-blocks",
                          board->flash->size / board->flash->sector_size);
     qdev_prop_set_uint64(dev, "sector-length", board->flash->sector_size);
     qdev_prop_set_uint8(dev, "width", 2);
     qdev_prop_set_bit(dev, "big-endian", be);
     qdev_prop_set_string(dev, "name", "xtfpga.io.flash");
+    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
-    sysbus_realize_and_unref(s, &error_fatal);
     memory_region_add_subregion(address_space, board->flash->base,
                                 sysbus_mmio_get_region(s, 0));
-    return PFLASH_CFI01(dev);
+    return OBJECT_CHECK(pflash_t, (dev), "cfi.pflash01");
 }
 
 static uint64_t translate_phys_addr(void *opaque, uint64_t addr)
@@ -229,55 +223,26 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
     XtensaCPU *cpu = NULL;
     CPUXtensaState *env = NULL;
     MemoryRegion *system_io;
-    XtensaMxPic *mx_pic = NULL;
-    qemu_irq *extints;
     DriveInfo *dinfo;
-    PFlashCFI01 *flash = NULL;
+    pflash_t *flash = NULL;
     QemuOpts *machine_opts = qemu_get_machine_opts();
     const char *kernel_filename = qemu_opt_get(machine_opts, "kernel");
     const char *kernel_cmdline = qemu_opt_get(machine_opts, "append");
     const char *dtb_filename = qemu_opt_get(machine_opts, "dtb");
     const char *initrd_filename = qemu_opt_get(machine_opts, "initrd");
     const unsigned system_io_size = 224 * MiB;
-    uint32_t freq = 10000000;
     int n;
-    unsigned int smp_cpus = machine->smp.cpus;
 
-    if (smp_cpus > 1) {
-        mx_pic = xtensa_mx_pic_init(31);
-        qemu_register_reset(xtensa_mx_pic_reset, mx_pic);
-    }
     for (n = 0; n < smp_cpus; n++) {
-        CPUXtensaState *cenv = NULL;
-
         cpu = XTENSA_CPU(cpu_create(machine->cpu_type));
-        cenv = &cpu->env;
-        if (!env) {
-            env = cenv;
-            freq = env->config->clock_freq_khz * 1000;
-        }
+        env = &cpu->env;
 
-        if (mx_pic) {
-            MemoryRegion *mx_eri;
-
-            mx_eri = xtensa_mx_pic_register_cpu(mx_pic,
-                                                xtensa_get_extints(cenv),
-                                                xtensa_get_runstall(cenv));
-            memory_region_add_subregion(xtensa_get_er_region(cenv),
-                                        0, mx_eri);
-        }
-        cenv->sregs[PRID] = n;
-        xtensa_select_static_vectors(cenv, n != 0);
+        env->sregs[PRID] = n;
         qemu_register_reset(xtfpga_reset, cpu);
         /* Need MMU initialized prior to ELF loading,
          * so that ELF gets loaded into virtual addresses
          */
         cpu_reset(CPU(cpu));
-    }
-    if (smp_cpus > 1) {
-        extints = xtensa_mx_pic_get_extints(mx_pic);
-    } else {
-        extints = xtensa_get_extints(env);
     }
 
     if (env) {
@@ -307,14 +272,14 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
                                  system_io, 0, system_io_size);
         memory_region_add_subregion(system_memory, board->io[1], io);
     }
-    xtfpga_fpga_init(system_io, 0x0d020000, freq);
+    xtfpga_fpga_init(system_io, 0x0d020000);
     if (nd_table[0].used) {
         xtfpga_net_init(system_io, 0x0d030000, 0x0d030400, 0x0d800000,
-                        extints[1], nd_table);
+                xtensa_get_extint(env, 1), nd_table);
     }
 
-    serial_mm_init(system_io, 0x0d050020, 2, extints[0],
-                   115200, serial_hd(0), DEVICE_NATIVE_ENDIAN);
+    serial_mm_init(system_io, 0x0d050020, 2, xtensa_get_extint(env, 0),
+            115200, serial_hd(0), DEVICE_NATIVE_ENDIAN);
 
     dinfo = drive_get(IF_PFLASH, 0, 0);
     if (dinfo) {
@@ -379,7 +344,6 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
             cur_tagptr = put_tag(cur_tagptr, BP_TAG_FDT,
                                  sizeof(dtb_addr), &dtb_addr);
             cur_lowmem = QEMU_ALIGN_UP(cur_lowmem + fdt_size, 4 * KiB);
-            g_free(fdt);
         }
 #else
         if (dtb_filename) {
@@ -413,8 +377,9 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
         env->regs[2] = tagptr;
 
         uint64_t elf_entry;
-        int success = load_elf(kernel_filename, NULL, translate_phys_addr, cpu,
-                &elf_entry, NULL, NULL, NULL, be, EM_XTENSA, 0, 0);
+        uint64_t elf_lowaddr;
+        int success = load_elf(kernel_filename, translate_phys_addr, cpu,
+                &elf_entry, &elf_lowaddr, NULL, be, EM_XTENSA, 0, 0);
         if (success > 0) {
             entry_point = elf_entry;
         } else {
@@ -603,7 +568,7 @@ static void xtfpga_lx60_class_init(ObjectClass *oc, void *data)
 
     mc->desc = "lx60 EVB (" XTENSA_DEFAULT_CPU_MODEL ")";
     mc->init = xtfpga_lx60_init;
-    mc->max_cpus = 32;
+    mc->max_cpus = 4;
     mc->default_cpu_type = XTENSA_DEFAULT_CPU_TYPE;
     mc->default_ram_size = 64 * MiB;
 }
@@ -620,7 +585,7 @@ static void xtfpga_lx60_nommu_class_init(ObjectClass *oc, void *data)
 
     mc->desc = "lx60 noMMU EVB (" XTENSA_DEFAULT_CPU_NOMMU_MODEL ")";
     mc->init = xtfpga_lx60_nommu_init;
-    mc->max_cpus = 32;
+    mc->max_cpus = 4;
     mc->default_cpu_type = XTENSA_DEFAULT_CPU_NOMMU_TYPE;
     mc->default_ram_size = 64 * MiB;
 }
@@ -637,7 +602,7 @@ static void xtfpga_lx200_class_init(ObjectClass *oc, void *data)
 
     mc->desc = "lx200 EVB (" XTENSA_DEFAULT_CPU_MODEL ")";
     mc->init = xtfpga_lx200_init;
-    mc->max_cpus = 32;
+    mc->max_cpus = 4;
     mc->default_cpu_type = XTENSA_DEFAULT_CPU_TYPE;
     mc->default_ram_size = 96 * MiB;
 }
@@ -654,7 +619,7 @@ static void xtfpga_lx200_nommu_class_init(ObjectClass *oc, void *data)
 
     mc->desc = "lx200 noMMU EVB (" XTENSA_DEFAULT_CPU_NOMMU_MODEL ")";
     mc->init = xtfpga_lx200_nommu_init;
-    mc->max_cpus = 32;
+    mc->max_cpus = 4;
     mc->default_cpu_type = XTENSA_DEFAULT_CPU_NOMMU_TYPE;
     mc->default_ram_size = 96 * MiB;
 }
@@ -671,7 +636,7 @@ static void xtfpga_ml605_class_init(ObjectClass *oc, void *data)
 
     mc->desc = "ml605 EVB (" XTENSA_DEFAULT_CPU_MODEL ")";
     mc->init = xtfpga_ml605_init;
-    mc->max_cpus = 32;
+    mc->max_cpus = 4;
     mc->default_cpu_type = XTENSA_DEFAULT_CPU_TYPE;
     mc->default_ram_size = 512 * MiB - XTFPGA_MMU_RESERVED_MEMORY_SIZE;
 }
@@ -688,7 +653,7 @@ static void xtfpga_ml605_nommu_class_init(ObjectClass *oc, void *data)
 
     mc->desc = "ml605 noMMU EVB (" XTENSA_DEFAULT_CPU_NOMMU_MODEL ")";
     mc->init = xtfpga_ml605_nommu_init;
-    mc->max_cpus = 32;
+    mc->max_cpus = 4;
     mc->default_cpu_type = XTENSA_DEFAULT_CPU_NOMMU_TYPE;
     mc->default_ram_size = 256 * MiB;
 }
@@ -705,7 +670,7 @@ static void xtfpga_kc705_class_init(ObjectClass *oc, void *data)
 
     mc->desc = "kc705 EVB (" XTENSA_DEFAULT_CPU_MODEL ")";
     mc->init = xtfpga_kc705_init;
-    mc->max_cpus = 32;
+    mc->max_cpus = 4;
     mc->default_cpu_type = XTENSA_DEFAULT_CPU_TYPE;
     mc->default_ram_size = 1 * GiB - XTFPGA_MMU_RESERVED_MEMORY_SIZE;
 }
@@ -722,7 +687,7 @@ static void xtfpga_kc705_nommu_class_init(ObjectClass *oc, void *data)
 
     mc->desc = "kc705 noMMU EVB (" XTENSA_DEFAULT_CPU_NOMMU_MODEL ")";
     mc->init = xtfpga_kc705_nommu_init;
-    mc->max_cpus = 32;
+    mc->max_cpus = 4;
     mc->default_cpu_type = XTENSA_DEFAULT_CPU_NOMMU_TYPE;
     mc->default_ram_size = 256 * MiB;
 }

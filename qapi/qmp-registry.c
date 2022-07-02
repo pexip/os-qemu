@@ -20,9 +20,6 @@ void qmp_register_command(QmpCommandList *cmds, const char *name,
 {
     QmpCommand *cmd = g_malloc0(sizeof(*cmd));
 
-    /* QCO_COROUTINE and QCO_ALLOW_OOB are incompatible for now */
-    assert(!((options & QCO_COROUTINE) && (options & QCO_ALLOW_OOB)));
-
     cmd->name = name;
     cmd->fn = fn;
     cmd->enabled = true;
@@ -30,7 +27,15 @@ void qmp_register_command(QmpCommandList *cmds, const char *name,
     QTAILQ_INSERT_TAIL(cmds, cmd, node);
 }
 
-const QmpCommand *qmp_find_command(const QmpCommandList *cmds, const char *name)
+void qmp_unregister_command(QmpCommandList *cmds, const char *name)
+{
+    QmpCommand *cmd = qmp_find_command(cmds, name);
+
+    QTAILQ_REMOVE(cmds, cmd, node);
+    g_free(cmd);
+}
+
+QmpCommand *qmp_find_command(QmpCommandList *cmds, const char *name)
 {
     QmpCommand *cmd;
 
@@ -80,10 +85,10 @@ bool qmp_has_success_response(const QmpCommand *cmd)
     return !(cmd->options & QCO_NO_SUCCESS_RESP);
 }
 
-void qmp_for_each_command(const QmpCommandList *cmds, qmp_cmd_callback_fn fn,
+void qmp_for_each_command(QmpCommandList *cmds, qmp_cmd_callback_fn fn,
                           void *opaque)
 {
-    const QmpCommand *cmd;
+    QmpCommand *cmd;
 
     QTAILQ_FOREACH(cmd, cmds, node) {
         fn(cmd, opaque);

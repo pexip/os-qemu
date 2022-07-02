@@ -29,7 +29,9 @@
 */
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qemu-common.h"
 #include "cpu.h"
+#include "hw/hw.h"
 #include "hw/sh4/sh.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/qtest.h"
@@ -53,7 +55,8 @@ static void shix_init(MachineState *machine)
     cpu = SUPERH_CPU(cpu_create(machine->cpu_type));
 
     /* Allocate memory space */
-    memory_region_init_rom(rom, NULL, "shix.rom", 0x4000, &error_fatal);
+    memory_region_init_ram(rom, NULL, "shix.rom", 0x4000, &error_fatal);
+    memory_region_set_readonly(rom, true);
     memory_region_add_subregion(sysmem, 0x00000000, rom);
     memory_region_init_ram(&sdram[0], NULL, "shix.sdram1", 0x01000000,
                            &error_fatal);
@@ -81,7 +84,7 @@ static void shix_machine_init(MachineClass *mc)
 {
     mc->desc = "shix card";
     mc->init = shix_init;
-    mc->is_default = true;
+    mc->is_default = 1;
     mc->default_cpu_type = TYPE_SH7750R_CPU;
 }
 

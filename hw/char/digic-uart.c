@@ -27,14 +27,12 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
 #include "chardev/char-fe.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 
 #include "hw/char/digic-uart.h"
-#include "hw/qdev-properties.h"
 
 enum {
     ST_RX_RDY = (1 << 0),
@@ -131,7 +129,7 @@ static void uart_rx(void *opaque, const uint8_t *buf, int size)
     s->reg_rx = *buf;
 }
 
-static void uart_event(void *opaque, QEMUChrEvent event)
+static void uart_event(void *opaque, int event)
 {
 }
 
@@ -183,7 +181,7 @@ static void digic_uart_class_init(ObjectClass *klass, void *data)
     dc->realize = digic_uart_realize;
     dc->reset = digic_uart_reset;
     dc->vmsd = &vmstate_digic_uart;
-    device_class_set_props(dc, digic_uart_properties);
+    dc->props = digic_uart_properties;
 }
 
 static const TypeInfo digic_uart_info = {

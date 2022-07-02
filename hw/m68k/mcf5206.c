@@ -5,17 +5,15 @@
  *
  * This code is licensed under the GPL
  */
-
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
-#include "qemu/log.h"
+#include "qemu-common.h"
 #include "cpu.h"
-#include "hw/irq.h"
+#include "hw/hw.h"
 #include "hw/m68k/mcf.h"
 #include "qemu/timer.h"
 #include "hw/ptimer.h"
 #include "sysemu/sysemu.h"
-#include "hw/sysbus.h"
 
 /* General purpose timer module.  */
 typedef struct {
@@ -57,28 +55,20 @@ static void m5206_timer_recalibrate(m5206_timer_state *s)
     int prescale;
     int mode;
 
-    ptimer_transaction_begin(s->timer);
     ptimer_stop(s->timer);
 
-    if ((s->tmr & TMR_RST) == 0) {
-        goto exit;
-    }
+    if ((s->tmr & TMR_RST) == 0)
+        return;
 
     prescale = (s->tmr >> 8) + 1;
     mode = (s->tmr >> 1) & 3;
     if (mode == 2)
         prescale *= 16;
 
-    if (mode == 3 || mode == 0) {
-        qemu_log_mask(LOG_UNIMP, "m5206_timer: mode %d not implemented\n",
-                      mode);
-        goto exit;
-    }
-    if ((s->tmr & TMR_FRR) == 0) {
-        qemu_log_mask(LOG_UNIMP,
-                      "m5206_timer: free running mode not implemented\n");
-        goto exit;
-    }
+    if (mode == 3 || mode == 0)
+        hw_error("m5206_timer: mode %d not implemented\n", mode);
+    if ((s->tmr & TMR_FRR) == 0)
+        hw_error("m5206_timer: free running mode not implemented\n");
 
     /* Assume 66MHz system clock.  */
     ptimer_set_freq(s->timer, 66000000 / prescale);
@@ -86,8 +76,6 @@ static void m5206_timer_recalibrate(m5206_timer_state *s)
     ptimer_set_limit(s->timer, s->trr, 0);
 
     ptimer_run(s->timer, 0);
-exit:
-    ptimer_transaction_commit(s->timer);
 }
 
 static void m5206_timer_trigger(void *opaque)
@@ -133,9 +121,7 @@ static void m5206_timer_write(m5206_timer_state *s, uint32_t addr, uint32_t val)
         s->tcr = val;
         break;
     case 0xc:
-        ptimer_transaction_begin(s->timer);
         ptimer_set_count(s->timer, val);
-        ptimer_transaction_commit(s->timer);
         break;
     case 0x11:
         s->ter &= ~val;
@@ -149,9 +135,11 @@ static void m5206_timer_write(m5206_timer_state *s, uint32_t addr, uint32_t val)
 static m5206_timer_state *m5206_timer_init(qemu_irq irq)
 {
     m5206_timer_state *s;
+    QEMUBH *bh;
 
     s = g_new0(m5206_timer_state, 1);
-    s->timer = ptimer_init(m5206_timer_trigger, s, PTIMER_POLICY_DEFAULT);
+    bh = qemu_bh_new(m5206_timer_trigger, s);
+    s->timer = ptimer_init(bh, PTIMER_POLICY_DEFAULT);
     s->irq = irq;
     m5206_timer_reset(s);
     return s;
@@ -160,8 +148,6 @@ static m5206_timer_state *m5206_timer_init(qemu_irq irq)
 /* System Integration Module.  */
 
 typedef struct {
-    SysBusDevice parent_obj;
-
     M68kCPU *cpu;
     MemoryRegion iomem;
     m5206_timer_state *timer[2];
@@ -176,8 +162,6 @@ typedef struct {
     /* Include the UART vector registers here.  */
     uint8_t uivr[2];
 } m5206_mbar_state;
-
-#define MCF5206_MBAR(obj) OBJECT_CHECK(m5206_mbar_state, (obj), TYPE_MCF5206_MBAR)
 
 /* Interrupt controller.  */
 
@@ -236,8 +220,7 @@ static void m5206_mbar_update(m5206_mbar_state *s)
                 break;
             default:
                 /* Unknown vector.  */
-                qemu_log_mask(LOG_UNIMP, "%s: Unhandled vector for IRQ %d\n",
-                              __func__, irq);
+                error_report("Unhandled vector for IRQ %d", irq);
                 vector = 0xf;
                 break;
             }
@@ -262,10 +245,8 @@ static void m5206_mbar_set_irq(void *opaque, int irq, int level)
 
 /* System Integration Module.  */
 
-static void m5206_mbar_reset(DeviceState *dev)
+static void m5206_mbar_reset(m5206_mbar_state *s)
 {
-    m5206_mbar_state *s = MCF5206_MBAR(dev);
-
     s->scr = 0xc0;
     s->icr[1] = 0x04;
     s->icr[2] = 0x08;
@@ -287,7 +268,7 @@ static void m5206_mbar_reset(DeviceState *dev)
 }
 
 static uint64_t m5206_mbar_read(m5206_mbar_state *s,
-                                uint16_t offset, unsigned size)
+                                uint64_t offset, unsigned size)
 {
     if (offset >= 0x100 && offset < 0x120) {
         return m5206_timer_read(s->timer[0], offset - 0x100);
@@ -320,12 +301,11 @@ static uint64_t m5206_mbar_read(m5206_mbar_state *s,
     case 0x170: return s->uivr[0];
     case 0x1b0: return s->uivr[1];
     }
-    qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad MBAR offset 0x%"PRIx16"\n",
-                  __func__, offset);
+    hw_error("Bad MBAR read offset 0x%x", (int)offset);
     return 0;
 }
 
-static void m5206_mbar_write(m5206_mbar_state *s, uint16_t offset,
+static void m5206_mbar_write(m5206_mbar_state *s, uint32_t offset,
                              uint64_t value, unsigned size)
 {
     if (offset >= 0x100 && offset < 0x120) {
@@ -375,8 +355,7 @@ static void m5206_mbar_write(m5206_mbar_state *s, uint16_t offset,
         s->uivr[1] = value;
         break;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad MBAR offset 0x%"PRIx16"\n",
-                      __func__, offset);
+        hw_error("Bad MBAR write offset 0x%x", (int)offset);
         break;
     }
 }
@@ -403,9 +382,7 @@ static uint32_t m5206_mbar_readb(void *opaque, hwaddr offset)
     m5206_mbar_state *s = (m5206_mbar_state *)opaque;
     offset &= 0x3ff;
     if (offset >= 0x200) {
-        qemu_log_mask(LOG_GUEST_ERROR, "Bad MBAR read offset 0x%" HWADDR_PRIX,
-                      offset);
-        return 0;
+        hw_error("Bad MBAR read offset 0x%x", (int)offset);
     }
     if (m5206_mbar_width[offset >> 2] > 1) {
         uint16_t val;
@@ -424,9 +401,7 @@ static uint32_t m5206_mbar_readw(void *opaque, hwaddr offset)
     int width;
     offset &= 0x3ff;
     if (offset >= 0x200) {
-        qemu_log_mask(LOG_GUEST_ERROR, "Bad MBAR read offset 0x%" HWADDR_PRIX,
-                      offset);
-        return 0;
+        hw_error("Bad MBAR read offset 0x%x", (int)offset);
     }
     width = m5206_mbar_width[offset >> 2];
     if (width > 2) {
@@ -450,9 +425,7 @@ static uint32_t m5206_mbar_readl(void *opaque, hwaddr offset)
     int width;
     offset &= 0x3ff;
     if (offset >= 0x200) {
-        qemu_log_mask(LOG_GUEST_ERROR, "Bad MBAR read offset 0x%" HWADDR_PRIX,
-                      offset);
-        return 0;
+        hw_error("Bad MBAR read offset 0x%x", (int)offset);
     }
     width = m5206_mbar_width[offset >> 2];
     if (width < 4) {
@@ -476,9 +449,7 @@ static void m5206_mbar_writeb(void *opaque, hwaddr offset,
     int width;
     offset &= 0x3ff;
     if (offset >= 0x200) {
-        qemu_log_mask(LOG_GUEST_ERROR, "Bad MBAR write offset 0x%" HWADDR_PRIX,
-                      offset);
-        return;
+        hw_error("Bad MBAR write offset 0x%x", (int)offset);
     }
     width = m5206_mbar_width[offset >> 2];
     if (width > 1) {
@@ -502,9 +473,7 @@ static void m5206_mbar_writew(void *opaque, hwaddr offset,
     int width;
     offset &= 0x3ff;
     if (offset >= 0x200) {
-        qemu_log_mask(LOG_GUEST_ERROR, "Bad MBAR write offset 0x%" HWADDR_PRIX,
-                      offset);
-        return;
+        hw_error("Bad MBAR write offset 0x%x", (int)offset);
     }
     width = m5206_mbar_width[offset >> 2];
     if (width > 2) {
@@ -532,9 +501,7 @@ static void m5206_mbar_writel(void *opaque, hwaddr offset,
     int width;
     offset &= 0x3ff;
     if (offset >= 0x200) {
-        qemu_log_mask(LOG_GUEST_ERROR, "Bad MBAR write offset 0x%" HWADDR_PRIX,
-                      offset);
-        return;
+        hw_error("Bad MBAR write offset 0x%x", (int)offset);
     }
     width = m5206_mbar_width[offset >> 2];
     if (width < 4) {
@@ -585,43 +552,24 @@ static const MemoryRegionOps m5206_mbar_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void mcf5206_mbar_realize(DeviceState *dev, Error **errp)
+qemu_irq *mcf5206_init(MemoryRegion *sysmem, uint32_t base, M68kCPU *cpu)
 {
-    m5206_mbar_state *s = MCF5206_MBAR(dev);
+    m5206_mbar_state *s;
     qemu_irq *pic;
+
+    s = g_new0(m5206_mbar_state, 1);
 
     memory_region_init_io(&s->iomem, NULL, &m5206_mbar_ops, s,
                           "mbar", 0x00001000);
-    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
+    memory_region_add_subregion(sysmem, base, &s->iomem);
 
     pic = qemu_allocate_irqs(m5206_mbar_set_irq, s, 14);
     s->timer[0] = m5206_timer_init(pic[9]);
     s->timer[1] = m5206_timer_init(pic[10]);
     s->uart[0] = mcf_uart_init(pic[12], serial_hd(0));
     s->uart[1] = mcf_uart_init(pic[13], serial_hd(1));
-    s->cpu = M68K_CPU(qemu_get_cpu(0));
+    s->cpu = cpu;
+
+    m5206_mbar_reset(s);
+    return pic;
 }
-
-static void mcf5206_mbar_class_init(ObjectClass *oc, void *data)
-{
-    DeviceClass *dc = DEVICE_CLASS(oc);
-
-    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
-    dc->desc = "MCF5206 system integration module";
-    dc->realize = mcf5206_mbar_realize;
-    dc->reset = m5206_mbar_reset;
-}
-
-static const TypeInfo mcf5206_mbar_info = {
-    .name          = TYPE_MCF5206_MBAR,
-    .parent        = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(m5206_mbar_state),
-    .class_init    = mcf5206_mbar_class_init,
-};
-
-static void mcf5206_mbar_register_types(void)
-{
-    type_register_static(&mcf5206_mbar_info);
-}
-
-type_init(mcf5206_mbar_register_types)

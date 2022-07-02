@@ -20,13 +20,16 @@
 #ifndef QEMU_LM32_CPU_QOM_H
 #define QEMU_LM32_CPU_QOM_H
 
-#include "hw/core/cpu.h"
-#include "qom/object.h"
+#include "qom/cpu.h"
 
 #define TYPE_LM32_CPU "lm32-cpu"
 
-OBJECT_DECLARE_TYPE(LM32CPU, LM32CPUClass,
-                    LM32_CPU)
+#define LM32_CPU_CLASS(klass) \
+    OBJECT_CLASS_CHECK(LM32CPUClass, (klass), TYPE_LM32_CPU)
+#define LM32_CPU(obj) \
+    OBJECT_CHECK(LM32CPU, (obj), TYPE_LM32_CPU)
+#define LM32_CPU_GET_CLASS(obj) \
+    OBJECT_GET_CLASS(LM32CPUClass, (obj), TYPE_LM32_CPU)
 
 /**
  * LM32CPUClass:
@@ -35,14 +38,15 @@ OBJECT_DECLARE_TYPE(LM32CPU, LM32CPUClass,
  *
  * A LatticeMico32 CPU model.
  */
-struct LM32CPUClass {
+typedef struct LM32CPUClass {
     /*< private >*/
     CPUClass parent_class;
     /*< public >*/
 
     DeviceRealize parent_realize;
-    DeviceReset parent_reset;
-};
+    void (*parent_reset)(CPUState *cpu);
+} LM32CPUClass;
 
+typedef struct LM32CPU LM32CPU;
 
 #endif

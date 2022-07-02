@@ -8,7 +8,6 @@
 #include "fsdev/9p-iov-marshal.h"
 #include "qemu/thread.h"
 #include "qemu/coroutine.h"
-#include "qemu/qht.h"
 
 enum {
     P9_TLERROR = 6,
@@ -100,17 +99,6 @@ typedef enum P9ProtoVersion {
     V9FS_PROTO_2000L = 0x02,
 } P9ProtoVersion;
 
-/**
- * @brief Minimum message size supported by this 9pfs server.
- *
- * A client establishes a session by sending a Tversion request along with a
- * 'msize' parameter which suggests the server a maximum message size ever to be
- * used for communication (for both requests and replies) between client and
- * server during that session. If client suggests a 'msize' smaller than this
- * value then session is denied by server with an error response.
- */
-#define P9_MIN_MSIZE    4096
-
 #define P9_NOTAG    UINT16_MAX
 #define P9_NOFID    UINT32_MAX
 #define P9_MAXWELEM 16
@@ -143,7 +131,8 @@ typedef struct {
  */
 QEMU_BUILD_BUG_ON(sizeof(P9MsgHeader) != 7);
 
-struct V9fsPDU {
+struct V9fsPDU
+{
     uint32_t size;
     uint16_t tag;
     uint8_t id;
@@ -196,62 +185,23 @@ typedef struct V9fsXattr
 
 typedef struct V9fsDir {
     DIR *stream;
-    P9ProtoVersion proto_version;
-    /* readdir mutex type used for 9P2000.u protocol variant */
-    CoMutex readdir_mutex_u;
-    /* readdir mutex type used for 9P2000.L protocol variant */
-    QemuMutex readdir_mutex_L;
+    QemuMutex readdir_mutex;
 } V9fsDir;
 
 static inline void v9fs_readdir_lock(V9fsDir *dir)
 {
-    if (dir->proto_version == V9FS_PROTO_2000U) {
-        qemu_co_mutex_lock(&dir->readdir_mutex_u);
-    } else {
-        qemu_mutex_lock(&dir->readdir_mutex_L);
-    }
+    qemu_mutex_lock(&dir->readdir_mutex);
 }
 
 static inline void v9fs_readdir_unlock(V9fsDir *dir)
 {
-    if (dir->proto_version == V9FS_PROTO_2000U) {
-        qemu_co_mutex_unlock(&dir->readdir_mutex_u);
-    } else {
-        qemu_mutex_unlock(&dir->readdir_mutex_L);
-    }
+    qemu_mutex_unlock(&dir->readdir_mutex);
 }
 
-static inline void v9fs_readdir_init(P9ProtoVersion proto_version, V9fsDir *dir)
+static inline void v9fs_readdir_init(V9fsDir *dir)
 {
-    dir->proto_version = proto_version;
-    if (proto_version == V9FS_PROTO_2000U) {
-        qemu_co_mutex_init(&dir->readdir_mutex_u);
-    } else {
-        qemu_mutex_init(&dir->readdir_mutex_L);
-    }
+    qemu_mutex_init(&dir->readdir_mutex);
 }
-
-/**
- * Type for 9p fs drivers' (a.k.a. 9p backends) result of readdir requests,
- * which is a chained list of directory entries.
- */
-typedef struct V9fsDirEnt {
-    /* mandatory (must not be NULL) information for all readdir requests */
-    struct dirent *dent;
-    /*
-     * optional (may be NULL): A full stat of each directory entry is just
-     * done if explicitly told to fs driver.
-     */
-    struct stat *st;
-    /*
-     * instead of an array, directory entries are always returned as
-     * chained list, that's because the amount of entries retrieved by fs
-     * drivers is dependent on the individual entries' name (since response
-     * messages are size limited), so the final amount cannot be estimated
-     * before hand
-     */
-    struct V9fsDirEnt *next;
-} V9fsDirEnt;
 
 /*
  * Filled by fs driver on open and other
@@ -269,7 +219,8 @@ union V9fsFidOpenState {
     void *private;
 };
 
-struct V9fsFidState {
+struct V9fsFidState
+{
     int fid_type;
     int32_t fid;
     V9fsPath path;
@@ -284,59 +235,8 @@ struct V9fsFidState {
     V9fsFidState *rclm_lst;
 };
 
-typedef enum AffixType_t {
-    AffixType_Prefix,
-    AffixType_Suffix, /* A.k.a. postfix. */
-} AffixType_t;
-
-/**
- * @brief Unique affix of variable length.
- *
- * An affix is (currently) either a suffix or a prefix, which is either
- * going to be prepended (prefix) or appended (suffix) with some other
- * number for the goal to generate unique numbers. Accordingly the
- * suffixes (or prefixes) we generate @b must all have the mathematical
- * property of being suffix-free (or prefix-free in case of prefixes)
- * so that no matter what number we concatenate the affix with, that we
- * always reliably get unique numbers as result after concatenation.
- */
-typedef struct VariLenAffix {
-    AffixType_t type; /* Whether this affix is a suffix or a prefix. */
-    uint64_t value; /* Actual numerical value of this affix. */
-    /*
-     * Lenght of the affix, that is how many (of the lowest) bits of @c value
-     * must be used for appending/prepending this affix to its final resulting,
-     * unique number.
-     */
-    int bits;
-} VariLenAffix;
-
-/* See qid_inode_prefix_hash_bits(). */
-typedef struct {
-    dev_t dev; /* FS device on host. */
-    /*
-     * How many (high) bits of the original inode number shall be used for
-     * hashing.
-     */
-    int prefix_bits;
-} QpdEntry;
-
-/* QID path prefix entry, see stat_to_qid */
-typedef struct {
-    dev_t dev;
-    uint16_t ino_prefix;
-    uint32_t qp_affix_index;
-    VariLenAffix qp_affix;
-} QppEntry;
-
-/* QID path full entry, as above */
-typedef struct {
-    dev_t dev;
-    ino_t ino;
-    uint64_t path;
-} QpfEntry;
-
-struct V9fsState {
+struct V9fsState
+{
     QLIST_HEAD(, V9fsPDU) free_list;
     QLIST_HEAD(, V9fsPDU) active_list;
     V9fsFidState *fid_list;
@@ -356,13 +256,6 @@ struct V9fsState {
     Error *migration_blocker;
     V9fsConf fsconf;
     V9fsQID root_qid;
-    dev_t dev_id;
-    struct qht qpd_table;
-    struct qht qpp_table;
-    struct qht qpf_table;
-    uint64_t qp_ndevices; /* Amount of entries in qpd_table. */
-    uint16_t qp_affix_next;
-    uint64_t qp_fullpath_next;
 };
 
 /* 9p2000.L open flags */
@@ -455,12 +348,11 @@ void v9fs_path_init(V9fsPath *path);
 void v9fs_path_free(V9fsPath *path);
 void v9fs_path_sprintf(V9fsPath *path, const char *fmt, ...);
 void v9fs_path_copy(V9fsPath *dst, const V9fsPath *src);
-size_t v9fs_readdir_response_size(V9fsString *name);
 int v9fs_name_to_path(V9fsState *s, V9fsPath *dirpath,
                       const char *name, V9fsPath *path);
 int v9fs_device_realize_common(V9fsState *s, const V9fsTransport *t,
                                Error **errp);
-void v9fs_device_unrealize_common(V9fsState *s);
+void v9fs_device_unrealize_common(V9fsState *s, Error **errp);
 
 V9fsPDU *pdu_alloc(V9fsState *s);
 void pdu_free(V9fsPDU *pdu);

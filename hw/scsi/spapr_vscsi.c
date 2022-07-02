@@ -31,22 +31,20 @@
  *  - Add indirect descriptors support
  *  - Maybe do autosense (PAPR seems to mandate it, linux doesn't care)
  */
-
 #include "qemu/osdep.h"
-#include "qemu/module.h"
+#include "qemu-common.h"
 #include "cpu.h"
+#include "hw/hw.h"
 #include "hw/scsi/scsi.h"
-#include "migration/vmstate.h"
 #include "scsi/constants.h"
 #include "srp.h"
+#include "hw/qdev.h"
 #include "hw/ppc/spapr.h"
 #include "hw/ppc/spapr_vio.h"
-#include "hw/qdev-properties.h"
 #include "viosrp.h"
 #include "trace.h"
 
 #include <libfdt.h>
-#include "qom/object.h"
 
 /*
  * Virtual SCSI device
@@ -56,8 +54,6 @@
 #define VSCSI_MAX_SECTORS       4096
 #define VSCSI_REQ_LIMIT         24
 
-/* Maximum size of a IU payload */
-#define SRP_MAX_IU_DATA_LEN     (SRP_MAX_IU_LEN - sizeof(union srp_iu))
 #define SRP_RSP_SENSE_DATA_LEN  18
 
 #define SRP_REPORT_LUNS_WLUN    0xc10100000000000ULL
@@ -69,7 +65,7 @@ typedef union vscsi_crq {
 
 typedef struct vscsi_req {
     vscsi_crq               crq;
-    uint8_t                 viosrp_iu_buf[SRP_MAX_IU_LEN];
+    union viosrp_iu         iu;
 
     /* SCSI request tracking */
     SCSIRequest             *sreq;
@@ -91,18 +87,14 @@ typedef struct vscsi_req {
 } vscsi_req;
 
 #define TYPE_VIO_SPAPR_VSCSI_DEVICE "spapr-vscsi"
-OBJECT_DECLARE_SIMPLE_TYPE(VSCSIState, VIO_SPAPR_VSCSI_DEVICE)
+#define VIO_SPAPR_VSCSI_DEVICE(obj) \
+     OBJECT_CHECK(VSCSIState, (obj), TYPE_VIO_SPAPR_VSCSI_DEVICE)
 
-struct VSCSIState {
-    SpaprVioDevice vdev;
+typedef struct {
+    VIOsPAPRDevice vdev;
     SCSIBus bus;
     vscsi_req reqs[VSCSI_REQ_LIMIT];
-};
-
-static union viosrp_iu *req_iu(vscsi_req *req)
-{
-    return (union viosrp_iu *)req->viosrp_iu_buf;
-}
+} VSCSIState;
 
 static struct vscsi_req *vscsi_get_req(VSCSIState *s)
 {
@@ -128,7 +120,7 @@ static struct vscsi_req *vscsi_find_req(VSCSIState *s, uint64_t srp_tag)
 
     for (i = 0; i < VSCSI_REQ_LIMIT; i++) {
         req = &s->reqs[i];
-        if (req_iu(req)->srp.cmd.tag == srp_tag) {
+        if (req->iu.srp.cmd.tag == srp_tag) {
             return req;
         }
     }
@@ -183,11 +175,9 @@ static int vscsi_send_iu(VSCSIState *s, vscsi_req *req,
 {
     long rc, rc1;
 
-    assert(length <= SRP_MAX_IU_LEN);
-
     /* First copy the SRP */
     rc = spapr_vio_dma_write(&s->vdev, req->crq.s.IU_data_ptr,
-                             &req->viosrp_iu_buf, length);
+                             &req->iu, length);
     if (rc) {
         fprintf(stderr, "vscsi_send_iu: DMA write failure !\n");
     }
@@ -197,7 +187,7 @@ static int vscsi_send_iu(VSCSIState *s, vscsi_req *req,
     req->crq.s.reserved = 0x00;
     req->crq.s.timeout = cpu_to_be16(0x0000);
     req->crq.s.IU_length = cpu_to_be16(length);
-    req->crq.s.IU_data_ptr = req_iu(req)->srp.rsp.tag; /* right byte order */
+    req->crq.s.IU_data_ptr = req->iu.srp.rsp.tag; /* right byte order */
 
     if (rc == 0) {
         req->crq.s.status = VIOSRP_OK;
@@ -233,7 +223,7 @@ static void vscsi_makeup_sense(VSCSIState *s, vscsi_req *req,
 static int vscsi_send_rsp(VSCSIState *s, vscsi_req *req,
                           uint8_t status, int32_t res_in, int32_t res_out)
 {
-    union viosrp_iu *iu = req_iu(req);
+    union viosrp_iu *iu = &req->iu;
     uint64_t tag = iu->srp.rsp.tag;
     int total_len = sizeof(iu->srp.rsp);
     uint8_t sol_not = iu->srp.cmd.sol_not;
@@ -270,12 +260,10 @@ static int vscsi_send_rsp(VSCSIState *s, vscsi_req *req,
     if (status) {
         iu->srp.rsp.sol_not = (sol_not & 0x04) >> 2;
         if (req->senselen) {
-            int sense_data_len = MIN(req->senselen, SRP_MAX_IU_DATA_LEN);
-
-            iu->srp.rsp.flags |= SRP_RSP_FLAG_SNSVALID;
-            iu->srp.rsp.sense_data_len = cpu_to_be32(sense_data_len);
-            memcpy(iu->srp.rsp.data, req->sense, sense_data_len);
-            total_len += sense_data_len;
+            req->iu.srp.rsp.flags |= SRP_RSP_FLAG_SNSVALID;
+            req->iu.srp.rsp.sense_data_len = cpu_to_be32(req->senselen);
+            memcpy(req->iu.srp.rsp.data, req->sense, req->senselen);
+            total_len += req->senselen;
         }
     } else {
         iu->srp.rsp.sol_not = (sol_not & 0x02) >> 1;
@@ -296,7 +284,7 @@ static int vscsi_fetch_desc(VSCSIState *s, struct vscsi_req *req,
                             unsigned n, unsigned buf_offset,
                             struct srp_direct_buf *ret)
 {
-    struct srp_cmd *cmd = &req_iu(req)->srp.cmd;
+    struct srp_cmd *cmd = &req->iu.srp.cmd;
 
     switch (req->dma_fmt) {
     case SRP_NO_DATA_DESC: {
@@ -484,7 +472,7 @@ static int data_out_desc_size(struct srp_cmd *cmd)
 
 static int vscsi_preprocess_desc(vscsi_req *req)
 {
-    struct srp_cmd *cmd = &req_iu(req)->srp.cmd;
+    struct srp_cmd *cmd = &req->iu.srp.cmd;
 
     req->cdb_offset = cmd->add_cdb_len & ~3;
 
@@ -608,7 +596,7 @@ static const VMStateDescription vmstate_spapr_vscsi_req = {
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
         VMSTATE_BUFFER(crq.raw, vscsi_req),
-        VMSTATE_BUFFER(viosrp_iu_buf, vscsi_req),
+        VMSTATE_BUFFER(iu.srp.reserved, vscsi_req),
         VMSTATE_UINT32(qtag, vscsi_req),
         VMSTATE_BOOL(active, vscsi_req),
         VMSTATE_UINT32(data_len, vscsi_req),
@@ -666,7 +654,7 @@ static void *vscsi_load_request(QEMUFile *f, SCSIRequest *sreq)
 
 static void vscsi_process_login(VSCSIState *s, vscsi_req *req)
 {
-    union viosrp_iu *iu = req_iu(req);
+    union viosrp_iu *iu = &req->iu;
     struct srp_login_rsp *rsp = &iu->srp.login_rsp;
     uint64_t tag = iu->srp.rsp.tag;
 
@@ -682,8 +670,8 @@ static void vscsi_process_login(VSCSIState *s, vscsi_req *req)
      */
     rsp->req_lim_delta = cpu_to_be32(VSCSI_REQ_LIMIT-2);
     rsp->tag = tag;
-    rsp->max_it_iu_len = cpu_to_be32(SRP_MAX_IU_LEN);
-    rsp->max_ti_iu_len = cpu_to_be32(SRP_MAX_IU_LEN);
+    rsp->max_it_iu_len = cpu_to_be32(sizeof(union srp_iu));
+    rsp->max_ti_iu_len = cpu_to_be32(sizeof(union srp_iu));
     /* direct and indirect */
     rsp->buf_fmt = cpu_to_be16(SRP_BUF_FORMAT_DIRECT | SRP_BUF_FORMAT_INDIRECT);
 
@@ -692,7 +680,7 @@ static void vscsi_process_login(VSCSIState *s, vscsi_req *req)
 
 static void vscsi_inquiry_no_target(VSCSIState *s, vscsi_req *req)
 {
-    uint8_t *cdb = req_iu(req)->srp.cmd.cdb;
+    uint8_t *cdb = req->iu.srp.cmd.cdb;
     uint8_t resp_data[36];
     int rc, len, alen;
 
@@ -781,7 +769,7 @@ static void vscsi_report_luns(VSCSIState *s, vscsi_req *req)
 
 static int vscsi_queue_cmd(VSCSIState *s, vscsi_req *req)
 {
-    union srp_iu *srp = &req_iu(req)->srp;
+    union srp_iu *srp = &req->iu.srp;
     SCSIDevice *sdev;
     int n, lun;
 
@@ -832,16 +820,17 @@ static int vscsi_queue_cmd(VSCSIState *s, vscsi_req *req)
 
 static int vscsi_process_tsk_mgmt(VSCSIState *s, vscsi_req *req)
 {
-    union viosrp_iu *iu = req_iu(req);
+    union viosrp_iu *iu = &req->iu;
     vscsi_req *tmpreq;
     int i, lun = 0, resp = SRP_TSK_MGMT_COMPLETE;
     SCSIDevice *d;
     uint64_t tag = iu->srp.rsp.tag;
     uint8_t sol_not = iu->srp.cmd.sol_not;
 
-    trace_spapr_vscsi_process_tsk_mgmt(iu->srp.tsk_mgmt.tsk_mgmt_func);
-    d = vscsi_device_find(&s->bus,
-                          be64_to_cpu(req_iu(req)->srp.tsk_mgmt.lun), &lun);
+    fprintf(stderr, "vscsi_process_tsk_mgmt %02x\n",
+            iu->srp.tsk_mgmt.tsk_mgmt_func);
+
+    d = vscsi_device_find(&s->bus, be64_to_cpu(req->iu.srp.tsk_mgmt.lun), &lun);
     if (!d) {
         resp = SRP_TSK_MGMT_FIELDS_INVALID;
     } else {
@@ -852,7 +841,7 @@ static int vscsi_process_tsk_mgmt(VSCSIState *s, vscsi_req *req)
                 break;
             }
 
-            tmpreq = vscsi_find_req(s, req_iu(req)->srp.tsk_mgmt.task_tag);
+            tmpreq = vscsi_find_req(s, req->iu.srp.tsk_mgmt.task_tag);
             if (tmpreq && tmpreq->sreq) {
                 assert(tmpreq->sreq->hba_private);
                 scsi_req_cancel(tmpreq->sreq);
@@ -877,8 +866,7 @@ static int vscsi_process_tsk_mgmt(VSCSIState *s, vscsi_req *req)
 
             for (i = 0; i < VSCSI_REQ_LIMIT; i++) {
                 tmpreq = &s->reqs[i];
-                if (req_iu(tmpreq)->srp.cmd.lun
-                        != req_iu(req)->srp.tsk_mgmt.lun) {
+                if (tmpreq->iu.srp.cmd.lun != req->iu.srp.tsk_mgmt.lun) {
                     continue;
                 }
                 if (!tmpreq->active || !tmpreq->sreq) {
@@ -900,7 +888,6 @@ static int vscsi_process_tsk_mgmt(VSCSIState *s, vscsi_req *req)
     }
 
     /* Compose the response here as  */
-    QEMU_BUILD_BUG_ON(SRP_MAX_IU_DATA_LEN < 4);
     memset(iu, 0, sizeof(struct srp_rsp) + 4);
     iu->srp.rsp.opcode = SRP_RSP;
     iu->srp.rsp.req_lim_delta = cpu_to_be32(1);
@@ -923,7 +910,7 @@ static int vscsi_process_tsk_mgmt(VSCSIState *s, vscsi_req *req)
 
 static int vscsi_handle_srp_req(VSCSIState *s, vscsi_req *req)
 {
-    union srp_iu *srp = &req_iu(req)->srp;
+    union srp_iu *srp = &req->iu.srp;
     int done = 1;
     uint8_t opcode = srp->rsp.opcode;
 
@@ -960,7 +947,7 @@ static int vscsi_send_adapter_info(VSCSIState *s, vscsi_req *req)
     struct mad_adapter_info_data info;
     int rc;
 
-    sinfo = &req_iu(req)->mad.adapter_info;
+    sinfo = &req->iu.mad.adapter_info;
 
 #if 0 /* What for ? */
     rc = spapr_vio_dma_read(&s->vdev, be64_to_cpu(sinfo->buffer),
@@ -996,7 +983,7 @@ static int vscsi_send_capabilities(VSCSIState *s, vscsi_req *req)
     uint64_t buffer;
     int rc;
 
-    vcap = &req_iu(req)->mad.capabilities;
+    vcap = &req->iu.mad.capabilities;
     req_len = len = be16_to_cpu(vcap->common.length);
     buffer = be64_to_cpu(vcap->buffer);
     if (len > sizeof(cap)) {
@@ -1041,7 +1028,7 @@ static int vscsi_send_capabilities(VSCSIState *s, vscsi_req *req)
 
 static int vscsi_handle_mad_req(VSCSIState *s, vscsi_req *req)
 {
-    union mad_iu *mad = &req_iu(req)->mad;
+    union mad_iu *mad = &req->iu.mad;
     bool request_handled = false;
     uint64_t retlen = 0;
 
@@ -1100,7 +1087,7 @@ static void vscsi_got_payload(VSCSIState *s, vscsi_crq *crq)
      * in our 256 bytes IUs. If not we'll have to increase the size
      * of the structure.
      */
-    if (crq->s.IU_length > SRP_MAX_IU_LEN) {
+    if (crq->s.IU_length > sizeof(union viosrp_iu)) {
         fprintf(stderr, "VSCSI: SRP IU too long (%d bytes) !\n",
                 crq->s.IU_length);
         vscsi_put_req(req);
@@ -1108,7 +1095,7 @@ static void vscsi_got_payload(VSCSIState *s, vscsi_crq *crq)
     }
 
     /* XXX Handle failure differently ? */
-    if (spapr_vio_dma_read(&s->vdev, crq->s.IU_data_ptr, &req->viosrp_iu_buf,
+    if (spapr_vio_dma_read(&s->vdev, crq->s.IU_data_ptr, &req->iu,
                            crq->s.IU_length)) {
         fprintf(stderr, "vscsi_got_payload: DMA read failure !\n");
         vscsi_put_req(req);
@@ -1128,7 +1115,7 @@ static void vscsi_got_payload(VSCSIState *s, vscsi_crq *crq)
 }
 
 
-static int vscsi_do_crq(struct SpaprVioDevice *dev, uint8_t *crq_data)
+static int vscsi_do_crq(struct VIOsPAPRDevice *dev, uint8_t *crq_data)
 {
     VSCSIState *s = VIO_SPAPR_VSCSI_DEVICE(dev);
     vscsi_crq crq;
@@ -1200,7 +1187,7 @@ static const struct SCSIBusInfo vscsi_scsi_info = {
     .load_request = vscsi_load_request,
 };
 
-static void spapr_vscsi_reset(SpaprVioDevice *dev)
+static void spapr_vscsi_reset(VIOsPAPRDevice *dev)
 {
     VSCSIState *s = VIO_SPAPR_VSCSI_DEVICE(dev);
     int i;
@@ -1211,7 +1198,7 @@ static void spapr_vscsi_reset(SpaprVioDevice *dev)
     }
 }
 
-static void spapr_vscsi_realize(SpaprVioDevice *dev, Error **errp)
+static void spapr_vscsi_realize(VIOsPAPRDevice *dev, Error **errp)
 {
     VSCSIState *s = VIO_SPAPR_VSCSI_DEVICE(dev);
 
@@ -1219,22 +1206,19 @@ static void spapr_vscsi_realize(SpaprVioDevice *dev, Error **errp)
 
     scsi_bus_new(&s->bus, sizeof(s->bus), DEVICE(dev),
                  &vscsi_scsi_info, NULL);
-
-    /* ibmvscsi SCSI bus does not allow hotplug. */
-    qbus_set_hotplug_handler(BUS(&s->bus), NULL);
 }
 
-void spapr_vscsi_create(SpaprVioBus *bus)
+void spapr_vscsi_create(VIOsPAPRBus *bus)
 {
     DeviceState *dev;
 
-    dev = qdev_new("spapr-vscsi");
+    dev = qdev_create(&bus->bus, "spapr-vscsi");
 
-    qdev_realize_and_unref(dev, &bus->bus, &error_fatal);
+    qdev_init_nofail(dev);
     scsi_bus_legacy_handle_cmdline(&VIO_SPAPR_VSCSI_DEVICE(dev)->bus);
 }
 
-static int spapr_vscsi_devnode(SpaprVioDevice *dev, void *fdt, int node_off)
+static int spapr_vscsi_devnode(VIOsPAPRDevice *dev, void *fdt, int node_off)
 {
     int ret;
 
@@ -1272,7 +1256,7 @@ static const VMStateDescription vmstate_spapr_vscsi = {
 static void spapr_vscsi_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    SpaprVioDeviceClass *k = VIO_SPAPR_DEVICE_CLASS(klass);
+    VIOsPAPRDeviceClass *k = VIO_SPAPR_DEVICE_CLASS(klass);
 
     k->realize = spapr_vscsi_realize;
     k->reset = spapr_vscsi_reset;
@@ -1282,7 +1266,7 @@ static void spapr_vscsi_class_init(ObjectClass *klass, void *data)
     k->dt_compatible = "IBM,v-scsi";
     k->signal_mask = 0x00000001;
     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
-    device_class_set_props(dc, spapr_vscsi_properties);
+    dc->props = spapr_vscsi_properties;
     k->rtce_window_size = 0x10000000;
     dc->vmsd = &vmstate_spapr_vscsi;
 }

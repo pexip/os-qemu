@@ -3,14 +3,14 @@ ENTRY(_start)
 SECTIONS
 {
     . = 0x100000;
-    .text : AT(ADDR(.text)) {
+    .text : {
         *(multiboot)
         *(.text)
     }
-    .data ALIGN(4096) : AT(ADDR(.data)) {
+    .data ALIGN(4096) : {
         *(.data)
     }
-    .rodata ALIGN(4096) : AT(ADDR(.rodata)) {
+    .rodata ALIGN(4096) : {
         *(.rodata)
     }
     .bss ALIGN(4096) : {

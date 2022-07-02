@@ -1,6 +1,3 @@
-#ifndef LINUX_USER_HPPA_SOCKBITS_H
-#define LINUX_USER_HPPA_SOCKBITS_H
-
 #define TARGET_SOL_SOCKET      0xffff
 
 #define TARGET_SO_DEBUG        0x0001
@@ -71,5 +68,3 @@
  * have to define SOCK_NONBLOCK to a different value here.
  */
 #define TARGET_SOCK_NONBLOCK   0x40000000
-
-#endif

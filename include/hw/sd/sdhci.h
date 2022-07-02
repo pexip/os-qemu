@@ -25,13 +25,13 @@
 #ifndef SDHCI_H
 #define SDHCI_H
 
+#include "qemu-common.h"
 #include "hw/pci/pci.h"
 #include "hw/sysbus.h"
 #include "hw/sd/sd.h"
-#include "qom/object.h"
 
 /* SD/MMC host controller state */
-struct SDHCIState {
+typedef struct SDHCIState {
     /*< private >*/
     union {
         PCIDevice pcidev;
@@ -75,7 +75,6 @@ struct SDHCIState {
     uint16_t acmd12errsts; /* Auto CMD12 error status register */
     uint16_t hostctl2;     /* Host Control 2 */
     uint64_t admasysaddr;  /* ADMA System Address Register */
-    uint16_t vendor_spec;  /* Vendor specific register */
 
     /* Read-only registers */
     uint64_t capareg;      /* Capabilities Register */
@@ -98,12 +97,7 @@ struct SDHCIState {
     uint32_t quirks;
     uint8_t sd_spec_version;
     uint8_t uhs_mode;
-    uint8_t vendor;        /* For vendor specific functionality */
-};
-typedef struct SDHCIState SDHCIState;
-
-#define SDHCI_VENDOR_NONE       0
-#define SDHCI_VENDOR_IMX        1
+} SDHCIState;
 
 /*
  * Controller does not provide transfer-complete interrupt when not
@@ -115,15 +109,12 @@ typedef struct SDHCIState SDHCIState;
 #define SDHCI_QUIRK_NO_BUSY_IRQ    BIT(14)
 
 #define TYPE_PCI_SDHCI "sdhci-pci"
-DECLARE_INSTANCE_CHECKER(SDHCIState, PCI_SDHCI,
-                         TYPE_PCI_SDHCI)
+#define PCI_SDHCI(obj) OBJECT_CHECK(SDHCIState, (obj), TYPE_PCI_SDHCI)
 
 #define TYPE_SYSBUS_SDHCI "generic-sdhci"
-DECLARE_INSTANCE_CHECKER(SDHCIState, SYSBUS_SDHCI,
-                         TYPE_SYSBUS_SDHCI)
+#define SYSBUS_SDHCI(obj)                               \
+     OBJECT_CHECK(SDHCIState, (obj), TYPE_SYSBUS_SDHCI)
 
 #define TYPE_IMX_USDHC "imx-usdhc"
-
-#define TYPE_S3C_SDHCI "s3c-sdhci"
 
 #endif /* SDHCI_H */

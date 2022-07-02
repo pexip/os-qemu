@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
@@ -9,7 +10,7 @@ __copyright__  = "Copyright 2012-2017, Lluís Vilanova <vilanova@ac.upc.edu>"
 __license__    = "GPL version 2 or (at your option) any later version"
 
 __maintainer__ = "Stefan Hajnoczi"
-__email__      = "stefanha@redhat.com"
+__email__      = "stefanha@linux.vnet.ibm.com"
 
 
 from tracetool import out
@@ -19,7 +20,11 @@ PUBLIC = True
 
 
 def generate_h_begin(events, group):
-    header = 'trace-ust-' + group + '.h'
+    if group == "root":
+        header = "trace-ust-root.h"
+    else:
+        header = "trace-ust.h"
+
     out('#include <lttng/tracepoint.h>',
         '#include "%s"' % header,
         '',

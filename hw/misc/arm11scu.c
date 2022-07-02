@@ -10,9 +10,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/misc/arm11scu.h"
-#include "hw/qdev-properties.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 
 static uint64_t mpcore_scu_read(void *opaque, hwaddr offset,
                                 unsigned size)
@@ -85,7 +83,7 @@ static void arm11_scu_class_init(ObjectClass *oc, void *data)
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = arm11_scu_realize;
-    device_class_set_props(dc, arm11_scu_properties);
+    dc->props = arm11_scu_properties;
 }
 
 static const TypeInfo arm11_scu_type_info = {

@@ -25,21 +25,19 @@
  * for doing work at each node of a QAPI graph; it can also be used
  * for a virtual walk, where there is no actual QAPI C struct.
  *
- * There are four kinds of visitors: input visitors (QObject, string,
- * and QemuOpts) parse an external representation and build the
- * corresponding QAPI object, output visitors (QObject and string)
- * take a QAPI object and generate an external representation, the
- * dealloc visitor takes a QAPI object (possibly partially
- * constructed) and recursively frees it, and the clone visitor
- * performs a deep clone of a QAPI object.
- *
- * While the dealloc and QObject input/output visitors are general,
- * the string, QemuOpts, and clone visitors have some implementation
- * limitations; see the documentation for each visitor for more
- * details on what it supports.  Also, see visitor-impl.h for the
- * callback contracts implemented by each visitor, and
- * docs/devel/qapi-code-gen.txt for more about the QAPI code
- * generator.
+ * There are four kinds of visitor classes: input visitors (QObject,
+ * string, and QemuOpts) parse an external representation and build
+ * the corresponding QAPI graph, output visitors (QObject and string) take
+ * a completed QAPI graph and generate an external representation, the
+ * dealloc visitor can take a QAPI graph (possibly partially
+ * constructed) and recursively free its resources, and the clone
+ * visitor performs a deep clone of one QAPI object to another.  While
+ * the dealloc and QObject input/output visitors are general, the string,
+ * QemuOpts, and clone visitors have some implementation limitations;
+ * see the documentation for each visitor for more details on what it
+ * supports.  Also, see visitor-impl.h for the callback contracts
+ * implemented by each visitor, and docs/devel/qapi-code-gen.txt for more
+ * about the QAPI code generator.
  *
  * All of the visitors are created via:
  *
@@ -47,24 +45,20 @@
  *
  * A visitor should be used for exactly one top-level visit_type_FOO()
  * or virtual walk; if that is successful, the caller can optionally
- * call visit_complete() (useful only for output visits, but safe to
- * call on all visits).  Then, regardless of success or failure, the
- * user should call visit_free() to clean up resources.  It is okay to
- * free the visitor without completing the visit, if some other error
- * is detected in the meantime.
- *
- * The clone and dealloc visitor should not be used directly outside
- * of QAPI code.  Use the qapi_free_FOO() and QAPI_CLONE() instead,
- * described below.
+ * call visit_complete() (for now, useful only for output visits, but
+ * safe to call on all visits).  Then, regardless of success or
+ * failure, the user should call visit_free() to clean up resources.
+ * It is okay to free the visitor without completing the visit, if
+ * some other error is detected in the meantime.
  *
  * All QAPI types have a corresponding function with a signature
  * roughly compatible with this:
  *
- * bool visit_type_FOO(Visitor *v, const char *name, T obj, Error **errp);
+ * void visit_type_FOO(Visitor *v, const char *name, T obj, Error **errp);
  *
  * where T is FOO for scalar types, and FOO * otherwise.  The scalar
  * visitors are declared here; the remaining visitors are generated in
- * qapi-visit-MODULE.h.
+ * qapi-visit.h.
  *
  * The @name parameter of visit_type_FOO() describes the relation
  * between this QAPI value and its parent container.  When visiting
@@ -74,58 +68,55 @@
  * alternate, @name should equal the name used for visiting the
  * alternate.
  *
- * The visit_type_FOO() functions take a non-null @obj argument; they
- * allocate *@obj during input visits, leave it unchanged during
- * output and clone visits, and free it (recursively) during a dealloc
- * visit.
- *
- * Each function also takes the customary @errp argument (see
+ * The visit_type_FOO() functions expect a non-null @obj argument;
+ * they allocate *@obj during input visits, leave it unchanged on
+ * output visits, and recursively free any resources during a dealloc
+ * visit.  Each function also takes the customary @errp argument (see
  * qapi/error.h for details), for reporting any errors (such as if a
  * member @name is not present, or is present but not the specified
- * type).  Only input visitors can fail.
+ * type).
  *
  * If an error is detected during visit_type_FOO() with an input
- * visitor, then *@obj will be set to NULL for pointer types, and left
- * unchanged for scalar types.
- *
- * Using an output or clone visitor with an incomplete object has
- * undefined behavior (other than a special case for visit_type_str()
- * treating NULL like ""), while the dealloc visitor safely handles
- * incomplete objects.  Since input visitors never produce an
- * incomplete object, such an object is possible only by manual
- * construction.
- *
- * visit_type_FOO() returns true on success, false on error.
+ * visitor, then *@obj will be NULL for pointer types, and left
+ * unchanged for scalar types.  Using an output or clone visitor with
+ * an incomplete object has undefined behavior (other than a special
+ * case for visit_type_str() treating NULL like ""), while the dealloc
+ * visitor safely handles incomplete objects.  Since input visitors
+ * never produce an incomplete object, such an object is possible only
+ * by manual construction.
  *
  * For the QAPI object types (structs, unions, and alternates), there
- * is an additional generated function in qapi-visit-MODULE.h
- * compatible with:
+ * is an additional generated function in qapi-visit.h compatible
+ * with:
  *
- * bool visit_type_FOO_members(Visitor *v, FOO *obj, Error **errp);
+ * void visit_type_FOO_members(Visitor *v, FOO *obj, Error **errp);
  *
  * for visiting the members of a type without also allocating the QAPI
- * struct.  It also returns true on success, false on error.
+ * struct.
  *
- * Additionally, QAPI pointer types (structs, unions, alternates, and
- * lists) have a generated function in qapi-types-MODULE.h compatible
+ * Additionally, in qapi-types.h, all QAPI pointer types (structs,
+ * unions, alternates, and lists) have a generated function compatible
  * with:
  *
  * void qapi_free_FOO(FOO *obj);
  *
- * Does nothing when @obj is NULL.
- *
- * Such objects may also be used with macro
+ * where behaves like free() in that @obj may be NULL.  Such objects
+ * may also be used with the following macro, provided alongside the
+ * clone visitor:
  *
  * Type *QAPI_CLONE(Type, src);
  *
- * in order to perform a deep clone of @src.
+ * in order to perform a deep clone of @src.  Because of the generated
+ * qapi_free functions and the QAPI_CLONE() macro, the clone and
+ * dealloc visitor should not be used directly outside of QAPI code.
  *
- * For QAPI types can that inherit from a base type, a function is
- * generated for going from the derived type to the base type:
+ * QAPI types can also inherit from a base class; when this happens, a
+ * function is generated for easily going from the derived type to the
+ * base type:
  *
  * BASE *qapi_CHILD_base(CHILD *obj);
  *
- * Typical input visitor usage involves:
+ * For a real QAPI struct, typical input usage involves:
  *
  * <example>
  *  Foo *f;
@@ -133,7 +124,8 @@
  *  Visitor *v;
  *
  *  v = FOO_visitor_new(...);
- *  if (!visit_type_Foo(v, NULL, &f, &err)) {
+ *  visit_type_Foo(v, NULL, &f, &err);
+ *  if (err) {
  *      ...handle error...
  *  } else {
  *      ...use f...
@@ -149,7 +141,8 @@
  *  Visitor *v;
  *
  *  v = FOO_visitor_new(...);
- *  if (!visit_type_FooList(v, NULL, &l, &err)) {
+ *  visit_type_FooList(v, NULL, &l, &err);
+ *  if (err) {
  *      ...handle error...
  *  } else {
  *      for ( ; l; l = l->next) {
@@ -160,22 +153,36 @@
  *  qapi_free_FooList(l);
  * </example>
  *
- * Typical output visitor usage:
+ * Similarly, typical output usage is:
  *
  * <example>
  *  Foo *f = ...obtain populated object...
+ *  Error *err = NULL;
  *  Visitor *v;
  *  Type *result;
  *
  *  v = FOO_visitor_new(..., &result);
- *  visit_type_Foo(v, NULL, &f, &error_abort);
- *  visit_complete(v, &result);
+ *  visit_type_Foo(v, NULL, &f, &err);
+ *  if (err) {
+ *      ...handle error...
+ *  } else {
+ *      visit_complete(v, &result);
+ *      ...use result...
+ *  }
  *  visit_free(v);
- *  ...use result...
  * </example>
  *
+ * When visiting a real QAPI struct, this file provides several
+ * helpers that rely on in-tree information to control the walk:
+ * visit_optional() for the 'has_member' field associated with
+ * optional 'member' in the C struct; and visit_next_list() for
+ * advancing through a FooList linked list.  Similarly, the
+ * visit_is_input() helper makes it possible to write code that is
+ * visitor-agnostic everywhere except for cleanup.  Only the generated
+ * visit_type functions need to use these helpers.
+ *
  * It is also possible to use the visitors to do a virtual walk, where
- * no actual QAPI object is present.  In this situation, decisions
+ * no actual QAPI struct is present.  In this situation, decisions
  * about what needs to be walked are made by the calling code, and
  * structured visits are split between pairs of start and end methods
  * (where the end method must be called if the start function
@@ -186,44 +193,38 @@
  * <example>
  *  Visitor *v;
  *  Error *err = NULL;
- *  bool ok = false;
  *  int value;
  *
  *  v = FOO_visitor_new(...);
- *  if (!visit_start_struct(v, NULL, NULL, 0, &err)) {
+ *  visit_start_struct(v, NULL, NULL, 0, &err);
+ *  if (err) {
  *      goto out;
  *  }
- *  if (!visit_start_list(v, "list", NULL, 0, &err)) {
+ *  visit_start_list(v, "list", NULL, 0, &err);
+ *  if (err) {
  *      goto outobj;
  *  }
  *  value = 1;
- *  if (!visit_type_int(v, NULL, &value, &err)) {
+ *  visit_type_int(v, NULL, &value, &err);
+ *  if (err) {
  *      goto outlist;
  *  }
  *  value = 2;
- *  if (!visit_type_int(v, NULL, &value, &err)) {
+ *  visit_type_int(v, NULL, &value, &err);
+ *  if (err) {
  *      goto outlist;
  *  }
- *  ok = true;
  * outlist:
- *  if (ok) {
- *      ok = visit_check_list(v, &err);
- *  }
  *  visit_end_list(v, NULL);
- *  if (ok) {
- *      ok = visit_check_struct(v, &err);
+ *  if (!err) {
+ *      visit_check_struct(v, &err);
  *  }
  * outobj:
  *  visit_end_struct(v, NULL);
  * out:
+ *  error_propagate(errp, err);
  *  visit_free(v);
  * </example>
- *
- * This file provides helpers for use by the generated
- * visit_type_FOO(): visit_optional() for the 'has_member' field
- * associated with optional 'member' in the C struct,
- * visit_next_list() for advancing through a FooList linked list, and
- * visit_is_input() for cleaning up on failure.
  */
 
 /*** Useful types ***/
@@ -281,10 +282,9 @@ void visit_free(Visitor *v);
  * into *@obj.  @obj may also be NULL for a virtual walk, in which
  * case @size is ignored.
  *
- * On failure, set *@obj to NULL and store an error through @errp.
- * Can happen only when @v is an input visitor.
- *
- * Return true on success, false on failure.
+ * @errp obeys typical error usage, and reports failures such as a
+ * member @name is not present, or present but not an object.  On
+ * error, input visitors set *@obj to NULL.
  *
  * After visit_start_struct() succeeds, the caller may visit its
  * members one after the other, passing the member's name and address
@@ -295,23 +295,21 @@ void visit_free(Visitor *v);
  * FIXME Should this be named visit_start_object, since it is also
  * used for QAPI unions, and maps to JSON objects?
  */
-bool visit_start_struct(Visitor *v, const char *name, void **obj,
+void visit_start_struct(Visitor *v, const char *name, void **obj,
                         size_t size, Error **errp);
 
 /*
  * Prepare for completing an object visit.
  *
- * On failure, store an error through @errp.  Can happen only when @v
- * is an input visitor.
- *
- * Return true on success, false on failure.
+ * @errp obeys typical error usage, and reports failures such as
+ * unparsed keys remaining in the input stream.
  *
  * Should be called prior to visit_end_struct() if all other
  * intermediate visit steps were successful, to allow the visitor one
  * last chance to report errors.  May be skipped on a cleanup path,
  * where there is no need to check for further errors.
  */
-bool visit_check_struct(Visitor *v, Error **errp);
+void visit_check_struct(Visitor *v, Error **errp);
 
 /*
  * Complete an object visit started earlier.
@@ -340,22 +338,21 @@ void visit_end_struct(Visitor *v, void **obj);
  * allow @list to be NULL for a virtual walk, in which case @size is
  * ignored.
  *
- * On failure, set *@list to NULL and store an error through @errp.
- * Can happen only when @v is an input visitor.
- *
- * Return true on success, false on failure.
+ * @errp obeys typical error usage, and reports failures such as a
+ * member @name is not present, or present but not a list.  On error,
+ * input visitors set *@list to NULL.
  *
  * After visit_start_list() succeeds, the caller may visit its members
- * one after the other.  A real visit (where @list is non-NULL) uses
+ * one after the other.  A real visit (where @obj is non-NULL) uses
  * visit_next_list() for traversing the linked list, while a virtual
- * visit (where @list is NULL) uses other means.  For each list
+ * visit (where @obj is NULL) uses other means.  For each list
  * element, call the appropriate visit_type_FOO() with name set to
  * NULL and obj set to the address of the value member of the list
  * element.  Finally, visit_end_list() needs to be called with the
  * same @list to clean up, even if intermediate visits fail.  See the
  * examples above.
  */
-bool visit_start_list(Visitor *v, const char *name, GenericList **list,
+void visit_start_list(Visitor *v, const char *name, GenericList **list,
                       size_t size, Error **errp);
 
 /*
@@ -367,27 +364,25 @@ bool visit_start_list(Visitor *v, const char *name, GenericList **list,
  * @tail must not be NULL; on the first call, @tail is the value of
  * *list after visit_start_list(), and on subsequent calls @tail must
  * be the previously returned value.  Should be called in a loop until
- * a NULL return; for each non-NULL return, the caller then calls the
- * appropriate visit_type_*() for the element type of the list, with
- * that function's name parameter set to NULL and obj set to the
- * address of @tail->value.
+ * a NULL return or error occurs; for each non-NULL return, the caller
+ * then calls the appropriate visit_type_*() for the element type of
+ * the list, with that function's name parameter set to NULL and obj
+ * set to the address of @tail->value.
  */
 GenericList *visit_next_list(Visitor *v, GenericList *tail, size_t size);
 
 /*
  * Prepare for completing a list visit.
  *
- * On failure, store an error through @errp.  Can happen only when @v
- * is an input visitor.
- *
- * Return true on success, false on failure.
+ * @errp obeys typical error usage, and reports failures such as
+ * unvisited list tail remaining in the input stream.
  *
  * Should be called prior to visit_end_list() if all other
  * intermediate visit steps were successful, to allow the visitor one
  * last chance to report errors.  May be skipped on a cleanup path,
  * where there is no need to check for further errors.
  */
-bool visit_check_list(Visitor *v, Error **errp);
+void visit_check_list(Visitor *v, Error **errp);
 
 /*
  * Complete a list visit started earlier.
@@ -412,19 +407,14 @@ void visit_end_list(Visitor *v, void **list);
  *
  * @obj must not be NULL. Input and clone visitors use @size to
  * determine how much memory to allocate into *@obj, then determine
- * the qtype of the next thing to be visited, and store it in
- * (*@obj)->type.  Other visitors leave @obj unchanged.
- *
- * On failure, set *@obj to NULL and store an error through @errp.
- * Can happen only when @v is an input visitor.
- *
- * Return true on success, false on failure.
+ * the qtype of the next thing to be visited, stored in (*@obj)->type.
+ * Other visitors will leave @obj unchanged.
  *
  * If successful, this must be paired with visit_end_alternate() with
  * the same @obj to clean up, even if visiting the contents of the
  * alternate fails.
  */
-bool visit_start_alternate(Visitor *v, const char *name,
+void visit_start_alternate(Visitor *v, const char *name,
                            GenericAlternate **obj, size_t size,
                            Error **errp);
 
@@ -471,30 +461,20 @@ bool visit_optional(Visitor *v, const char *name, bool *present);
  *
  * Currently, all input visitors parse text input, and all output
  * visitors produce text output.  The mapping between enumeration
- * values and strings is done by the visitor core, using @lookup.
- *
- * On failure, store an error through @errp.  Can happen only when @v
- * is an input visitor.
- *
- * Return true on success, false on failure.
+ * values and strings is done by the visitor core, using @strings; it
+ * should be the ENUM_lookup array from visit-types.h.
  *
  * May call visit_type_str() under the hood, and the enum visit may
  * fail even if the corresponding string visit succeeded; this implies
- * that an input visitor's visit_type_str() must have no unwelcome
- * side effects.
+ * that visit_type_str() must have no unwelcome side effects.
  */
-bool visit_type_enum(Visitor *v, const char *name, int *obj,
+void visit_type_enum(Visitor *v, const char *name, int *obj,
                      const QEnumLookup *lookup, Error **errp);
 
 /*
  * Check if visitor is an input visitor.
  */
 bool visit_is_input(Visitor *v);
-
-/*
- * Check if visitor is a dealloc visitor.
- */
-bool visit_is_dealloc(Visitor *v);
 
 /*** Visiting built-in types ***/
 
@@ -506,33 +486,28 @@ bool visit_is_dealloc(Visitor *v);
  *
  * @obj must be non-NULL.  Input visitors set *@obj to the value;
  * other visitors will leave *@obj unchanged.
- *
- * On failure, store an error through @errp.  Can happen only when @v
- * is an input visitor.
- *
- * Return true on success, false on failure.
  */
-bool visit_type_int(Visitor *v, const char *name, int64_t *obj, Error **errp);
+void visit_type_int(Visitor *v, const char *name, int64_t *obj, Error **errp);
 
 /*
  * Visit a uint8_t value.
  * Like visit_type_int(), except clamps the value to uint8_t range.
  */
-bool visit_type_uint8(Visitor *v, const char *name, uint8_t *obj,
+void visit_type_uint8(Visitor *v, const char *name, uint8_t *obj,
                       Error **errp);
 
 /*
  * Visit a uint16_t value.
  * Like visit_type_int(), except clamps the value to uint16_t range.
  */
-bool visit_type_uint16(Visitor *v, const char *name, uint16_t *obj,
+void visit_type_uint16(Visitor *v, const char *name, uint16_t *obj,
                        Error **errp);
 
 /*
  * Visit a uint32_t value.
  * Like visit_type_int(), except clamps the value to uint32_t range.
  */
-bool visit_type_uint32(Visitor *v, const char *name, uint32_t *obj,
+void visit_type_uint32(Visitor *v, const char *name, uint32_t *obj,
                        Error **errp);
 
 /*
@@ -540,34 +515,34 @@ bool visit_type_uint32(Visitor *v, const char *name, uint32_t *obj,
  * Like visit_type_int(), except clamps the value to uint64_t range,
  * that is, ensures it is unsigned.
  */
-bool visit_type_uint64(Visitor *v, const char *name, uint64_t *obj,
+void visit_type_uint64(Visitor *v, const char *name, uint64_t *obj,
                        Error **errp);
 
 /*
  * Visit an int8_t value.
  * Like visit_type_int(), except clamps the value to int8_t range.
  */
-bool visit_type_int8(Visitor *v, const char *name, int8_t *obj, Error **errp);
+void visit_type_int8(Visitor *v, const char *name, int8_t *obj, Error **errp);
 
 /*
  * Visit an int16_t value.
  * Like visit_type_int(), except clamps the value to int16_t range.
  */
-bool visit_type_int16(Visitor *v, const char *name, int16_t *obj,
+void visit_type_int16(Visitor *v, const char *name, int16_t *obj,
                       Error **errp);
 
 /*
  * Visit an int32_t value.
  * Like visit_type_int(), except clamps the value to int32_t range.
  */
-bool visit_type_int32(Visitor *v, const char *name, int32_t *obj,
+void visit_type_int32(Visitor *v, const char *name, int32_t *obj,
                       Error **errp);
 
 /*
  * Visit an int64_t value.
  * Identical to visit_type_int().
  */
-bool visit_type_int64(Visitor *v, const char *name, int64_t *obj,
+void visit_type_int64(Visitor *v, const char *name, int64_t *obj,
                       Error **errp);
 
 /*
@@ -576,7 +551,7 @@ bool visit_type_int64(Visitor *v, const char *name, int64_t *obj,
  * recognize additional syntax, such as suffixes for easily scaling
  * values.
  */
-bool visit_type_size(Visitor *v, const char *name, uint64_t *obj,
+void visit_type_size(Visitor *v, const char *name, uint64_t *obj,
                      Error **errp);
 
 /*
@@ -587,13 +562,8 @@ bool visit_type_size(Visitor *v, const char *name, uint64_t *obj,
  *
  * @obj must be non-NULL.  Input visitors set *@obj to the value;
  * other visitors will leave *@obj unchanged.
- *
- * On failure, store an error through @errp.  Can happen only when @v
- * is an input visitor.
- *
- * Return true on success, false on failure.
  */
-bool visit_type_bool(Visitor *v, const char *name, bool *obj, Error **errp);
+void visit_type_bool(Visitor *v, const char *name, bool *obj, Error **errp);
 
 /*
  * Visit a string value.
@@ -609,14 +579,9 @@ bool visit_type_bool(Visitor *v, const char *name, bool *obj, Error **errp);
  * It is safe to cast away const when preparing a (const char *) value
  * into @obj for use by an output visitor.
  *
- * On failure, set *@obj to NULL and store an error through @errp.
- * Can happen only when @v is an input visitor.
- *
- * Return true on success, false on failure.
- *
  * FIXME: Callers that try to output NULL *obj should not be allowed.
  */
-bool visit_type_str(Visitor *v, const char *name, char **obj, Error **errp);
+void visit_type_str(Visitor *v, const char *name, char **obj, Error **errp);
 
 /*
  * Visit a number (i.e. double) value.
@@ -627,13 +592,8 @@ bool visit_type_str(Visitor *v, const char *name, char **obj, Error **errp);
  * @obj must be non-NULL.  Input visitors set *@obj to the value;
  * other visitors will leave *@obj unchanged.  Visitors should
  * document if infinity or NaN are not permitted.
- *
- * On failure, store an error through @errp.  Can happen only when @v
- * is an input visitor.
- *
- * Return true on success, false on failure.
  */
-bool visit_type_number(Visitor *v, const char *name, double *obj,
+void visit_type_number(Visitor *v, const char *name, double *obj,
                        Error **errp);
 
 /*
@@ -646,16 +606,11 @@ bool visit_type_number(Visitor *v, const char *name, double *obj,
  * other visitors will leave *@obj unchanged.  *@obj must be non-NULL
  * for output visitors.
  *
- * On failure, set *@obj to NULL and store an error through @errp.
- * Can happen only when @v is an input visitor.
- *
- * Return true on success, false on failure.
- *
  * Note that some kinds of input can't express arbitrary QObject.
  * E.g. the visitor returned by qobject_input_visitor_new_keyval()
  * can't create numbers or booleans, only strings.
  */
-bool visit_type_any(Visitor *v, const char *name, QObject **obj, Error **errp);
+void visit_type_any(Visitor *v, const char *name, QObject **obj, Error **errp);
 
 /*
  * Visit a JSON null value.
@@ -665,13 +620,8 @@ bool visit_type_any(Visitor *v, const char *name, QObject **obj, Error **errp);
  *
  * @obj must be non-NULL.  Input visitors set *@obj to the value;
  * other visitors ignore *@obj.
- *
- * On failure, set *@obj to NULL and store an error through @errp.
- * Can happen only when @v is an input visitor.
- *
- * Return true on success, false on failure.
  */
-bool visit_type_null(Visitor *v, const char *name, QNull **obj,
+void visit_type_null(Visitor *v, const char *name, QNull **obj,
                      Error **errp);
 
 #endif

@@ -20,11 +20,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/i2c/imx_i2c.h"
-#include "hw/irq.h"
-#include "migration/vmstate.h"
 #include "hw/i2c/i2c.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 
 #ifndef DEBUG_IMX_I2C
 #define DEBUG_IMX_I2C 0
@@ -123,7 +120,7 @@ static uint64_t imx_i2c_read(void *opaque, hwaddr offset,
         value = s->i2dr_read;
 
         if (imx_i2c_is_master(s)) {
-            uint8_t ret = 0xff;
+            int ret = 0xff;
 
             if (s->address == ADDR_RESET) {
                 /* something is wrong as the address is not set */
@@ -136,7 +133,15 @@ static uint64_t imx_i2c_read(void *opaque, hwaddr offset,
             } else {
                 /* get the next byte */
                 ret = i2c_recv(s->bus);
-                imx_i2c_raise_interrupt(s);
+
+                if (ret >= 0) {
+                    imx_i2c_raise_interrupt(s);
+                } else {
+                    qemu_log_mask(LOG_GUEST_ERROR, "[%s]%s: read failed "
+                                  "for device 0x%02x\n", TYPE_IMX_I2C,
+                                  __func__, s->address);
+                    ret = 0xff;
+                }
             }
 
             s->i2dr_read = ret;
@@ -305,7 +310,7 @@ static void imx_i2c_realize(DeviceState *dev, Error **errp)
                           IMX_I2C_MEM_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
-    s->bus = i2c_init_bus(dev, NULL);
+    s->bus = i2c_init_bus(DEVICE(dev), NULL);
 }
 
 static void imx_i2c_class_init(ObjectClass *klass, void *data)

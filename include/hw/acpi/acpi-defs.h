@@ -40,13 +40,18 @@ enum {
     ACPI_FADT_F_LOW_POWER_S0_IDLE_CAPABLE,
 };
 
-typedef struct AcpiRsdpData {
-    uint8_t oem_id[6] QEMU_NONSTRING; /* OEM identification */
-    uint8_t revision;                 /* Must be 0 for 1.0, 2 for 2.0 */
-
-    unsigned *rsdt_tbl_offset;
-    unsigned *xsdt_tbl_offset;
-} AcpiRsdpData;
+struct AcpiRsdpDescriptor {        /* Root System Descriptor Pointer */
+    uint64_t signature;              /* ACPI signature, contains "RSD PTR " */
+    uint8_t  checksum;               /* To make sum of struct == 0 */
+    uint8_t  oem_id [6];             /* OEM identification */
+    uint8_t  revision;               /* Must be 0 for 1.0, 2 for 2.0 */
+    uint32_t rsdt_physical_address;  /* 32-bit physical address of RSDT */
+    uint32_t length;                 /* XSDT Length in bytes including hdr */
+    uint64_t xsdt_physical_address;  /* 64-bit physical address of XSDT */
+    uint8_t  extended_checksum;      /* Checksum of entire table */
+    uint8_t  reserved [3];           /* Reserved field must be 0 */
+} QEMU_PACKED;
+typedef struct AcpiRsdpDescriptor AcpiRsdpDescriptor;
 
 /* Table structure from Linux kernel (the ACPI tables are under the
    BSD license) */
@@ -57,13 +62,10 @@ typedef struct AcpiRsdpData {
     uint32_t length;                 /* Length of table, in bytes, including header */ \
     uint8_t  revision;               /* ACPI Specification minor version # */ \
     uint8_t  checksum;               /* To make sum of entire table == 0 */ \
-    uint8_t  oem_id[6] \
-                 QEMU_NONSTRING;     /* OEM identification */ \
-    uint8_t  oem_table_id[8] \
-                 QEMU_NONSTRING;     /* OEM table identification */ \
+    uint8_t  oem_id [6];             /* OEM identification */ \
+    uint8_t  oem_table_id [8];       /* OEM table identification */ \
     uint32_t oem_revision;           /* OEM revision number */ \
-    uint8_t  asl_compiler_id[4] \
-                 QEMU_NONSTRING;     /* ASL compiler vendor ID */ \
+    uint8_t  asl_compiler_id [4];    /* ASL compiler vendor ID */ \
     uint32_t asl_compiler_revision;  /* ASL compiler revision number */
 
 
@@ -88,8 +90,6 @@ typedef struct AcpiFadtData {
     struct AcpiGenericAddress pm_tmr;    /* PM_TMR_BLK */
     struct AcpiGenericAddress gpe0_blk;  /* GPE0_BLK */
     struct AcpiGenericAddress reset_reg; /* RESET_REG */
-    struct AcpiGenericAddress sleep_ctl; /* SLEEP_CONTROL_REG */
-    struct AcpiGenericAddress sleep_sts; /* SLEEP_STATUS_REG */
     uint8_t reset_val;         /* RESET_VALUE */
     uint8_t  rev;              /* Revision */
     uint32_t flags;            /* Flags */
@@ -154,7 +154,7 @@ typedef struct AcpiSerialPortConsoleRedirection
  */
 struct AcpiRsdtDescriptorRev1 {
     ACPI_TABLE_HEADER_DEF       /* ACPI common table header */
-    uint32_t table_offset_entry[];  /* Array of pointers to other */
+    uint32_t table_offset_entry[0];  /* Array of pointers to other */
     /* ACPI tables */
 } QEMU_PACKED;
 typedef struct AcpiRsdtDescriptorRev1 AcpiRsdtDescriptorRev1;
@@ -164,7 +164,7 @@ typedef struct AcpiRsdtDescriptorRev1 AcpiRsdtDescriptorRev1;
  */
 struct AcpiXsdtDescriptorRev2 {
     ACPI_TABLE_HEADER_DEF       /* ACPI common table header */
-    uint64_t table_offset_entry[];  /* Array of pointers to other */
+    uint64_t table_offset_entry[0];  /* Array of pointers to other */
     /* ACPI tables */
 } QEMU_PACKED;
 typedef struct AcpiXsdtDescriptorRev2 AcpiXsdtDescriptorRev2;
@@ -451,6 +451,24 @@ struct AcpiSratProcessorGiccAffinity {
 
 typedef struct AcpiSratProcessorGiccAffinity AcpiSratProcessorGiccAffinity;
 
+/* PCI fw r3.0 MCFG table. */
+/* Subtable */
+struct AcpiMcfgAllocation {
+    uint64_t address;                /* Base address, processor-relative */
+    uint16_t pci_segment;            /* PCI segment group number */
+    uint8_t start_bus_number;       /* Starting PCI Bus number */
+    uint8_t end_bus_number;         /* Final PCI Bus number */
+    uint32_t reserved;
+} QEMU_PACKED;
+typedef struct AcpiMcfgAllocation AcpiMcfgAllocation;
+
+struct AcpiTableMcfg {
+    ACPI_TABLE_HEADER_DEF;
+    uint8_t reserved[8];
+    AcpiMcfgAllocation allocation[0];
+} QEMU_PACKED;
+typedef struct AcpiTableMcfg AcpiTableMcfg;
+
 /*
  * TCPA Description Table
  *
@@ -464,6 +482,24 @@ struct Acpi20Tcpa {
     uint64_t log_area_start_address;
 } QEMU_PACKED;
 typedef struct Acpi20Tcpa Acpi20Tcpa;
+
+/*
+ * TPM2
+ *
+ * Following Version 1.2, Revision 8 of specs:
+ * https://trustedcomputinggroup.org/tcg-acpi-specification/
+ */
+struct Acpi20TPM2 {
+    ACPI_TABLE_HEADER_DEF
+    uint16_t platform_class;
+    uint16_t reserved;
+    uint64_t control_area_address;
+    uint32_t start_method;
+    uint8_t start_method_params[12];
+    uint32_t log_area_minimum_length;
+    uint64_t log_area_start_address;
+} QEMU_PACKED;
+typedef struct Acpi20TPM2 Acpi20TPM2;
 
 /* DMAR - DMA Remapping table r2.2 */
 struct AcpiTableDmar {
@@ -502,7 +538,7 @@ struct AcpiDmarDeviceScope {
     struct {
         uint8_t device;
         uint8_t function;
-    } path[];
+    } path[0];
 } QEMU_PACKED;
 typedef struct AcpiDmarDeviceScope AcpiDmarDeviceScope;
 
@@ -514,7 +550,7 @@ struct AcpiDmarHardwareUnit {
     uint8_t reserved;
     uint16_t pci_segment;   /* The PCI Segment associated with this unit */
     uint64_t address;   /* Base address of remapping hardware register-set */
-    AcpiDmarDeviceScope scope[];
+    AcpiDmarDeviceScope scope[0];
 } QEMU_PACKED;
 typedef struct AcpiDmarHardwareUnit AcpiDmarHardwareUnit;
 
@@ -525,7 +561,7 @@ struct AcpiDmarRootPortATS {
     uint8_t flags;
     uint8_t reserved;
     uint16_t pci_segment;
-    AcpiDmarDeviceScope scope[];
+    AcpiDmarDeviceScope scope[0];
 } QEMU_PACKED;
 typedef struct AcpiDmarRootPortATS AcpiDmarRootPortATS;
 
@@ -588,11 +624,9 @@ typedef struct AcpiIortMemoryAccess AcpiIortMemoryAccess;
 struct AcpiIortItsGroup {
     ACPI_IORT_NODE_HEADER_DEF
     uint32_t its_count;
-    uint32_t identifiers[];
+    uint32_t identifiers[0];
 } QEMU_PACKED;
 typedef struct AcpiIortItsGroup AcpiIortItsGroup;
-
-#define ACPI_IORT_SMMU_V3_COHACC_OVERRIDE 1
 
 struct AcpiIortSmmu3 {
     ACPI_IORT_NODE_HEADER_DEF
@@ -605,7 +639,7 @@ struct AcpiIortSmmu3 {
     uint32_t pri_gsiv;
     uint32_t gerr_gsiv;
     uint32_t sync_gsiv;
-    AcpiIortIdMapping id_mapping_array[];
+    AcpiIortIdMapping id_mapping_array[0];
 } QEMU_PACKED;
 typedef struct AcpiIortSmmu3 AcpiIortSmmu3;
 
@@ -614,7 +648,7 @@ struct AcpiIortRC {
     AcpiIortMemoryAccess memory_properties;
     uint32_t ats_attribute;
     uint32_t pci_segment_number;
-    AcpiIortIdMapping id_mapping_array[];
+    AcpiIortIdMapping id_mapping_array[0];
 } QEMU_PACKED;
 typedef struct AcpiIortRC AcpiIortRC;
 

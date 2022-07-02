@@ -21,50 +21,75 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
 #include "qemu/osdep.h"
 #include <alsa/asoundlib.h>
+#include "qemu-common.h"
 #include "qemu/main-loop.h"
-#include "qemu/module.h"
 #include "audio.h"
 #include "trace.h"
 
+#if QEMU_GNUC_PREREQ(4, 3)
 #pragma GCC diagnostic ignored "-Waddress"
+#endif
 
 #define AUDIO_CAP "alsa"
 #include "audio_int.h"
 
+typedef struct ALSAConf {
+    int size_in_usec_in;
+    int size_in_usec_out;
+    const char *pcm_name_in;
+    const char *pcm_name_out;
+    unsigned int buffer_size_in;
+    unsigned int period_size_in;
+    unsigned int buffer_size_out;
+    unsigned int period_size_out;
+    unsigned int threshold;
+
+    int buffer_size_in_overridden;
+    int period_size_in_overridden;
+
+    int buffer_size_out_overridden;
+    int period_size_out_overridden;
+} ALSAConf;
+
 struct pollhlp {
     snd_pcm_t *handle;
     struct pollfd *pfds;
+    ALSAConf *conf;
     int count;
     int mask;
-    AudioState *s;
 };
 
 typedef struct ALSAVoiceOut {
     HWVoiceOut hw;
+    int wpos;
+    int pending;
+    void *pcm_buf;
     snd_pcm_t *handle;
     struct pollhlp pollhlp;
-    Audiodev *dev;
 } ALSAVoiceOut;
 
 typedef struct ALSAVoiceIn {
     HWVoiceIn hw;
     snd_pcm_t *handle;
+    void *pcm_buf;
     struct pollhlp pollhlp;
-    Audiodev *dev;
 } ALSAVoiceIn;
 
 struct alsa_params_req {
     int freq;
     snd_pcm_format_t fmt;
     int nchannels;
+    int size_in_usec;
+    int override_mask;
+    unsigned int buffer_size;
+    unsigned int period_size;
 };
 
 struct alsa_params_obt {
     int freq;
-    AudioFormat fmt;
+    audfmt_e fmt;
     int endianness;
     int nchannels;
     snd_pcm_uframes_t samples;
@@ -196,11 +221,11 @@ static void alsa_poll_handler (void *opaque)
         break;
 
     case SND_PCM_STATE_PREPARED:
-        audio_run(hlp->s, "alsa run (prepared)");
+        audio_run ("alsa run (prepared)");
         break;
 
     case SND_PCM_STATE_RUNNING:
-        audio_run(hlp->s, "alsa run (running)");
+        audio_run ("alsa run (running)");
         break;
 
     default:
@@ -266,16 +291,21 @@ static int alsa_poll_in (HWVoiceIn *hw)
     return alsa_poll_helper (alsa->handle, &alsa->pollhlp, POLLIN);
 }
 
-static snd_pcm_format_t aud_to_alsafmt (AudioFormat fmt, int endianness)
+static int alsa_write (SWVoiceOut *sw, void *buf, int len)
+{
+    return audio_pcm_sw_write (sw, buf, len);
+}
+
+static snd_pcm_format_t aud_to_alsafmt (audfmt_e fmt, int endianness)
 {
     switch (fmt) {
-    case AUDIO_FORMAT_S8:
+    case AUD_FMT_S8:
         return SND_PCM_FORMAT_S8;
 
-    case AUDIO_FORMAT_U8:
+    case AUD_FMT_U8:
         return SND_PCM_FORMAT_U8;
 
-    case AUDIO_FORMAT_S16:
+    case AUD_FMT_S16:
         if (endianness) {
             return SND_PCM_FORMAT_S16_BE;
         }
@@ -283,7 +313,7 @@ static snd_pcm_format_t aud_to_alsafmt (AudioFormat fmt, int endianness)
             return SND_PCM_FORMAT_S16_LE;
         }
 
-    case AUDIO_FORMAT_U16:
+    case AUD_FMT_U16:
         if (endianness) {
             return SND_PCM_FORMAT_U16_BE;
         }
@@ -291,7 +321,7 @@ static snd_pcm_format_t aud_to_alsafmt (AudioFormat fmt, int endianness)
             return SND_PCM_FORMAT_U16_LE;
         }
 
-    case AUDIO_FORMAT_S32:
+    case AUD_FMT_S32:
         if (endianness) {
             return SND_PCM_FORMAT_S32_BE;
         }
@@ -299,19 +329,12 @@ static snd_pcm_format_t aud_to_alsafmt (AudioFormat fmt, int endianness)
             return SND_PCM_FORMAT_S32_LE;
         }
 
-    case AUDIO_FORMAT_U32:
+    case AUD_FMT_U32:
         if (endianness) {
             return SND_PCM_FORMAT_U32_BE;
         }
         else {
             return SND_PCM_FORMAT_U32_LE;
-        }
-
-    case AUDIO_FORMAT_F32:
-        if (endianness) {
-            return SND_PCM_FORMAT_FLOAT_BE;
-        } else {
-            return SND_PCM_FORMAT_FLOAT_LE;
         }
 
     default:
@@ -323,68 +346,58 @@ static snd_pcm_format_t aud_to_alsafmt (AudioFormat fmt, int endianness)
     }
 }
 
-static int alsa_to_audfmt (snd_pcm_format_t alsafmt, AudioFormat *fmt,
+static int alsa_to_audfmt (snd_pcm_format_t alsafmt, audfmt_e *fmt,
                            int *endianness)
 {
     switch (alsafmt) {
     case SND_PCM_FORMAT_S8:
         *endianness = 0;
-        *fmt = AUDIO_FORMAT_S8;
+        *fmt = AUD_FMT_S8;
         break;
 
     case SND_PCM_FORMAT_U8:
         *endianness = 0;
-        *fmt = AUDIO_FORMAT_U8;
+        *fmt = AUD_FMT_U8;
         break;
 
     case SND_PCM_FORMAT_S16_LE:
         *endianness = 0;
-        *fmt = AUDIO_FORMAT_S16;
+        *fmt = AUD_FMT_S16;
         break;
 
     case SND_PCM_FORMAT_U16_LE:
         *endianness = 0;
-        *fmt = AUDIO_FORMAT_U16;
+        *fmt = AUD_FMT_U16;
         break;
 
     case SND_PCM_FORMAT_S16_BE:
         *endianness = 1;
-        *fmt = AUDIO_FORMAT_S16;
+        *fmt = AUD_FMT_S16;
         break;
 
     case SND_PCM_FORMAT_U16_BE:
         *endianness = 1;
-        *fmt = AUDIO_FORMAT_U16;
+        *fmt = AUD_FMT_U16;
         break;
 
     case SND_PCM_FORMAT_S32_LE:
         *endianness = 0;
-        *fmt = AUDIO_FORMAT_S32;
+        *fmt = AUD_FMT_S32;
         break;
 
     case SND_PCM_FORMAT_U32_LE:
         *endianness = 0;
-        *fmt = AUDIO_FORMAT_U32;
+        *fmt = AUD_FMT_U32;
         break;
 
     case SND_PCM_FORMAT_S32_BE:
         *endianness = 1;
-        *fmt = AUDIO_FORMAT_S32;
+        *fmt = AUD_FMT_S32;
         break;
 
     case SND_PCM_FORMAT_U32_BE:
         *endianness = 1;
-        *fmt = AUDIO_FORMAT_U32;
-        break;
-
-    case SND_PCM_FORMAT_FLOAT_LE:
-        *endianness = 0;
-        *fmt = AUDIO_FORMAT_F32;
-        break;
-
-    case SND_PCM_FORMAT_FLOAT_BE:
-        *endianness = 1;
-        *fmt = AUDIO_FORMAT_F32;
+        *fmt = AUD_FMT_U32;
         break;
 
     default:
@@ -397,18 +410,17 @@ static int alsa_to_audfmt (snd_pcm_format_t alsafmt, AudioFormat *fmt,
 
 static void alsa_dump_info (struct alsa_params_req *req,
                             struct alsa_params_obt *obt,
-                            snd_pcm_format_t obtfmt,
-                            AudiodevAlsaPerDirectionOptions *apdo)
+                            snd_pcm_format_t obtfmt)
 {
-    dolog("parameter | requested value | obtained value\n");
-    dolog("format    |      %10d |     %10d\n", req->fmt, obtfmt);
-    dolog("channels  |      %10d |     %10d\n",
-          req->nchannels, obt->nchannels);
-    dolog("frequency |      %10d |     %10d\n", req->freq, obt->freq);
-    dolog("============================================\n");
-    dolog("requested: buffer len %" PRId32 " period len %" PRId32 "\n",
-          apdo->buffer_length, apdo->period_length);
-    dolog("obtained: samples %ld\n", obt->samples);
+    dolog ("parameter | requested value | obtained value\n");
+    dolog ("format    |      %10d |     %10d\n", req->fmt, obtfmt);
+    dolog ("channels  |      %10d |     %10d\n",
+           req->nchannels, obt->nchannels);
+    dolog ("frequency |      %10d |     %10d\n", req->freq, obt->freq);
+    dolog ("============================================\n");
+    dolog ("requested: buffer size %d period size %d\n",
+           req->buffer_size, req->period_size);
+    dolog ("obtained: samples %ld\n", obt->samples);
 }
 
 static void alsa_set_threshold (snd_pcm_t *handle, snd_pcm_uframes_t threshold)
@@ -441,23 +453,23 @@ static void alsa_set_threshold (snd_pcm_t *handle, snd_pcm_uframes_t threshold)
     }
 }
 
-static int alsa_open(bool in, struct alsa_params_req *req,
-                     struct alsa_params_obt *obt, snd_pcm_t **handlep,
-                     Audiodev *dev)
+static int alsa_open (int in, struct alsa_params_req *req,
+                      struct alsa_params_obt *obt, snd_pcm_t **handlep,
+                      ALSAConf *conf)
 {
-    AudiodevAlsaOptions *aopts = &dev->u.alsa;
-    AudiodevAlsaPerDirectionOptions *apdo = in ? aopts->in : aopts->out;
     snd_pcm_t *handle;
     snd_pcm_hw_params_t *hw_params;
     int err;
+    int size_in_usec;
     unsigned int freq, nchannels;
-    const char *pcm_name = apdo->has_dev ? apdo->dev : "default";
+    const char *pcm_name = in ? conf->pcm_name_in : conf->pcm_name_out;
     snd_pcm_uframes_t obt_buffer_size;
     const char *typ = in ? "ADC" : "DAC";
     snd_pcm_format_t obtfmt;
 
     freq = req->freq;
     nchannels = req->nchannels;
+    size_in_usec = req->size_in_usec;
 
     snd_pcm_hw_params_alloca (&hw_params);
 
@@ -510,42 +522,86 @@ static int alsa_open(bool in, struct alsa_params_req *req,
         goto err;
     }
 
-    if (apdo->buffer_length) {
-        int dir = 0;
-        unsigned int btime = apdo->buffer_length;
-
-        err = snd_pcm_hw_params_set_buffer_time_near(
-            handle, hw_params, &btime, &dir);
-
-        if (err < 0) {
-            alsa_logerr2(err, typ, "Failed to set buffer time to %" PRId32 "\n",
-                         apdo->buffer_length);
-            goto err;
-        }
-
-        if (apdo->has_buffer_length && btime != apdo->buffer_length) {
-            dolog("Requested buffer time %" PRId32
-                  " was rejected, using %u\n", apdo->buffer_length, btime);
-        }
+    if (nchannels != 1 && nchannels != 2) {
+        alsa_logerr2 (err, typ,
+                      "Can not handle obtained number of channels %d\n",
+                      nchannels);
+        goto err;
     }
 
-    if (apdo->period_length) {
-        int dir = 0;
-        unsigned int ptime = apdo->period_length;
+    if (req->buffer_size) {
+        unsigned long obt;
 
-        err = snd_pcm_hw_params_set_period_time_near(handle, hw_params, &ptime,
-                                                     &dir);
+        if (size_in_usec) {
+            int dir = 0;
+            unsigned int btime = req->buffer_size;
 
+            err = snd_pcm_hw_params_set_buffer_time_near (
+                handle,
+                hw_params,
+                &btime,
+                &dir
+                );
+            obt = btime;
+        }
+        else {
+            snd_pcm_uframes_t bsize = req->buffer_size;
+
+            err = snd_pcm_hw_params_set_buffer_size_near (
+                handle,
+                hw_params,
+                &bsize
+                );
+            obt = bsize;
+        }
         if (err < 0) {
-            alsa_logerr2(err, typ, "Failed to set period time to %" PRId32 "\n",
-                         apdo->period_length);
+            alsa_logerr2 (err, typ, "Failed to set buffer %s to %d\n",
+                          size_in_usec ? "time" : "size", req->buffer_size);
             goto err;
         }
 
-        if (apdo->has_period_length && ptime != apdo->period_length) {
-            dolog("Requested period time %" PRId32 " was rejected, using %d\n",
-                  apdo->period_length, ptime);
+        if ((req->override_mask & 2) && (obt - req->buffer_size))
+            dolog ("Requested buffer %s %u was rejected, using %lu\n",
+                   size_in_usec ? "time" : "size", req->buffer_size, obt);
+    }
+
+    if (req->period_size) {
+        unsigned long obt;
+
+        if (size_in_usec) {
+            int dir = 0;
+            unsigned int ptime = req->period_size;
+
+            err = snd_pcm_hw_params_set_period_time_near (
+                handle,
+                hw_params,
+                &ptime,
+                &dir
+                );
+            obt = ptime;
         }
+        else {
+            int dir = 0;
+            snd_pcm_uframes_t psize = req->period_size;
+
+            err = snd_pcm_hw_params_set_period_size_near (
+                handle,
+                hw_params,
+                &psize,
+                &dir
+                );
+            obt = psize;
+        }
+
+        if (err < 0) {
+            alsa_logerr2 (err, typ, "Failed to set period %s to %d\n",
+                          size_in_usec ? "time" : "size", req->period_size);
+            goto err;
+        }
+
+        if (((req->override_mask & 1) && (obt - req->period_size)))
+            dolog ("Requested period %s %u was rejected, using %lu\n",
+                   size_in_usec ? "time" : "size", req->period_size, obt);
     }
 
     err = snd_pcm_hw_params (handle, hw_params);
@@ -577,12 +633,30 @@ static int alsa_open(bool in, struct alsa_params_req *req,
         goto err;
     }
 
-    if (!in && aopts->has_threshold && aopts->threshold) {
-        struct audsettings as = { .freq = freq };
-        alsa_set_threshold(
-            handle,
-            audio_buffer_frames(qapi_AudiodevAlsaPerDirectionOptions_base(apdo),
-                                &as, aopts->threshold));
+    if (!in && conf->threshold) {
+        snd_pcm_uframes_t threshold;
+        int bytes_per_sec;
+
+        bytes_per_sec = freq << (nchannels == 2);
+
+        switch (obt->fmt) {
+        case AUD_FMT_S8:
+        case AUD_FMT_U8:
+            break;
+
+        case AUD_FMT_S16:
+        case AUD_FMT_U16:
+            bytes_per_sec <<= 1;
+            break;
+
+        case AUD_FMT_S32:
+        case AUD_FMT_U32:
+            bytes_per_sec <<= 2;
+            break;
+        }
+
+        threshold = (conf->threshold * bytes_per_sec) / 1000;
+        alsa_set_threshold (handle, threshold);
     }
 
     obt->nchannels = nchannels;
@@ -595,11 +669,11 @@ static int alsa_open(bool in, struct alsa_params_req *req,
          obt->nchannels != req->nchannels ||
          obt->freq != req->freq) {
         dolog ("Audio parameters for %s\n", typ);
-        alsa_dump_info(req, obt, obtfmt, apdo);
+        alsa_dump_info (req, obt, obtfmt);
     }
 
 #ifdef DEBUG
-    alsa_dump_info(req, obt, obtfmt, pdo);
+    alsa_dump_info (req, obt, obtfmt);
 #endif
     return 0;
 
@@ -608,64 +682,102 @@ static int alsa_open(bool in, struct alsa_params_req *req,
     return -1;
 }
 
-static size_t alsa_write(HWVoiceOut *hw, void *buf, size_t len)
+static snd_pcm_sframes_t alsa_get_avail (snd_pcm_t *handle)
 {
-    ALSAVoiceOut *alsa = (ALSAVoiceOut *) hw;
-    size_t pos = 0;
-    size_t len_frames = len / hw->info.bytes_per_frame;
+    snd_pcm_sframes_t avail;
 
-    while (len_frames) {
-        char *src = advance(buf, pos);
-        snd_pcm_sframes_t written;
-
-        written = snd_pcm_writei(alsa->handle, src, len_frames);
-
-        if (written <= 0) {
-            switch (written) {
-            case 0:
-                trace_alsa_wrote_zero(len_frames);
-                return pos;
-
-            case -EPIPE:
-                if (alsa_recover(alsa->handle)) {
-                    alsa_logerr(written, "Failed to write %zu frames\n",
-                                len_frames);
-                    return pos;
-                }
-                trace_alsa_xrun_out();
-                continue;
-
-            case -ESTRPIPE:
-                /*
-                 * stream is suspended and waiting for an application
-                 * recovery
-                 */
-                if (alsa_resume(alsa->handle)) {
-                    alsa_logerr(written, "Failed to write %zu frames\n",
-                                len_frames);
-                    return pos;
-                }
-                trace_alsa_resume_out();
-                continue;
-
-            case -EAGAIN:
-                return pos;
-
-            default:
-                alsa_logerr(written, "Failed to write %zu frames from %p\n",
-                            len, src);
-                return pos;
+    avail = snd_pcm_avail_update (handle);
+    if (avail < 0) {
+        if (avail == -EPIPE) {
+            if (!alsa_recover (handle)) {
+                avail = snd_pcm_avail_update (handle);
             }
         }
 
-        pos += written * hw->info.bytes_per_frame;
-        if (written < len_frames) {
-            break;
+        if (avail < 0) {
+            alsa_logerr (avail,
+                         "Could not obtain number of available frames\n");
+            return -1;
         }
-        len_frames -= written;
     }
 
-    return pos;
+    return avail;
+}
+
+static void alsa_write_pending (ALSAVoiceOut *alsa)
+{
+    HWVoiceOut *hw = &alsa->hw;
+
+    while (alsa->pending) {
+        int left_till_end_samples = hw->samples - alsa->wpos;
+        int len = audio_MIN (alsa->pending, left_till_end_samples);
+        char *src = advance (alsa->pcm_buf, alsa->wpos << hw->info.shift);
+
+        while (len) {
+            snd_pcm_sframes_t written;
+
+            written = snd_pcm_writei (alsa->handle, src, len);
+
+            if (written <= 0) {
+                switch (written) {
+                case 0:
+                    trace_alsa_wrote_zero(len);
+                    return;
+
+                case -EPIPE:
+                    if (alsa_recover (alsa->handle)) {
+                        alsa_logerr (written, "Failed to write %d frames\n",
+                                     len);
+                        return;
+                    }
+                    trace_alsa_xrun_out();
+                    continue;
+
+                case -ESTRPIPE:
+                    /* stream is suspended and waiting for an
+                       application recovery */
+                    if (alsa_resume (alsa->handle)) {
+                        alsa_logerr (written, "Failed to write %d frames\n",
+                                     len);
+                        return;
+                    }
+                    trace_alsa_resume_out();
+                    continue;
+
+                case -EAGAIN:
+                    return;
+
+                default:
+                    alsa_logerr (written, "Failed to write %d frames from %p\n",
+                                 len, src);
+                    return;
+                }
+            }
+
+            alsa->wpos = (alsa->wpos + written) % hw->samples;
+            alsa->pending -= written;
+            len -= written;
+        }
+    }
+}
+
+static int alsa_run_out (HWVoiceOut *hw, int live)
+{
+    ALSAVoiceOut *alsa = (ALSAVoiceOut *) hw;
+    int decr;
+    snd_pcm_sframes_t avail;
+
+    avail = alsa_get_avail (alsa->handle);
+    if (avail < 0) {
+        dolog ("Could not get number of available playback frames\n");
+        return 0;
+    }
+
+    decr = audio_MIN (live, avail);
+    decr = audio_pcm_hw_clip_out (hw, alsa->pcm_buf, decr, alsa->pending);
+    alsa->pending += decr;
+    alsa_write_pending (alsa);
+    return decr;
 }
 
 static void alsa_fini_out (HWVoiceOut *hw)
@@ -674,6 +786,9 @@ static void alsa_fini_out (HWVoiceOut *hw)
 
     ldebug ("alsa_fini\n");
     alsa_anal_close (&alsa->handle, &alsa->pollhlp);
+
+    g_free(alsa->pcm_buf);
+    alsa->pcm_buf = NULL;
 }
 
 static int alsa_init_out(HWVoiceOut *hw, struct audsettings *as,
@@ -684,13 +799,19 @@ static int alsa_init_out(HWVoiceOut *hw, struct audsettings *as,
     struct alsa_params_obt obt;
     snd_pcm_t *handle;
     struct audsettings obt_as;
-    Audiodev *dev = drv_opaque;
+    ALSAConf *conf = drv_opaque;
 
     req.fmt = aud_to_alsafmt (as->fmt, as->endianness);
     req.freq = as->freq;
     req.nchannels = as->nchannels;
+    req.period_size = conf->period_size_out;
+    req.buffer_size = conf->buffer_size_out;
+    req.size_in_usec = conf->size_in_usec_out;
+    req.override_mask =
+        (conf->period_size_out_overridden ? 1 : 0) |
+        (conf->buffer_size_out_overridden ? 2 : 0);
 
-    if (alsa_open(0, &req, &obt, &handle, dev)) {
+    if (alsa_open (0, &req, &obt, &handle, conf)) {
         return -1;
     }
 
@@ -702,9 +823,16 @@ static int alsa_init_out(HWVoiceOut *hw, struct audsettings *as,
     audio_pcm_init_info (&hw->info, &obt_as);
     hw->samples = obt.samples;
 
-    alsa->pollhlp.s = hw->s;
+    alsa->pcm_buf = audio_calloc(__func__, obt.samples, 1 << hw->info.shift);
+    if (!alsa->pcm_buf) {
+        dolog ("Could not allocate DAC buffer (%d samples, each %d bytes)\n",
+               hw->samples, 1 << hw->info.shift);
+        alsa_anal_close1 (&handle);
+        return -1;
+    }
+
     alsa->handle = handle;
-    alsa->dev = dev;
+    alsa->pollhlp.conf = conf;
     return 0;
 }
 
@@ -741,28 +869,38 @@ static int alsa_voice_ctl (snd_pcm_t *handle, const char *typ, int ctl)
     return 0;
 }
 
-static void alsa_enable_out(HWVoiceOut *hw, bool enable)
+static int alsa_ctl_out (HWVoiceOut *hw, int cmd, ...)
 {
     ALSAVoiceOut *alsa = (ALSAVoiceOut *) hw;
-    AudiodevAlsaPerDirectionOptions *apdo = alsa->dev->u.alsa.out;
 
-    if (enable) {
-        bool poll_mode = apdo->try_poll;
+    switch (cmd) {
+    case VOICE_ENABLE:
+        {
+            va_list ap;
+            int poll_mode;
 
-        ldebug("enabling voice\n");
-        if (poll_mode && alsa_poll_out(hw)) {
-            poll_mode = 0;
+            va_start (ap, cmd);
+            poll_mode = va_arg (ap, int);
+            va_end (ap);
+
+            ldebug ("enabling voice\n");
+            if (poll_mode && alsa_poll_out (hw)) {
+                poll_mode = 0;
+            }
+            hw->poll_mode = poll_mode;
+            return alsa_voice_ctl (alsa->handle, "playback", VOICE_CTL_PREPARE);
         }
-        hw->poll_mode = poll_mode;
-        alsa_voice_ctl(alsa->handle, "playback", VOICE_CTL_PREPARE);
-    } else {
-        ldebug("disabling voice\n");
+
+    case VOICE_DISABLE:
+        ldebug ("disabling voice\n");
         if (hw->poll_mode) {
             hw->poll_mode = 0;
-            alsa_fini_poll(&alsa->pollhlp);
+            alsa_fini_poll (&alsa->pollhlp);
         }
-        alsa_voice_ctl(alsa->handle, "playback", VOICE_CTL_PAUSE);
+        return alsa_voice_ctl (alsa->handle, "playback", VOICE_CTL_PAUSE);
     }
+
+    return -1;
 }
 
 static int alsa_init_in(HWVoiceIn *hw, struct audsettings *as, void *drv_opaque)
@@ -772,13 +910,19 @@ static int alsa_init_in(HWVoiceIn *hw, struct audsettings *as, void *drv_opaque)
     struct alsa_params_obt obt;
     snd_pcm_t *handle;
     struct audsettings obt_as;
-    Audiodev *dev = drv_opaque;
+    ALSAConf *conf = drv_opaque;
 
     req.fmt = aud_to_alsafmt (as->fmt, as->endianness);
     req.freq = as->freq;
     req.nchannels = as->nchannels;
+    req.period_size = conf->period_size_in;
+    req.buffer_size = conf->buffer_size_in;
+    req.size_in_usec = conf->size_in_usec_in;
+    req.override_mask =
+        (conf->period_size_in_overridden ? 1 : 0) |
+        (conf->buffer_size_in_overridden ? 2 : 0);
 
-    if (alsa_open(1, &req, &obt, &handle, dev)) {
+    if (alsa_open (1, &req, &obt, &handle, conf)) {
         return -1;
     }
 
@@ -790,9 +934,16 @@ static int alsa_init_in(HWVoiceIn *hw, struct audsettings *as, void *drv_opaque)
     audio_pcm_init_info (&hw->info, &obt_as);
     hw->samples = obt.samples;
 
-    alsa->pollhlp.s = hw->s;
+    alsa->pcm_buf = audio_calloc(__func__, hw->samples, 1 << hw->info.shift);
+    if (!alsa->pcm_buf) {
+        dolog ("Could not allocate ADC buffer (%d samples, each %d bytes)\n",
+               hw->samples, 1 << hw->info.shift);
+        alsa_anal_close1 (&handle);
+        return -1;
+    }
+
     alsa->handle = handle;
-    alsa->dev = dev;
+    alsa->pollhlp.conf = conf;
     return 0;
 }
 
@@ -801,140 +952,271 @@ static void alsa_fini_in (HWVoiceIn *hw)
     ALSAVoiceIn *alsa = (ALSAVoiceIn *) hw;
 
     alsa_anal_close (&alsa->handle, &alsa->pollhlp);
+
+    g_free(alsa->pcm_buf);
+    alsa->pcm_buf = NULL;
 }
 
-static size_t alsa_read(HWVoiceIn *hw, void *buf, size_t len)
+static int alsa_run_in (HWVoiceIn *hw)
 {
     ALSAVoiceIn *alsa = (ALSAVoiceIn *) hw;
-    size_t pos = 0;
+    int hwshift = hw->info.shift;
+    int i;
+    int live = audio_pcm_hw_get_live_in (hw);
+    int dead = hw->samples - live;
+    int decr;
+    struct {
+        int add;
+        int len;
+    } bufs[2] = {
+        { .add = hw->wpos, .len = 0 },
+        { .add = 0,        .len = 0 }
+    };
+    snd_pcm_sframes_t avail;
+    snd_pcm_uframes_t read_samples = 0;
 
-    while (len) {
-        void *dst = advance(buf, pos);
-        snd_pcm_sframes_t nread;
-
-        nread = snd_pcm_readi(
-            alsa->handle, dst, len / hw->info.bytes_per_frame);
-
-        if (nread <= 0) {
-            switch (nread) {
-            case 0:
-                trace_alsa_read_zero(len);
-                return pos;
-
-            case -EPIPE:
-                if (alsa_recover(alsa->handle)) {
-                    alsa_logerr(nread, "Failed to read %zu frames\n", len);
-                    return pos;
-                }
-                trace_alsa_xrun_in();
-                continue;
-
-            case -EAGAIN:
-                return pos;
-
-            default:
-                alsa_logerr(nread, "Failed to read %zu frames to %p\n",
-                            len, dst);
-                return pos;
-            }
-        }
-
-        pos += nread * hw->info.bytes_per_frame;
-        len -= nread * hw->info.bytes_per_frame;
+    if (!dead) {
+        return 0;
     }
 
-    return pos;
+    avail = alsa_get_avail (alsa->handle);
+    if (avail < 0) {
+        dolog ("Could not get number of captured frames\n");
+        return 0;
+    }
+
+    if (!avail) {
+        snd_pcm_state_t state;
+
+        state = snd_pcm_state (alsa->handle);
+        switch (state) {
+        case SND_PCM_STATE_PREPARED:
+            avail = hw->samples;
+            break;
+        case SND_PCM_STATE_SUSPENDED:
+            /* stream is suspended and waiting for an application recovery */
+            if (alsa_resume (alsa->handle)) {
+                dolog ("Failed to resume suspended input stream\n");
+                return 0;
+            }
+            trace_alsa_resume_in();
+            break;
+        default:
+            trace_alsa_no_frames(state);
+            return 0;
+        }
+    }
+
+    decr = audio_MIN (dead, avail);
+    if (!decr) {
+        return 0;
+    }
+
+    if (hw->wpos + decr > hw->samples) {
+        bufs[0].len = (hw->samples - hw->wpos);
+        bufs[1].len = (decr - (hw->samples - hw->wpos));
+    }
+    else {
+        bufs[0].len = decr;
+    }
+
+    for (i = 0; i < 2; ++i) {
+        void *src;
+        struct st_sample *dst;
+        snd_pcm_sframes_t nread;
+        snd_pcm_uframes_t len;
+
+        len = bufs[i].len;
+
+        src = advance (alsa->pcm_buf, bufs[i].add << hwshift);
+        dst = hw->conv_buf + bufs[i].add;
+
+        while (len) {
+            nread = snd_pcm_readi (alsa->handle, src, len);
+
+            if (nread <= 0) {
+                switch (nread) {
+                case 0:
+                    trace_alsa_read_zero(len);
+                    goto exit;
+
+                case -EPIPE:
+                    if (alsa_recover (alsa->handle)) {
+                        alsa_logerr (nread, "Failed to read %ld frames\n", len);
+                        goto exit;
+                    }
+                    trace_alsa_xrun_in();
+                    continue;
+
+                case -EAGAIN:
+                    goto exit;
+
+                default:
+                    alsa_logerr (
+                        nread,
+                        "Failed to read %ld frames from %p\n",
+                        len,
+                        src
+                        );
+                    goto exit;
+                }
+            }
+
+            hw->conv (dst, src, nread);
+
+            src = advance (src, nread << hwshift);
+            dst += nread;
+
+            read_samples += nread;
+            len -= nread;
+        }
+    }
+
+ exit:
+    hw->wpos = (hw->wpos + read_samples) % hw->samples;
+    return read_samples;
 }
 
-static void alsa_enable_in(HWVoiceIn *hw, bool enable)
+static int alsa_read (SWVoiceIn *sw, void *buf, int size)
+{
+    return audio_pcm_sw_read (sw, buf, size);
+}
+
+static int alsa_ctl_in (HWVoiceIn *hw, int cmd, ...)
 {
     ALSAVoiceIn *alsa = (ALSAVoiceIn *) hw;
-    AudiodevAlsaPerDirectionOptions *apdo = alsa->dev->u.alsa.in;
 
-    if (enable) {
-        bool poll_mode = apdo->try_poll;
+    switch (cmd) {
+    case VOICE_ENABLE:
+        {
+            va_list ap;
+            int poll_mode;
 
-        ldebug("enabling voice\n");
-        if (poll_mode && alsa_poll_in(hw)) {
-            poll_mode = 0;
+            va_start (ap, cmd);
+            poll_mode = va_arg (ap, int);
+            va_end (ap);
+
+            ldebug ("enabling voice\n");
+            if (poll_mode && alsa_poll_in (hw)) {
+                poll_mode = 0;
+            }
+            hw->poll_mode = poll_mode;
+
+            return alsa_voice_ctl (alsa->handle, "capture", VOICE_CTL_START);
         }
-        hw->poll_mode = poll_mode;
 
-        alsa_voice_ctl(alsa->handle, "capture", VOICE_CTL_START);
-    } else {
+    case VOICE_DISABLE:
         ldebug ("disabling voice\n");
         if (hw->poll_mode) {
             hw->poll_mode = 0;
-            alsa_fini_poll(&alsa->pollhlp);
+            alsa_fini_poll (&alsa->pollhlp);
         }
-        alsa_voice_ctl(alsa->handle, "capture", VOICE_CTL_PAUSE);
+        return alsa_voice_ctl (alsa->handle, "capture", VOICE_CTL_PAUSE);
     }
+
+    return -1;
 }
 
-static void alsa_init_per_direction(AudiodevAlsaPerDirectionOptions *apdo)
+static ALSAConf glob_conf = {
+    .buffer_size_out = 4096,
+    .period_size_out = 1024,
+    .pcm_name_out = "default",
+    .pcm_name_in = "default",
+};
+
+static void *alsa_audio_init (void)
 {
-    if (!apdo->has_try_poll) {
-        apdo->try_poll = true;
-        apdo->has_try_poll = true;
-    }
-}
-
-static void *alsa_audio_init(Audiodev *dev)
-{
-    AudiodevAlsaOptions *aopts;
-    assert(dev->driver == AUDIODEV_DRIVER_ALSA);
-
-    aopts = &dev->u.alsa;
-    alsa_init_per_direction(aopts->in);
-    alsa_init_per_direction(aopts->out);
-
-    /*
-     * need to define them, as otherwise alsa produces no sound
-     * doesn't set has_* so alsa_open can identify it wasn't set by the user
-     */
-    if (!dev->u.alsa.out->has_period_length) {
-        /* 1024 frames assuming 44100Hz */
-        dev->u.alsa.out->period_length = 1024 * 1000000 / 44100;
-    }
-    if (!dev->u.alsa.out->has_buffer_length) {
-        /* 4096 frames assuming 44100Hz */
-        dev->u.alsa.out->buffer_length = 4096ll * 1000000 / 44100;
-    }
-
-    /*
-     * OptsVisitor sets unspecified optional fields to zero, but do not depend
-     * on it...
-     */
-    if (!dev->u.alsa.in->has_period_length) {
-        dev->u.alsa.in->period_length = 0;
-    }
-    if (!dev->u.alsa.in->has_buffer_length) {
-        dev->u.alsa.in->buffer_length = 0;
-    }
-
-    return dev;
+    ALSAConf *conf = g_malloc(sizeof(ALSAConf));
+    *conf = glob_conf;
+    return conf;
 }
 
 static void alsa_audio_fini (void *opaque)
 {
+    g_free(opaque);
 }
+
+static struct audio_option alsa_options[] = {
+    {
+        .name        = "DAC_SIZE_IN_USEC",
+        .tag         = AUD_OPT_BOOL,
+        .valp        = &glob_conf.size_in_usec_out,
+        .descr       = "DAC period/buffer size in microseconds (otherwise in frames)"
+    },
+    {
+        .name        = "DAC_PERIOD_SIZE",
+        .tag         = AUD_OPT_INT,
+        .valp        = &glob_conf.period_size_out,
+        .descr       = "DAC period size (0 to go with system default)",
+        .overriddenp = &glob_conf.period_size_out_overridden
+    },
+    {
+        .name        = "DAC_BUFFER_SIZE",
+        .tag         = AUD_OPT_INT,
+        .valp        = &glob_conf.buffer_size_out,
+        .descr       = "DAC buffer size (0 to go with system default)",
+        .overriddenp = &glob_conf.buffer_size_out_overridden
+    },
+    {
+        .name        = "ADC_SIZE_IN_USEC",
+        .tag         = AUD_OPT_BOOL,
+        .valp        = &glob_conf.size_in_usec_in,
+        .descr       =
+        "ADC period/buffer size in microseconds (otherwise in frames)"
+    },
+    {
+        .name        = "ADC_PERIOD_SIZE",
+        .tag         = AUD_OPT_INT,
+        .valp        = &glob_conf.period_size_in,
+        .descr       = "ADC period size (0 to go with system default)",
+        .overriddenp = &glob_conf.period_size_in_overridden
+    },
+    {
+        .name        = "ADC_BUFFER_SIZE",
+        .tag         = AUD_OPT_INT,
+        .valp        = &glob_conf.buffer_size_in,
+        .descr       = "ADC buffer size (0 to go with system default)",
+        .overriddenp = &glob_conf.buffer_size_in_overridden
+    },
+    {
+        .name        = "THRESHOLD",
+        .tag         = AUD_OPT_INT,
+        .valp        = &glob_conf.threshold,
+        .descr       = "(undocumented)"
+    },
+    {
+        .name        = "DAC_DEV",
+        .tag         = AUD_OPT_STR,
+        .valp        = &glob_conf.pcm_name_out,
+        .descr       = "DAC device name (for instance dmix)"
+    },
+    {
+        .name        = "ADC_DEV",
+        .tag         = AUD_OPT_STR,
+        .valp        = &glob_conf.pcm_name_in,
+        .descr       = "ADC device name"
+    },
+    { /* End of list */ }
+};
 
 static struct audio_pcm_ops alsa_pcm_ops = {
     .init_out = alsa_init_out,
     .fini_out = alsa_fini_out,
+    .run_out  = alsa_run_out,
     .write    = alsa_write,
-    .run_buffer_out = audio_generic_run_buffer_out,
-    .enable_out = alsa_enable_out,
+    .ctl_out  = alsa_ctl_out,
 
     .init_in  = alsa_init_in,
     .fini_in  = alsa_fini_in,
+    .run_in   = alsa_run_in,
     .read     = alsa_read,
-    .enable_in = alsa_enable_in,
+    .ctl_in   = alsa_ctl_in,
 };
 
 static struct audio_driver alsa_audio_driver = {
     .name           = "alsa",
     .descr          = "ALSA http://www.alsa-project.org",
+    .options        = alsa_options,
     .init           = alsa_audio_init,
     .fini           = alsa_audio_fini,
     .pcm_ops        = &alsa_pcm_ops,

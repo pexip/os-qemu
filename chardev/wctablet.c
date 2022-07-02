@@ -27,12 +27,11 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/module.h"
+#include "qemu-common.h"
 #include "chardev/char-serial.h"
 #include "ui/console.h"
 #include "ui/input.h"
 #include "trace.h"
-#include "qom/object.h"
 
 
 #define WC_OUTPUT_BUF_MAX_LEN 512
@@ -65,7 +64,7 @@ uint8_t WC_FULL_CONFIG_STRING[WC_FULL_CONFIG_STRING_LENGTH + 1] = {
 };
 
 /* This structure is used to save private info for Wacom Tablet. */
-struct TabletChardev {
+typedef struct {
     Chardev parent;
     QemuInputHandlerState *hs;
 
@@ -82,12 +81,11 @@ struct TabletChardev {
     int axis[INPUT_AXIS__MAX];
     bool btns[INPUT_BUTTON__MAX];
 
-};
-typedef struct TabletChardev TabletChardev;
+} TabletChardev;
 
 #define TYPE_CHARDEV_WCTABLET "chardev-wctablet"
-DECLARE_INSTANCE_CHECKER(TabletChardev, WCTABLET_CHARDEV,
-                         TYPE_CHARDEV_WCTABLET)
+#define WCTABLET_CHARDEV(obj)                                      \
+    OBJECT_CHECK(TabletChardev, (obj), TYPE_CHARDEV_WCTABLET)
 
 
 static void wctablet_chr_accept_input(Chardev *chr);
@@ -179,7 +177,7 @@ static void wctablet_input_sync(DeviceState *dev)
 }
 
 static QemuInputHandler wctablet_handler = {
-    .name  = "QEMU Wacom Pen Tablet",
+    .name  = "QEMU Wacome Pen Tablet",
     .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_ABS,
     .event = wctablet_input_event,
     .sync  = wctablet_input_sync,

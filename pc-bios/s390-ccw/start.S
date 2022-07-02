@@ -34,10 +34,7 @@ remainder:
 	larl	%r2,memsetxc
 	ex	%r3,0(%r2)
 done:
-        /* set up a pgm exception disabled wait psw */
-        larl	%r2, disabled_wait_psw
-        mvc	0x01d0(16), 0(%r2)
-        j      main		/* And call C */
+	j      main		/* And call C */
 
 memsetxc:
 	xc	0(1,%r1),0(%r1)
@@ -50,9 +47,8 @@ memsetxc:
  */
 	.globl disabled_wait
 disabled_wait:
-	larl	%r1,disabled_wait_psw
-	lpswe	0(%r1)
-1:	j	1b
+        larl %r1,disabled_wait_psw
+        lpswe   0(%r1)
 
 
 /*
@@ -63,9 +59,9 @@ disabled_wait:
         .globl consume_sclp_int
 consume_sclp_int:
         /* enable service interrupts in cr0 */
-        stctg   %c0,%c0,0(%r15)
-        oi      6(%r15),0x2
-        lctlg   %c0,%c0,0(%r15)
+        stctg 0,0,0(15)
+        oi 6(15), 0x2
+        lctlg 0,0,0(15)
         /* prepare external call handler */
         larl %r1, external_new_code
         stg %r1, 0x1b8
@@ -75,39 +71,12 @@ consume_sclp_int:
         larl %r1, enabled_wait_psw
         lpswe 0(%r1)
 
-/*
- * void consume_io_int(void)
- *
- * eats one I/O interrupt
- */
-        .globl consume_io_int
-consume_io_int:
-        /* enable I/O interrupts in cr6 */
-        stctg %c6,%c6,0(%r15)
-        oi    4(%r15), 0xff
-        lctlg %c6,%c6,0(%r15)
-        /* prepare i/o call handler */
-        larl  %r1, io_new_code
-        stg   %r1, 0x1f8
-        larl  %r1, io_new_mask
-        mvc   0x1f0(8),0(%r1)
-        /* load enabled wait PSW */
-        larl  %r1, enabled_wait_psw
-        lpswe 0(%r1)
-
 external_new_code:
         /* disable service interrupts in cr0 */
-        stctg   %c0,%c0,0(%r15)
-        ni      6(%r15),0xfd
-        lctlg   %c0,%c0,0(%r15)
-        br      %r14
-
-io_new_code:
-        /* disable I/O interrupts in cr6 */
-        stctg %c6,%c6,0(%r15)
-        ni    4(%r15), 0x00
-        lctlg %c6,%c6,0(%r15)
-        br    %r14
+        stctg 0,0,0(15)
+        ni 6(15), 0xfd
+        lctlg 0,0,0(15)
+        br 14
 
         .align  8
 disabled_wait_psw:
@@ -115,6 +84,4 @@ disabled_wait_psw:
 enabled_wait_psw:
         .quad   0x0302000180000000,0x0000000000000000
 external_new_mask:
-        .quad   0x0000000180000000
-io_new_mask:
         .quad   0x0000000180000000

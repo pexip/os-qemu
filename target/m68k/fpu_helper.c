@@ -7,12 +7,12 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
+ * General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
@@ -25,8 +25,7 @@
 #include "exec/cpu_ldst.h"
 #include "softfloat.h"
 
-/*
- * Undefined offsets may be different on various FPU.
+/* Undefined offsets may be different on various FPU.
  * On 68040 they return 0.0 (floatx80_zero)
  */
 
@@ -149,7 +148,7 @@ void cpu_m68k_set_fpcr(CPUM68KState *env, uint32_t val)
 
 void HELPER(fitrunc)(CPUM68KState *env, FPReg *res, FPReg *val)
 {
-    FloatRoundMode rounding_mode = get_float_rounding_mode(&env->fp_status);
+    int rounding_mode = get_float_rounding_mode(&env->fp_status);
     set_float_rounding_mode(float_round_to_zero, &env->fp_status);
     res->d = floatx80_round_to_int(val->d, &env->fp_status);
     set_float_rounding_mode(rounding_mode, &env->fp_status);
@@ -300,7 +299,7 @@ void HELPER(fdmul)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
 
 void HELPER(fsglmul)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
 {
-    FloatRoundMode rounding_mode = get_float_rounding_mode(&env->fp_status);
+    int rounding_mode = get_float_rounding_mode(&env->fp_status);
     floatx80 a, b;
 
     PREC_BEGIN(32);
@@ -333,7 +332,7 @@ void HELPER(fddiv)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
 
 void HELPER(fsgldiv)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
 {
-    FloatRoundMode rounding_mode = get_float_rounding_mode(&env->fp_status);
+    int rounding_mode = get_float_rounding_mode(&env->fp_status);
     floatx80 a, b;
 
     PREC_BEGIN(32);
@@ -396,14 +395,14 @@ typedef int (*float_access)(CPUM68KState *env, uint32_t addr, FPReg *fp,
                             uintptr_t ra);
 
 static uint32_t fmovem_predec(CPUM68KState *env, uint32_t addr, uint32_t mask,
-                              float_access access_fn)
+                               float_access access)
 {
     uintptr_t ra = GETPC();
     int i, size;
 
     for (i = 7; i >= 0; i--, mask <<= 1) {
         if (mask & 0x80) {
-            size = access_fn(env, addr, &env->fregs[i], ra);
+            size = access(env, addr, &env->fregs[i], ra);
             if ((mask & 0xff) != 0x80) {
                 addr -= size;
             }
@@ -414,14 +413,14 @@ static uint32_t fmovem_predec(CPUM68KState *env, uint32_t addr, uint32_t mask,
 }
 
 static uint32_t fmovem_postinc(CPUM68KState *env, uint32_t addr, uint32_t mask,
-                               float_access access_fn)
+                               float_access access)
 {
     uintptr_t ra = GETPC();
     int i, size;
 
     for (i = 0; i < 8; i++, mask <<= 1) {
         if (mask & 0x80) {
-            size = access_fn(env, addr, &env->fregs[i], ra);
+            size = access(env, addr, &env->fregs[i], ra);
             addr += size;
         }
     }
@@ -612,8 +611,7 @@ void HELPER(fcos)(CPUM68KState *env, FPReg *res, FPReg *val)
 void HELPER(fsincos)(CPUM68KState *env, FPReg *res0, FPReg *res1, FPReg *val)
 {
     floatx80 a = val->d;
-    /*
-     * If res0 and res1 specify the same floating-point data register,
+    /* If res0 and res1 specify the same floating-point data register,
      * the sine result is stored in the register, and the cosine
      * result is discarded.
      */
@@ -639,11 +637,6 @@ void HELPER(facos)(CPUM68KState *env, FPReg *res, FPReg *val)
 void HELPER(fatanh)(CPUM68KState *env, FPReg *res, FPReg *val)
 {
     res->d = floatx80_atanh(val->d, &env->fp_status);
-}
-
-void HELPER(fetoxm1)(CPUM68KState *env, FPReg *res, FPReg *val)
-{
-    res->d = floatx80_etoxm1(val->d, &env->fp_status);
 }
 
 void HELPER(ftanh)(CPUM68KState *env, FPReg *res, FPReg *val)

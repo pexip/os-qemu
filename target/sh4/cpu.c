@@ -21,11 +21,12 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu/qemu-print.h"
 #include "cpu.h"
+#include "qemu-common.h"
 #include "migration/vmstate.h"
 #include "exec/exec-all.h"
-#include "fpu/softfloat-helpers.h"
+#include "fpu/softfloat.h"
+
 
 static void superh_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -47,14 +48,14 @@ static bool superh_cpu_has_work(CPUState *cs)
     return cs->interrupt_request & CPU_INTERRUPT_HARD;
 }
 
-static void superh_cpu_reset(DeviceState *dev)
+/* CPUClass::reset() */
+static void superh_cpu_reset(CPUState *s)
 {
-    CPUState *s = CPU(dev);
     SuperHCPU *cpu = SUPERH_CPU(s);
     SuperHCPUClass *scc = SUPERH_CPU_GET_CLASS(cpu);
     CPUSH4State *env = &cpu->env;
 
-    scc->parent_reset(dev);
+    scc->parent_reset(s);
 
     memset(env, 0, offsetof(CPUSH4State, end_reset_fields));
 
@@ -78,20 +79,30 @@ static void superh_cpu_disas_set_info(CPUState *cpu, disassemble_info *info)
     info->print_insn = print_insn_sh;
 }
 
+typedef struct SuperHCPUListState {
+    fprintf_function cpu_fprintf;
+    FILE *file;
+} SuperHCPUListState;
+
 static void superh_cpu_list_entry(gpointer data, gpointer user_data)
 {
+    SuperHCPUListState *s = user_data;
     const char *typename = object_class_get_name(OBJECT_CLASS(data));
     int len = strlen(typename) - strlen(SUPERH_CPU_TYPE_SUFFIX);
 
-    qemu_printf("%.*s\n", len, typename);
+    (*s->cpu_fprintf)(s->file, "%.*s\n", len, typename);
 }
 
-void sh4_cpu_list(void)
+void sh4_cpu_list(FILE *f, fprintf_function cpu_fprintf)
 {
+    SuperHCPUListState s = {
+        .cpu_fprintf = cpu_fprintf,
+        .file = f,
+    };
     GSList *list;
 
     list = object_class_get_list_sorted(TYPE_SUPERH_CPU, false);
-    g_slist_foreach(list, superh_cpu_list_entry, NULL);
+    g_slist_foreach(list, superh_cpu_list_entry, &s);
     g_slist_free(list);
 }
 
@@ -192,10 +203,11 @@ static void superh_cpu_realizefn(DeviceState *dev, Error **errp)
 
 static void superh_cpu_initfn(Object *obj)
 {
+    CPUState *cs = CPU(obj);
     SuperHCPU *cpu = SUPERH_CPU(obj);
     CPUSH4State *env = &cpu->env;
 
-    cpu_set_cpustate_pointers(cpu);
+    cs->env_ptr = env;
 
     env->movcal_backup_tail = &(env->movcal_backup);
 }
@@ -214,7 +226,8 @@ static void superh_cpu_class_init(ObjectClass *oc, void *data)
     device_class_set_parent_realize(dc, superh_cpu_realizefn,
                                     &scc->parent_realize);
 
-    device_class_set_parent_reset(dc, superh_cpu_reset, &scc->parent_reset);
+    scc->parent_reset = cc->reset;
+    cc->reset = superh_cpu_reset;
 
     cc->class_by_name = superh_cpu_class_by_name;
     cc->has_work = superh_cpu_has_work;
@@ -225,8 +238,9 @@ static void superh_cpu_class_init(ObjectClass *oc, void *data)
     cc->synchronize_from_tb = superh_cpu_synchronize_from_tb;
     cc->gdb_read_register = superh_cpu_gdb_read_register;
     cc->gdb_write_register = superh_cpu_gdb_write_register;
-    cc->tlb_fill = superh_cpu_tlb_fill;
-#ifndef CONFIG_USER_ONLY
+#ifdef CONFIG_USER_ONLY
+    cc->handle_mmu_fault = superh_cpu_handle_mmu_fault;
+#else
     cc->do_unaligned_access = superh_cpu_do_unaligned_access;
     cc->get_phys_page_debug = superh_cpu_get_phys_page_debug;
 #endif

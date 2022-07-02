@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,14 +20,12 @@
 #include "cpu.h"
 #include "disas/disas.h"
 #include "exec/exec-all.h"
-#include "tcg/tcg.h"
+#include "tcg.h"
 #include "qemu/bitops.h"
 #include "exec/cpu_ldst.h"
 #include "translate-all.h"
 #include "exec/helper-proto.h"
 #include "qemu/atomic128.h"
-#include "trace/trace-root.h"
-#include "trace/mem.h"
 
 #undef EAX
 #undef ECX
@@ -65,57 +63,28 @@ static inline int handle_cpu_signal(uintptr_t pc, siginfo_t *info,
 {
     CPUState *cpu = current_cpu;
     CPUClass *cc;
+    int ret;
     unsigned long address = (unsigned long)info->si_addr;
-    MMUAccessType access_type = is_write ? MMU_DATA_STORE : MMU_DATA_LOAD;
 
-    switch (helper_retaddr) {
-    default:
-        /*
-         * Fault during host memory operation within a helper function.
-         * The helper's host return address, saved here, gives us a
-         * pointer into the generated code that will unwind to the
-         * correct guest pc.
-         */
+    /* We must handle PC addresses from two different sources:
+     * a call return address and a signal frame address.
+     *
+     * Within cpu_restore_state_from_tb we assume the former and adjust
+     * the address by -GETPC_ADJ so that the address is within the call
+     * insn so that addr does not accidentally match the beginning of the
+     * next guest insn.
+     *
+     * However, when the PC comes from the signal frame, it points to
+     * the actual faulting host insn and not a call insn.  Subtracting
+     * GETPC_ADJ in that case may accidentally match the previous guest insn.
+     *
+     * So for the later case, adjust forward to compensate for what
+     * will be done later by cpu_restore_state_from_tb.
+     */
+    if (helper_retaddr) {
         pc = helper_retaddr;
-        break;
-
-    case 0:
-        /*
-         * Fault during host memory operation within generated code.
-         * (Or, a unrelated bug within qemu, but we can't tell from here).
-         *
-         * We take the host pc from the signal frame.  However, we cannot
-         * use that value directly.  Within cpu_restore_state_from_tb, we
-         * assume PC comes from GETPC(), as used by the helper functions,
-         * so we adjust the address by -GETPC_ADJ to form an address that
-         * is within the call insn, so that the address does not accidentally
-         * match the beginning of the next guest insn.  However, when the
-         * pc comes from the signal frame it points to the actual faulting
-         * host memory insn and not the return from a call insn.
-         *
-         * Therefore, adjust to compensate for what will be done later
-         * by cpu_restore_state_from_tb.
-         */
+    } else {
         pc += GETPC_ADJ;
-        break;
-
-    case 1:
-        /*
-         * Fault during host read for translation, or loosely, "execution".
-         *
-         * The guest pc is already pointing to the start of the TB for which
-         * code is being generated.  If the guest translator manages the
-         * page crossings correctly, this is exactly the correct address
-         * (and if the translator doesn't handle page boundaries correctly
-         * there's little we can do about that here).  Therefore, do not
-         * trigger the unwinder.
-         *
-         * Like tb_gen_code, release the memory lock before cpu_loop_exit.
-         */
-        pc = 0;
-        access_type = MMU_INST_FETCH;
-        mmap_unlock();
-        break;
     }
 
     /* For synchronous signals we expect to be coming from the vCPU
@@ -165,7 +134,7 @@ static inline int handle_cpu_signal(uintptr_t pc, siginfo_t *info,
              * currently executing TB was modified and must be exited
              * immediately.  Clear helper_retaddr for next execution.
              */
-            clear_helper_retaddr();
+            helper_retaddr = 0;
             cpu_exit_tb_from_sighandler(cpu, old_set);
             /* NORETURN */
 
@@ -178,73 +147,35 @@ static inline int handle_cpu_signal(uintptr_t pc, siginfo_t *info,
        are still valid segv ones */
     address = h2g_nocheck(address);
 
-    /*
-     * There is no way the target can handle this other than raising
-     * an exception.  Undo signal and retaddr state prior to longjmp.
-     */
-    sigprocmask(SIG_SETMASK, old_set, NULL);
-    clear_helper_retaddr();
-
     cc = CPU_GET_CLASS(cpu);
-    cc->tlb_fill(cpu, address, 0, access_type, MMU_USER_IDX, false, pc);
-    g_assert_not_reached();
-}
+    /* see if it is an MMU fault */
+    g_assert(cc->handle_mmu_fault);
+    ret = cc->handle_mmu_fault(cpu, address, 0, is_write, MMU_USER_IDX);
 
-static int probe_access_internal(CPUArchState *env, target_ulong addr,
-                                 int fault_size, MMUAccessType access_type,
-                                 bool nonfault, uintptr_t ra)
-{
-    int flags;
-
-    switch (access_type) {
-    case MMU_DATA_STORE:
-        flags = PAGE_WRITE;
-        break;
-    case MMU_DATA_LOAD:
-        flags = PAGE_READ;
-        break;
-    case MMU_INST_FETCH:
-        flags = PAGE_EXEC;
-        break;
-    default:
-        g_assert_not_reached();
+    if (ret == 0) {
+        /* The MMU fault was handled without causing real CPU fault.
+         *  Retain helper_retaddr for a possible second fault.
+         */
+        return 1;
     }
 
-    if (!guest_addr_valid(addr) || page_check_range(addr, 1, flags) < 0) {
-        if (nonfault) {
-            return TLB_INVALID_MASK;
-        } else {
-            CPUState *cpu = env_cpu(env);
-            CPUClass *cc = CPU_GET_CLASS(cpu);
-            cc->tlb_fill(cpu, addr, fault_size, access_type,
-                         MMU_USER_IDX, false, ra);
-            g_assert_not_reached();
-        }
+    /* All other paths lead to cpu_exit; clear helper_retaddr
+     * for next execution.
+     */
+    helper_retaddr = 0;
+
+    if (ret < 0) {
+        return 0; /* not an MMU fault */
     }
-    return 0;
-}
 
-int probe_access_flags(CPUArchState *env, target_ulong addr,
-                       MMUAccessType access_type, int mmu_idx,
-                       bool nonfault, void **phost, uintptr_t ra)
-{
-    int flags;
+    /* Now we have a real cpu fault.  */
+    cpu_restore_state(cpu, pc, true);
 
-    flags = probe_access_internal(env, addr, 0, access_type, nonfault, ra);
-    *phost = flags ? NULL : g2h(addr);
-    return flags;
-}
+    sigprocmask(SIG_SETMASK, old_set, NULL);
+    cpu_loop_exit(cpu);
 
-void *probe_access(CPUArchState *env, target_ulong addr, int size,
-                   MMUAccessType access_type, int mmu_idx, uintptr_t ra)
-{
-    int flags;
-
-    g_assert(-(addr | TARGET_PAGE_MASK) >= size);
-    flags = probe_access_internal(env, addr, size, access_type, false, ra);
-    g_assert(flags == 0);
-
-    return size ? g2h(addr) : NULL;
+    /* never comes here */
+    return 1;
 }
 
 #if defined(__i386__)
@@ -517,7 +448,6 @@ int cpu_signal_handler(int host_signum, void *pinfo,
 
 #if defined(__NetBSD__)
 #include <ucontext.h>
-#include <sys/siginfo.h>
 #endif
 
 int cpu_signal_handler(int host_signum, void *pinfo,
@@ -526,12 +456,10 @@ int cpu_signal_handler(int host_signum, void *pinfo,
     siginfo_t *info = pinfo;
 #if defined(__NetBSD__)
     ucontext_t *uc = puc;
-    siginfo_t *si = pinfo;
 #else
     ucontext_t *uc = puc;
 #endif
     unsigned long pc;
-    uint32_t fsr;
     int is_write;
 
 #if defined(__NetBSD__)
@@ -542,111 +470,39 @@ int cpu_signal_handler(int host_signum, void *pinfo,
     pc = uc->uc_mcontext.arm_pc;
 #endif
 
-#ifdef __NetBSD__
-    fsr = si->si_trap;
-#else
-    fsr = uc->uc_mcontext.error_code;
-#endif
-    /*
-     * In the FSR, bit 11 is WnR, assuming a v6 or
-     * later processor.  On v5 we will always report
-     * this as a read, which will fail later.
+    /* error_code is the FSR value, in which bit 11 is WnR (assuming a v6 or
+     * later processor; on v5 we will always report this as a read).
      */
-    is_write = extract32(fsr, 11, 1);
+    is_write = extract32(uc->uc_mcontext.error_code, 11, 1);
     return handle_cpu_signal(pc, info, is_write, &uc->uc_sigmask);
 }
 
 #elif defined(__aarch64__)
-
-#if defined(__NetBSD__)
-
-#include <ucontext.h>
-#include <sys/siginfo.h>
-
-int cpu_signal_handler(int host_signum, void *pinfo, void *puc)
-{
-    ucontext_t *uc = puc;
-    siginfo_t *si = pinfo;
-    unsigned long pc;
-    int is_write;
-    uint32_t esr;
-
-    pc = uc->uc_mcontext.__gregs[_REG_PC];
-    esr = si->si_trap;
-
-    /*
-     * siginfo_t::si_trap is the ESR value, for data aborts ESR.EC
-     * is 0b10010x: then bit 6 is the WnR bit
-     */
-    is_write = extract32(esr, 27, 5) == 0x12 && extract32(esr, 6, 1) == 1;
-    return handle_cpu_signal(pc, si, is_write, &uc->uc_sigmask);
-}
-
-#else
-
-#ifndef ESR_MAGIC
-/* Pre-3.16 kernel headers don't have these, so provide fallback definitions */
-#define ESR_MAGIC 0x45535201
-struct esr_context {
-    struct _aarch64_ctx head;
-    uint64_t esr;
-};
-#endif
-
-static inline struct _aarch64_ctx *first_ctx(ucontext_t *uc)
-{
-    return (struct _aarch64_ctx *)&uc->uc_mcontext.__reserved;
-}
-
-static inline struct _aarch64_ctx *next_ctx(struct _aarch64_ctx *hdr)
-{
-    return (struct _aarch64_ctx *)((char *)hdr + hdr->size);
-}
 
 int cpu_signal_handler(int host_signum, void *pinfo, void *puc)
 {
     siginfo_t *info = pinfo;
     ucontext_t *uc = puc;
     uintptr_t pc = uc->uc_mcontext.pc;
+    uint32_t insn = *(uint32_t *)pc;
     bool is_write;
-    struct _aarch64_ctx *hdr;
-    struct esr_context const *esrctx = NULL;
 
-    /* Find the esr_context, which has the WnR bit in it */
-    for (hdr = first_ctx(uc); hdr->magic; hdr = next_ctx(hdr)) {
-        if (hdr->magic == ESR_MAGIC) {
-            esrctx = (struct esr_context const *)hdr;
-            break;
-        }
-    }
+    /* XXX: need kernel patch to get write flag faster.  */
+    is_write = (   (insn & 0xbfff0000) == 0x0c000000   /* C3.3.1 */
+                || (insn & 0xbfe00000) == 0x0c800000   /* C3.3.2 */
+                || (insn & 0xbfdf0000) == 0x0d000000   /* C3.3.3 */
+                || (insn & 0xbfc00000) == 0x0d800000   /* C3.3.4 */
+                || (insn & 0x3f400000) == 0x08000000   /* C3.3.6 */
+                || (insn & 0x3bc00000) == 0x39000000   /* C3.3.13 */
+                || (insn & 0x3fc00000) == 0x3d800000   /* ... 128bit */
+                /* Ingore bits 10, 11 & 21, controlling indexing.  */
+                || (insn & 0x3bc00000) == 0x38000000   /* C3.3.8-12 */
+                || (insn & 0x3fe00000) == 0x3c800000   /* ... 128bit */
+                /* Ignore bits 23 & 24, controlling indexing.  */
+                || (insn & 0x3a400000) == 0x28000000); /* C3.3.7,14-16 */
 
-    if (esrctx) {
-        /* For data aborts ESR.EC is 0b10010x: then bit 6 is the WnR bit */
-        uint64_t esr = esrctx->esr;
-        is_write = extract32(esr, 27, 5) == 0x12 && extract32(esr, 6, 1) == 1;
-    } else {
-        /*
-         * Fall back to parsing instructions; will only be needed
-         * for really ancient (pre-3.16) kernels.
-         */
-        uint32_t insn = *(uint32_t *)pc;
-
-        is_write = ((insn & 0xbfff0000) == 0x0c000000   /* C3.3.1 */
-                    || (insn & 0xbfe00000) == 0x0c800000   /* C3.3.2 */
-                    || (insn & 0xbfdf0000) == 0x0d000000   /* C3.3.3 */
-                    || (insn & 0xbfc00000) == 0x0d800000   /* C3.3.4 */
-                    || (insn & 0x3f400000) == 0x08000000   /* C3.3.6 */
-                    || (insn & 0x3bc00000) == 0x39000000   /* C3.3.13 */
-                    || (insn & 0x3fc00000) == 0x3d800000   /* ... 128bit */
-                    /* Ignore bits 10, 11 & 21, controlling indexing.  */
-                    || (insn & 0x3bc00000) == 0x38000000   /* C3.3.8-12 */
-                    || (insn & 0x3fe00000) == 0x3c800000   /* ... 128bit */
-                    /* Ignore bits 23 & 24, controlling indexing.  */
-                    || (insn & 0x3a400000) == 0x28000000); /* C3.3.7,14-16 */
-    }
     return handle_cpu_signal(pc, info, is_write, &uc->uc_sigmask);
 }
-#endif
 
 #elif defined(__s390__)
 
@@ -702,126 +558,16 @@ int cpu_signal_handler(int host_signum, void *pinfo,
 
 #elif defined(__mips__)
 
-#if defined(__misp16) || defined(__mips_micromips)
-#error "Unsupported encoding"
-#endif
-
 int cpu_signal_handler(int host_signum, void *pinfo,
                        void *puc)
 {
     siginfo_t *info = pinfo;
     ucontext_t *uc = puc;
-    uintptr_t pc = uc->uc_mcontext.pc;
-    uint32_t insn = *(uint32_t *)pc;
-    int is_write = 0;
+    greg_t pc = uc->uc_mcontext.pc;
+    int is_write;
 
-    /* Detect all store instructions at program counter. */
-    switch((insn >> 26) & 077) {
-    case 050: /* SB */
-    case 051: /* SH */
-    case 052: /* SWL */
-    case 053: /* SW */
-    case 054: /* SDL */
-    case 055: /* SDR */
-    case 056: /* SWR */
-    case 070: /* SC */
-    case 071: /* SWC1 */
-    case 074: /* SCD */
-    case 075: /* SDC1 */
-    case 077: /* SD */
-#if !defined(__mips_isa_rev) || __mips_isa_rev < 6
-    case 072: /* SWC2 */
-    case 076: /* SDC2 */
-#endif
-        is_write = 1;
-        break;
-    case 023: /* COP1X */
-        /* Required in all versions of MIPS64 since
-           MIPS64r1 and subsequent versions of MIPS32r2. */
-        switch (insn & 077) {
-        case 010: /* SWXC1 */
-        case 011: /* SDXC1 */
-        case 015: /* SUXC1 */
-            is_write = 1;
-        }
-        break;
-    }
-
-    return handle_cpu_signal(pc, info, is_write, &uc->uc_sigmask);
-}
-
-#elif defined(__riscv)
-
-int cpu_signal_handler(int host_signum, void *pinfo,
-                       void *puc)
-{
-    siginfo_t *info = pinfo;
-    ucontext_t *uc = puc;
-    greg_t pc = uc->uc_mcontext.__gregs[REG_PC];
-    uint32_t insn = *(uint32_t *)pc;
-    int is_write = 0;
-
-    /* Detect store by reading the instruction at the program
-       counter. Note: we currently only generate 32-bit
-       instructions so we thus only detect 32-bit stores */
-    switch (((insn >> 0) & 0b11)) {
-    case 3:
-        switch (((insn >> 2) & 0b11111)) {
-        case 8:
-            switch (((insn >> 12) & 0b111)) {
-            case 0: /* sb */
-            case 1: /* sh */
-            case 2: /* sw */
-            case 3: /* sd */
-            case 4: /* sq */
-                is_write = 1;
-                break;
-            default:
-                break;
-            }
-            break;
-        case 9:
-            switch (((insn >> 12) & 0b111)) {
-            case 2: /* fsw */
-            case 3: /* fsd */
-            case 4: /* fsq */
-                is_write = 1;
-                break;
-            default:
-                break;
-            }
-            break;
-        default:
-            break;
-        }
-    }
-
-    /* Check for compressed instructions */
-    switch (((insn >> 13) & 0b111)) {
-    case 7:
-        switch (insn & 0b11) {
-        case 0: /*c.sd */
-        case 2: /* c.sdsp */
-            is_write = 1;
-            break;
-        default:
-            break;
-        }
-        break;
-    case 6:
-        switch (insn & 0b11) {
-        case 0: /* c.sw */
-        case 3: /* c.swsp */
-            is_write = 1;
-            break;
-        default:
-            break;
-        }
-        break;
-    default:
-        break;
-    }
-
+    /* XXX: compute is_write */
+    is_write = 0;
     return handle_cpu_signal(pc, info, is_write, &uc->uc_sigmask);
 }
 
@@ -833,398 +579,25 @@ int cpu_signal_handler(int host_signum, void *pinfo,
 
 /* The softmmu versions of these helpers are in cputlb.c.  */
 
-uint32_t cpu_ldub_data(CPUArchState *env, abi_ptr ptr)
-{
-    uint32_t ret;
-    uint16_t meminfo = trace_mem_get_info(MO_UB, MMU_USER_IDX, false);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    ret = ldub_p(g2h(ptr));
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-    return ret;
-}
-
-int cpu_ldsb_data(CPUArchState *env, abi_ptr ptr)
-{
-    int ret;
-    uint16_t meminfo = trace_mem_get_info(MO_SB, MMU_USER_IDX, false);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    ret = ldsb_p(g2h(ptr));
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-    return ret;
-}
-
-uint32_t cpu_lduw_be_data(CPUArchState *env, abi_ptr ptr)
-{
-    uint32_t ret;
-    uint16_t meminfo = trace_mem_get_info(MO_BEUW, MMU_USER_IDX, false);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    ret = lduw_be_p(g2h(ptr));
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-    return ret;
-}
-
-int cpu_ldsw_be_data(CPUArchState *env, abi_ptr ptr)
-{
-    int ret;
-    uint16_t meminfo = trace_mem_get_info(MO_BESW, MMU_USER_IDX, false);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    ret = ldsw_be_p(g2h(ptr));
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-    return ret;
-}
-
-uint32_t cpu_ldl_be_data(CPUArchState *env, abi_ptr ptr)
-{
-    uint32_t ret;
-    uint16_t meminfo = trace_mem_get_info(MO_BEUL, MMU_USER_IDX, false);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    ret = ldl_be_p(g2h(ptr));
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-    return ret;
-}
-
-uint64_t cpu_ldq_be_data(CPUArchState *env, abi_ptr ptr)
-{
-    uint64_t ret;
-    uint16_t meminfo = trace_mem_get_info(MO_BEQ, MMU_USER_IDX, false);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    ret = ldq_be_p(g2h(ptr));
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-    return ret;
-}
-
-uint32_t cpu_lduw_le_data(CPUArchState *env, abi_ptr ptr)
-{
-    uint32_t ret;
-    uint16_t meminfo = trace_mem_get_info(MO_LEUW, MMU_USER_IDX, false);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    ret = lduw_le_p(g2h(ptr));
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-    return ret;
-}
-
-int cpu_ldsw_le_data(CPUArchState *env, abi_ptr ptr)
-{
-    int ret;
-    uint16_t meminfo = trace_mem_get_info(MO_LESW, MMU_USER_IDX, false);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    ret = ldsw_le_p(g2h(ptr));
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-    return ret;
-}
-
-uint32_t cpu_ldl_le_data(CPUArchState *env, abi_ptr ptr)
-{
-    uint32_t ret;
-    uint16_t meminfo = trace_mem_get_info(MO_LEUL, MMU_USER_IDX, false);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    ret = ldl_le_p(g2h(ptr));
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-    return ret;
-}
-
-uint64_t cpu_ldq_le_data(CPUArchState *env, abi_ptr ptr)
-{
-    uint64_t ret;
-    uint16_t meminfo = trace_mem_get_info(MO_LEQ, MMU_USER_IDX, false);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    ret = ldq_le_p(g2h(ptr));
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-    return ret;
-}
-
-uint32_t cpu_ldub_data_ra(CPUArchState *env, abi_ptr ptr, uintptr_t retaddr)
-{
-    uint32_t ret;
-
-    set_helper_retaddr(retaddr);
-    ret = cpu_ldub_data(env, ptr);
-    clear_helper_retaddr();
-    return ret;
-}
-
-int cpu_ldsb_data_ra(CPUArchState *env, abi_ptr ptr, uintptr_t retaddr)
-{
-    int ret;
-
-    set_helper_retaddr(retaddr);
-    ret = cpu_ldsb_data(env, ptr);
-    clear_helper_retaddr();
-    return ret;
-}
-
-uint32_t cpu_lduw_be_data_ra(CPUArchState *env, abi_ptr ptr, uintptr_t retaddr)
-{
-    uint32_t ret;
-
-    set_helper_retaddr(retaddr);
-    ret = cpu_lduw_be_data(env, ptr);
-    clear_helper_retaddr();
-    return ret;
-}
-
-int cpu_ldsw_be_data_ra(CPUArchState *env, abi_ptr ptr, uintptr_t retaddr)
-{
-    int ret;
-
-    set_helper_retaddr(retaddr);
-    ret = cpu_ldsw_be_data(env, ptr);
-    clear_helper_retaddr();
-    return ret;
-}
-
-uint32_t cpu_ldl_be_data_ra(CPUArchState *env, abi_ptr ptr, uintptr_t retaddr)
-{
-    uint32_t ret;
-
-    set_helper_retaddr(retaddr);
-    ret = cpu_ldl_be_data(env, ptr);
-    clear_helper_retaddr();
-    return ret;
-}
-
-uint64_t cpu_ldq_be_data_ra(CPUArchState *env, abi_ptr ptr, uintptr_t retaddr)
-{
-    uint64_t ret;
-
-    set_helper_retaddr(retaddr);
-    ret = cpu_ldq_be_data(env, ptr);
-    clear_helper_retaddr();
-    return ret;
-}
-
-uint32_t cpu_lduw_le_data_ra(CPUArchState *env, abi_ptr ptr, uintptr_t retaddr)
-{
-    uint32_t ret;
-
-    set_helper_retaddr(retaddr);
-    ret = cpu_lduw_le_data(env, ptr);
-    clear_helper_retaddr();
-    return ret;
-}
-
-int cpu_ldsw_le_data_ra(CPUArchState *env, abi_ptr ptr, uintptr_t retaddr)
-{
-    int ret;
-
-    set_helper_retaddr(retaddr);
-    ret = cpu_ldsw_le_data(env, ptr);
-    clear_helper_retaddr();
-    return ret;
-}
-
-uint32_t cpu_ldl_le_data_ra(CPUArchState *env, abi_ptr ptr, uintptr_t retaddr)
-{
-    uint32_t ret;
-
-    set_helper_retaddr(retaddr);
-    ret = cpu_ldl_le_data(env, ptr);
-    clear_helper_retaddr();
-    return ret;
-}
-
-uint64_t cpu_ldq_le_data_ra(CPUArchState *env, abi_ptr ptr, uintptr_t retaddr)
-{
-    uint64_t ret;
-
-    set_helper_retaddr(retaddr);
-    ret = cpu_ldq_le_data(env, ptr);
-    clear_helper_retaddr();
-    return ret;
-}
-
-void cpu_stb_data(CPUArchState *env, abi_ptr ptr, uint32_t val)
-{
-    uint16_t meminfo = trace_mem_get_info(MO_UB, MMU_USER_IDX, true);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    stb_p(g2h(ptr), val);
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-}
-
-void cpu_stw_be_data(CPUArchState *env, abi_ptr ptr, uint32_t val)
-{
-    uint16_t meminfo = trace_mem_get_info(MO_BEUW, MMU_USER_IDX, true);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    stw_be_p(g2h(ptr), val);
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-}
-
-void cpu_stl_be_data(CPUArchState *env, abi_ptr ptr, uint32_t val)
-{
-    uint16_t meminfo = trace_mem_get_info(MO_BEUL, MMU_USER_IDX, true);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    stl_be_p(g2h(ptr), val);
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-}
-
-void cpu_stq_be_data(CPUArchState *env, abi_ptr ptr, uint64_t val)
-{
-    uint16_t meminfo = trace_mem_get_info(MO_BEQ, MMU_USER_IDX, true);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    stq_be_p(g2h(ptr), val);
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-}
-
-void cpu_stw_le_data(CPUArchState *env, abi_ptr ptr, uint32_t val)
-{
-    uint16_t meminfo = trace_mem_get_info(MO_LEUW, MMU_USER_IDX, true);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    stw_le_p(g2h(ptr), val);
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-}
-
-void cpu_stl_le_data(CPUArchState *env, abi_ptr ptr, uint32_t val)
-{
-    uint16_t meminfo = trace_mem_get_info(MO_LEUL, MMU_USER_IDX, true);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    stl_le_p(g2h(ptr), val);
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-}
-
-void cpu_stq_le_data(CPUArchState *env, abi_ptr ptr, uint64_t val)
-{
-    uint16_t meminfo = trace_mem_get_info(MO_LEQ, MMU_USER_IDX, true);
-
-    trace_guest_mem_before_exec(env_cpu(env), ptr, meminfo);
-    stq_le_p(g2h(ptr), val);
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), ptr, meminfo);
-}
-
-void cpu_stb_data_ra(CPUArchState *env, abi_ptr ptr,
-                     uint32_t val, uintptr_t retaddr)
-{
-    set_helper_retaddr(retaddr);
-    cpu_stb_data(env, ptr, val);
-    clear_helper_retaddr();
-}
-
-void cpu_stw_be_data_ra(CPUArchState *env, abi_ptr ptr,
-                        uint32_t val, uintptr_t retaddr)
-{
-    set_helper_retaddr(retaddr);
-    cpu_stw_be_data(env, ptr, val);
-    clear_helper_retaddr();
-}
-
-void cpu_stl_be_data_ra(CPUArchState *env, abi_ptr ptr,
-                        uint32_t val, uintptr_t retaddr)
-{
-    set_helper_retaddr(retaddr);
-    cpu_stl_be_data(env, ptr, val);
-    clear_helper_retaddr();
-}
-
-void cpu_stq_be_data_ra(CPUArchState *env, abi_ptr ptr,
-                        uint64_t val, uintptr_t retaddr)
-{
-    set_helper_retaddr(retaddr);
-    cpu_stq_be_data(env, ptr, val);
-    clear_helper_retaddr();
-}
-
-void cpu_stw_le_data_ra(CPUArchState *env, abi_ptr ptr,
-                        uint32_t val, uintptr_t retaddr)
-{
-    set_helper_retaddr(retaddr);
-    cpu_stw_le_data(env, ptr, val);
-    clear_helper_retaddr();
-}
-
-void cpu_stl_le_data_ra(CPUArchState *env, abi_ptr ptr,
-                        uint32_t val, uintptr_t retaddr)
-{
-    set_helper_retaddr(retaddr);
-    cpu_stl_le_data(env, ptr, val);
-    clear_helper_retaddr();
-}
-
-void cpu_stq_le_data_ra(CPUArchState *env, abi_ptr ptr,
-                        uint64_t val, uintptr_t retaddr)
-{
-    set_helper_retaddr(retaddr);
-    cpu_stq_le_data(env, ptr, val);
-    clear_helper_retaddr();
-}
-
-uint32_t cpu_ldub_code(CPUArchState *env, abi_ptr ptr)
-{
-    uint32_t ret;
-
-    set_helper_retaddr(1);
-    ret = ldub_p(g2h(ptr));
-    clear_helper_retaddr();
-    return ret;
-}
-
-uint32_t cpu_lduw_code(CPUArchState *env, abi_ptr ptr)
-{
-    uint32_t ret;
-
-    set_helper_retaddr(1);
-    ret = lduw_p(g2h(ptr));
-    clear_helper_retaddr();
-    return ret;
-}
-
-uint32_t cpu_ldl_code(CPUArchState *env, abi_ptr ptr)
-{
-    uint32_t ret;
-
-    set_helper_retaddr(1);
-    ret = ldl_p(g2h(ptr));
-    clear_helper_retaddr();
-    return ret;
-}
-
-uint64_t cpu_ldq_code(CPUArchState *env, abi_ptr ptr)
-{
-    uint64_t ret;
-
-    set_helper_retaddr(1);
-    ret = ldq_p(g2h(ptr));
-    clear_helper_retaddr();
-    return ret;
-}
-
 /* Do not allow unaligned operations to proceed.  Return the host address.  */
 static void *atomic_mmu_lookup(CPUArchState *env, target_ulong addr,
                                int size, uintptr_t retaddr)
 {
     /* Enforce qemu required alignment.  */
     if (unlikely(addr & (size - 1))) {
-        cpu_loop_exit_atomic(env_cpu(env), retaddr);
+        cpu_loop_exit_atomic(ENV_GET_CPU(env), retaddr);
     }
-    void *ret = g2h(addr);
-    set_helper_retaddr(retaddr);
-    return ret;
+    helper_retaddr = retaddr;
+    return g2h(addr);
 }
 
 /* Macro to call the above, with local variables from the use context.  */
 #define ATOMIC_MMU_DECLS do {} while (0)
 #define ATOMIC_MMU_LOOKUP  atomic_mmu_lookup(env, addr, DATA_SIZE, GETPC())
-#define ATOMIC_MMU_CLEANUP do { clear_helper_retaddr(); } while (0)
-#define ATOMIC_MMU_IDX MMU_USER_IDX
+#define ATOMIC_MMU_CLEANUP do { helper_retaddr = 0; } while (0)
 
 #define ATOMIC_NAME(X)   HELPER(glue(glue(atomic_ ## X, SUFFIX), END))
 #define EXTRA_ARGS
-
-#include "atomic_common.c.inc"
 
 #define DATA_SIZE 1
 #include "atomic_template.h"

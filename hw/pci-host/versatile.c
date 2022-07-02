@@ -8,17 +8,11 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/units.h"
 #include "hw/sysbus.h"
-#include "migration/vmstate.h"
-#include "hw/irq.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/pci_host.h"
-#include "hw/qdev-properties.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
-#include "qom/object.h"
 
 /* Old and buggy versions of QEMU used the wrong mapping from
  * PCI IRQs to system interrupt lines. Unfortunately the Linux
@@ -72,7 +66,7 @@ enum {
     PCI_VPB_IRQMAP_FORCE_OK,
 };
 
-struct PCIVPBState {
+typedef struct {
     PCIHostState parent_obj;
 
     qemu_irq irq[4];
@@ -101,8 +95,7 @@ struct PCIVPBState {
     uint32_t selfid;
     uint32_t flags;
     uint8_t irq_mapping;
-};
-typedef struct PCIVPBState PCIVPBState;
+} PCIVPBState;
 
 static void pci_vpb_update_window(PCIVPBState *s, int i)
 {
@@ -158,12 +151,12 @@ static const VMStateDescription pci_vpb_vmstate = {
 };
 
 #define TYPE_VERSATILE_PCI "versatile_pci"
-DECLARE_INSTANCE_CHECKER(PCIVPBState, PCI_VPB,
-                         TYPE_VERSATILE_PCI)
+#define PCI_VPB(obj) \
+    OBJECT_CHECK(PCIVPBState, (obj), TYPE_VERSATILE_PCI)
 
 #define TYPE_VERSATILE_PCI_HOST "versatile_pci_host"
-DECLARE_INSTANCE_CHECKER(PCIDevice, PCI_VPB_HOST,
-                         TYPE_VERSATILE_PCI_HOST)
+#define PCI_VPB_HOST(obj) \
+    OBJECT_CHECK(PCIDevice, (obj), TYPE_VERSATILE_PCIHOST)
 
 typedef enum {
     PCI_IMAP0 = 0x0,
@@ -402,8 +395,8 @@ static void pci_vpb_realize(DeviceState *dev, Error **errp)
     pci_map_irq_fn mapfn;
     int i;
 
-    memory_region_init(&s->pci_io_space, OBJECT(s), "pci_io", 4 * GiB);
-    memory_region_init(&s->pci_mem_space, OBJECT(s), "pci_mem", 4 * GiB);
+    memory_region_init(&s->pci_io_space, OBJECT(s), "pci_io", 1ULL << 32);
+    memory_region_init(&s->pci_mem_space, OBJECT(s), "pci_mem", 1ULL << 32);
 
     pci_root_bus_new_inplace(&s->pci_bus, sizeof(s->pci_bus), dev, "pci",
                              &s->pci_mem_space, &s->pci_io_space,
@@ -411,6 +404,7 @@ static void pci_vpb_realize(DeviceState *dev, Error **errp)
     h->bus = &s->pci_bus;
 
     object_initialize(&s->pci_dev, sizeof(s->pci_dev), TYPE_VERSATILE_PCI_HOST);
+    qdev_set_parent_bus(DEVICE(&s->pci_dev), BUS(&s->pci_bus));
 
     for (i = 0; i < 4; i++) {
         sysbus_init_irq(sbd, &s->irq[i]);
@@ -460,7 +454,8 @@ static void pci_vpb_realize(DeviceState *dev, Error **errp)
     }
 
     /* TODO Remove once realize propagates to child devices. */
-    qdev_realize(DEVICE(&s->pci_dev), BUS(&s->pci_bus), errp);
+    object_property_set_bool(OBJECT(&s->pci_bus), true, "realized", errp);
+    object_property_set_bool(OBJECT(&s->pci_dev), true, "realized", errp);
 }
 
 static void versatile_pci_host_realize(PCIDevice *d, Error **errp)
@@ -510,7 +505,7 @@ static void pci_vpb_class_init(ObjectClass *klass, void *data)
     dc->realize = pci_vpb_realize;
     dc->reset = pci_vpb_reset;
     dc->vmsd = &pci_vpb_vmstate;
-    device_class_set_props(dc, pci_vpb_properties);
+    dc->props = pci_vpb_properties;
 }
 
 static const TypeInfo pci_vpb_info = {

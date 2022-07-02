@@ -16,7 +16,6 @@
 #include "qapi/error.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/main-loop.h"
-#include "qemu/module.h"
 
 struct RngRandom
 {
@@ -75,7 +74,7 @@ static void rng_random_opened(RngBackend *b, Error **errp)
         error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
                    "filename", "a valid filename");
     } else {
-        s->fd = qemu_open_old(s->filename, O_RDONLY | O_NONBLOCK);
+        s->fd = qemu_open(s->filename, O_RDONLY | O_NONBLOCK);
         if (s->fd == -1) {
             error_setg_file_open(errp, errno, s->filename);
         }
@@ -108,7 +107,12 @@ static void rng_random_init(Object *obj)
 {
     RngRandom *s = RNG_RANDOM(obj);
 
-    s->filename = g_strdup("/dev/urandom");
+    object_property_add_str(obj, "filename",
+                            rng_random_get_filename,
+                            rng_random_set_filename,
+                            NULL);
+
+    s->filename = g_strdup("/dev/random");
     s->fd = -1;
 }
 
@@ -130,10 +134,6 @@ static void rng_random_class_init(ObjectClass *klass, void *data)
 
     rbc->request_entropy = rng_random_request_entropy;
     rbc->opened = rng_random_opened;
-    object_class_property_add_str(klass, "filename",
-                                  rng_random_get_filename,
-                                  rng_random_set_filename);
-
 }
 
 static const TypeInfo rng_random_info = {

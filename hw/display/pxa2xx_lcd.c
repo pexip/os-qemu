@@ -11,9 +11,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/log.h"
-#include "hw/irq.h"
-#include "migration/vmstate.h"
+#include "hw/hw.h"
 #include "ui/console.h"
 #include "hw/arm/pxa.h"
 #include "ui/pixel_ops.h"
@@ -407,8 +405,7 @@ static uint64_t pxa2xx_lcdc_read(void *opaque, hwaddr offset,
 
     default:
     fail:
-        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
-                      __func__, offset);
+        hw_error("%s: Bad offset " REG_FMT "\n", __func__, offset);
     }
 
     return 0;
@@ -426,10 +423,9 @@ static void pxa2xx_lcdc_write(void *opaque, hwaddr offset,
         if ((s->control[0] & LCCR0_ENB) && !(value & LCCR0_ENB))
             s->status[0] |= LCSR0_QD;
 
-        if (!(s->control[0] & LCCR0_LCDT) && (value & LCCR0_LCDT)) {
-            qemu_log_mask(LOG_UNIMP,
-                          "%s: internal frame buffer unsupported\n", __func__);
-        }
+        if (!(s->control[0] & LCCR0_LCDT) && (value & LCCR0_LCDT))
+            printf("%s: internal frame buffer unsupported\n", __func__);
+
         if ((s->control[3] & LCCR3_API) &&
                 (value & LCCR0_ENB) && !(value & LCCR0_LCDT))
             s->status[0] |= LCSR0_ABC;
@@ -463,9 +459,9 @@ static void pxa2xx_lcdc_write(void *opaque, hwaddr offset,
         break;
 
     case OVL1C1:
-        if (!(s->ovl1c[0] & OVLC1_EN) && (value & OVLC1_EN)) {
-            qemu_log_mask(LOG_UNIMP, "%s: Overlay 1 not supported\n", __func__);
-        }
+        if (!(s->ovl1c[0] & OVLC1_EN) && (value & OVLC1_EN))
+            printf("%s: Overlay 1 not supported\n", __func__);
+
         s->ovl1c[0] = value & 0x80ffffff;
         s->dma_ch[1].up = (value & OVLC1_EN) || (s->control[0] & LCCR0_SDS);
         break;
@@ -475,9 +471,9 @@ static void pxa2xx_lcdc_write(void *opaque, hwaddr offset,
         break;
 
     case OVL2C1:
-        if (!(s->ovl2c[0] & OVLC1_EN) && (value & OVLC1_EN)) {
-            qemu_log_mask(LOG_UNIMP, "%s: Overlay 2 not supported\n", __func__);
-        }
+        if (!(s->ovl2c[0] & OVLC1_EN) && (value & OVLC1_EN))
+            printf("%s: Overlay 2 not supported\n", __func__);
+
         s->ovl2c[0] = value & 0x80ffffff;
         s->dma_ch[2].up = !!(value & OVLC1_EN);
         s->dma_ch[3].up = !!(value & OVLC1_EN);
@@ -489,10 +485,9 @@ static void pxa2xx_lcdc_write(void *opaque, hwaddr offset,
         break;
 
     case CCR:
-        if (!(s->ccr & CCR_CEN) && (value & CCR_CEN)) {
-            qemu_log_mask(LOG_UNIMP,
-                          "%s: Hardware cursor unimplemented\n", __func__);
-        }
+        if (!(s->ccr & CCR_CEN) && (value & CCR_CEN))
+            printf("%s: Hardware cursor unimplemented\n", __func__);
+
         s->ccr = value & 0x81ffffe7;
         s->dma_ch[5].up = !!(value & CCR_CEN);
         break;
@@ -565,8 +560,7 @@ static void pxa2xx_lcdc_write(void *opaque, hwaddr offset,
 
     default:
     fail:
-        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
-                      __func__, offset);
+        hw_error("%s: Bad offset " REG_FMT "\n", __func__, offset);
     }
 }
 
@@ -597,6 +591,7 @@ static void pxa2xx_palette_parse(PXA2xxLCDState *s, int ch, int bpp)
         n = 256;
         break;
     default:
+        format = 0;
         return;
     }
 

@@ -2,20 +2,10 @@
 
 .macro vector name
 
-.section .vector.\name, "ax"
-.global vector_\name
-vector_\name\():
+.section .vector.\name
     j       1f
-    .literal_position
+.section .vector.\name\().text
 1:
-    wsr     a0, excsave1
-    movi    a0, 1f
-    ret.n
-
-.section .vector.\name\().text, "ax"
-    .literal_position
-1:
-    rsr     a0, excsave1
     wsr     a2, excsave1
     movi    a2, handler_\name
     l32i    a2, a2, 0

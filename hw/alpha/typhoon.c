@@ -7,15 +7,14 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/module.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "cpu.h"
-#include "hw/boards.h"
-#include "hw/irq.h"
+#include "hw/hw.h"
+#include "hw/devices.h"
+#include "sysemu/sysemu.h"
 #include "alpha_sys.h"
 #include "exec/address-spaces.h"
-#include "qom/object.h"
 
 
 #define TYPE_TYPHOON_PCI_HOST_BRIDGE "typhoon-pcihost"
@@ -50,15 +49,17 @@ typedef struct TyphoonPchip {
     TyphoonWindow win[4];
 } TyphoonPchip;
 
-OBJECT_DECLARE_SIMPLE_TYPE(TyphoonState, TYPHOON_PCI_HOST_BRIDGE)
+#define TYPHOON_PCI_HOST_BRIDGE(obj) \
+    OBJECT_CHECK(TyphoonState, (obj), TYPE_TYPHOON_PCI_HOST_BRIDGE)
 
-struct TyphoonState {
+typedef struct TyphoonState {
     PCIHostState parent_obj;
 
     TyphoonCchip cchip;
     TyphoonPchip pchip;
     MemoryRegion dchip_region;
-};
+    MemoryRegion ram_region;
+} TyphoonState;
 
 /* Called when one of DRIR or DIM changes.  */
 static void cpu_irq_change(AlphaCPU *cpu, uint64_t req)
@@ -74,9 +75,7 @@ static void cpu_irq_change(AlphaCPU *cpu, uint64_t req)
     }
 }
 
-static MemTxResult cchip_read(void *opaque, hwaddr addr,
-                              uint64_t *data, unsigned size,
-                              MemTxAttrs attrs)
+static uint64_t cchip_read(void *opaque, hwaddr addr, unsigned size)
 {
     CPUState *cpu = current_cpu;
     TyphoonState *s = opaque;
@@ -197,11 +196,11 @@ static MemTxResult cchip_read(void *opaque, hwaddr addr,
         break;
 
     default:
-        return MEMTX_ERROR;
+        cpu_unassigned_access(cpu, addr, false, false, 0, size);
+        return -1;
     }
 
-    *data = ret;
-    return MEMTX_OK;
+    return ret;
 }
 
 static uint64_t dchip_read(void *opaque, hwaddr addr, unsigned size)
@@ -210,8 +209,7 @@ static uint64_t dchip_read(void *opaque, hwaddr addr, unsigned size)
     return 0;
 }
 
-static MemTxResult pchip_read(void *opaque, hwaddr addr, uint64_t *data,
-                              unsigned size, MemTxAttrs attrs)
+static uint64_t pchip_read(void *opaque, hwaddr addr, unsigned size)
 {
     TyphoonState *s = opaque;
     uint64_t ret = 0;
@@ -296,16 +294,15 @@ static MemTxResult pchip_read(void *opaque, hwaddr addr, uint64_t *data,
         break;
 
     default:
-        return MEMTX_ERROR;
+        cpu_unassigned_access(current_cpu, addr, false, false, 0, size);
+        return -1;
     }
 
-    *data = ret;
-    return MEMTX_OK;
+    return ret;
 }
 
-static MemTxResult cchip_write(void *opaque, hwaddr addr,
-                               uint64_t val, unsigned size,
-                               MemTxAttrs attrs)
+static void cchip_write(void *opaque, hwaddr addr,
+                        uint64_t val, unsigned size)
 {
     TyphoonState *s = opaque;
     uint64_t oldval, newval;
@@ -449,10 +446,9 @@ static MemTxResult cchip_write(void *opaque, hwaddr addr,
         break;
 
     default:
-        return MEMTX_ERROR;
+        cpu_unassigned_access(current_cpu, addr, true, false, 0, size);
+        return;
     }
-
-    return MEMTX_OK;
 }
 
 static void dchip_write(void *opaque, hwaddr addr,
@@ -461,9 +457,8 @@ static void dchip_write(void *opaque, hwaddr addr,
     /* Skip this.  It's all related to DRAM timing and setup.  */
 }
 
-static MemTxResult pchip_write(void *opaque, hwaddr addr,
-                               uint64_t val, unsigned size,
-                               MemTxAttrs attrs)
+static void pchip_write(void *opaque, hwaddr addr,
+                        uint64_t val, unsigned size)
 {
     TyphoonState *s = opaque;
     uint64_t oldval;
@@ -558,15 +553,14 @@ static MemTxResult pchip_write(void *opaque, hwaddr addr,
         break;
 
     default:
-        return MEMTX_ERROR;
+        cpu_unassigned_access(current_cpu, addr, true, false, 0, size);
+        return;
     }
-
-    return MEMTX_OK;
 }
 
 static const MemoryRegionOps cchip_ops = {
-    .read_with_attrs = cchip_read,
-    .write_with_attrs = cchip_write,
+    .read = cchip_read,
+    .write = cchip_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         .min_access_size = 8,
@@ -593,8 +587,8 @@ static const MemoryRegionOps dchip_ops = {
 };
 
 static const MemoryRegionOps pchip_ops = {
-    .read_with_attrs = pchip_read,
-    .write_with_attrs = pchip_write,
+    .read = pchip_read,
+    .write = pchip_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         .min_access_size = 8,
@@ -663,8 +657,8 @@ static bool window_translate(TyphoonWindow *win, hwaddr addr,
         pte_addr |= (addr & (wsm | 0xfe000)) >> 10;
         return pte_translate(pte_addr, ret);
     } else {
-        /* Direct-mapped translation.  */
-        return make_iommu_tlbe(tba & ~wsm_ext, wsm_ext, ret);
+	/* Direct-mapped translation.  */
+	return make_iommu_tlbe(tba & ~wsm_ext, wsm_ext, ret);
     }
 }
 
@@ -699,7 +693,7 @@ static IOMMUTLBEntry typhoon_translate_iommu(IOMMUMemoryRegion *iommu,
 
         /* Check the fourth window for DAC disable.  */
         if ((pchip->win[3].wba & 0x80000000000ull) == 0
-            && window_translate(&pchip->win[3], addr, &ret)) {
+	    && window_translate(&pchip->win[3], addr, &ret)) {
             goto success;
         }
     } else {
@@ -710,7 +704,7 @@ static IOMMUTLBEntry typhoon_translate_iommu(IOMMUMemoryRegion *iommu,
             if (pchip->ctl & 0x40) {
                 /* See 10.1.4.4; in particular <39:35> is ignored.  */
                 make_iommu_tlbe(0, 0x007ffffffffull, &ret);
-                goto success;
+		goto success;
             }
         }
 
@@ -722,8 +716,8 @@ static IOMMUTLBEntry typhoon_translate_iommu(IOMMUMemoryRegion *iommu,
                 pte_addr  = pchip->win[3].tba & 0x7ffc00000ull;
                 pte_addr |= (addr & 0xffffe000u) >> 10;
                 if (pte_translate(pte_addr, &ret)) {
-                        goto success;
-                }
+			goto success;
+		}
             }
         }
     }
@@ -816,7 +810,8 @@ static void typhoon_alarm_timer(void *opaque)
     cpu_interrupt(CPU(s->cchip.cpu[cpu]), CPU_INTERRUPT_TIMER);
 }
 
-PCIBus *typhoon_init(MemoryRegion *ram, ISABus **isa_bus, qemu_irq *p_rtc_irq,
+PCIBus *typhoon_init(ram_addr_t ram_size, ISABus **isa_bus,
+                     qemu_irq *p_rtc_irq,
                      AlphaCPU *cpus[4], pci_map_irq_fn sys_map_irq)
 {
     MemoryRegion *addr_space = get_system_memory();
@@ -826,7 +821,7 @@ PCIBus *typhoon_init(MemoryRegion *ram, ISABus **isa_bus, qemu_irq *p_rtc_irq,
     PCIBus *b;
     int i;
 
-    dev = qdev_new(TYPE_TYPHOON_PCI_HOST_BRIDGE);
+    dev = qdev_create(NULL, TYPE_TYPHOON_PCI_HOST_BRIDGE);
 
     s = TYPHOON_PCI_HOST_BRIDGE(dev);
     phb = PCI_HOST_BRIDGE(dev);
@@ -849,7 +844,9 @@ PCIBus *typhoon_init(MemoryRegion *ram, ISABus **isa_bus, qemu_irq *p_rtc_irq,
 
     /* Main memory region, 0x00.0000.0000.  Real hardware supports 32GB,
        but the address space hole reserved at this point is 8TB.  */
-    memory_region_add_subregion(addr_space, 0, ram);
+    memory_region_allocate_system_memory(&s->ram_region, OBJECT(s), "ram",
+                                         ram_size);
+    memory_region_add_subregion(addr_space, 0, &s->ram_region);
 
     /* TIGbus, 0x801.0000.0000, 1GB.  */
     /* ??? The TIGbus is used for delivering interrupts, and access to
@@ -889,7 +886,7 @@ PCIBus *typhoon_init(MemoryRegion *ram, ISABus **isa_bus, qemu_irq *p_rtc_irq,
                               &s->pchip.reg_mem, &s->pchip.reg_io,
                               0, 64, TYPE_PCI_BUS);
     phb->bus = b;
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    qdev_init_nofail(dev);
 
     /* Host memory as seen from the PCI side, via the IOMMU.  */
     memory_region_init_iommu(&s->pchip.iommu, sizeof(s->pchip.iommu),

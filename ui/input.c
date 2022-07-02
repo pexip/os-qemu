@@ -8,7 +8,6 @@
 #include "ui/input.h"
 #include "ui/console.h"
 #include "sysemu/replay.h"
-#include "sysemu/runstate.h"
 
 struct QemuInputHandlerState {
     DeviceState       *dev;
@@ -20,9 +19,6 @@ struct QemuInputHandlerState {
 };
 
 typedef struct QemuInputEventQueue QemuInputEventQueue;
-typedef QTAILQ_HEAD(QemuInputEventQueueHead, QemuInputEventQueue)
-    QemuInputEventQueueHead;
-
 struct QemuInputEventQueue {
     enum {
         QEMU_INPUT_QUEUE_DELAY = 1,
@@ -41,7 +37,8 @@ static QTAILQ_HEAD(, QemuInputHandlerState) handlers =
 static NotifierList mouse_mode_notifiers =
     NOTIFIER_LIST_INITIALIZER(mouse_mode_notifiers);
 
-static QemuInputEventQueueHead kbd_queue = QTAILQ_HEAD_INITIALIZER(kbd_queue);
+static QTAILQ_HEAD(QemuInputEventQueueHead, QemuInputEventQueue) kbd_queue =
+    QTAILQ_HEAD_INITIALIZER(kbd_queue);
 static QEMUTimer *kbd_timer;
 static uint32_t kbd_default_delay_ms = 10;
 static uint32_t queue_count;
@@ -260,7 +257,7 @@ static void qemu_input_event_trace(QemuConsole *src, InputEvent *evt)
 
 static void qemu_input_queue_process(void *opaque)
 {
-    QemuInputEventQueueHead *queue = opaque;
+    struct QemuInputEventQueueHead *queue = opaque;
     QemuInputEventQueue *item;
 
     g_assert(!QTAILQ_EMPTY(queue));
@@ -291,7 +288,7 @@ static void qemu_input_queue_process(void *opaque)
     }
 }
 
-static void qemu_input_queue_delay(QemuInputEventQueueHead *queue,
+static void qemu_input_queue_delay(struct QemuInputEventQueueHead *queue,
                                    QEMUTimer *timer, uint32_t delay_ms)
 {
     QemuInputEventQueue *item = g_new0(QemuInputEventQueue, 1);
@@ -309,7 +306,7 @@ static void qemu_input_queue_delay(QemuInputEventQueueHead *queue,
     }
 }
 
-static void qemu_input_queue_event(QemuInputEventQueueHead *queue,
+static void qemu_input_queue_event(struct QemuInputEventQueueHead *queue,
                                    QemuConsole *src, InputEvent *evt)
 {
     QemuInputEventQueue *item = g_new0(QemuInputEventQueue, 1);
@@ -321,7 +318,7 @@ static void qemu_input_queue_event(QemuInputEventQueueHead *queue,
     queue_count++;
 }
 
-static void qemu_input_queue_sync(QemuInputEventQueueHead *queue)
+static void qemu_input_queue_sync(struct QemuInputEventQueueHead *queue)
 {
     QemuInputEventQueue *item = g_new0(QemuInputEventQueue, 1);
 
@@ -461,18 +458,22 @@ void qemu_input_event_send_key_delay(uint32_t delay_ms)
     }
 }
 
+InputEvent *qemu_input_event_new_btn(InputButton btn, bool down)
+{
+    InputEvent *evt = g_new0(InputEvent, 1);
+    evt->u.btn.data = g_new0(InputBtnEvent, 1);
+    evt->type = INPUT_EVENT_KIND_BTN;
+    evt->u.btn.data->button = btn;
+    evt->u.btn.data->down = down;
+    return evt;
+}
+
 void qemu_input_queue_btn(QemuConsole *src, InputButton btn, bool down)
 {
-    InputBtnEvent bevt = {
-        .button = btn,
-        .down = down,
-    };
-    InputEvent evt = {
-        .type = INPUT_EVENT_KIND_BTN,
-        .u.btn.data = &bevt,
-    };
-
-    qemu_input_event_send(src, &evt);
+    InputEvent *evt;
+    evt = qemu_input_event_new_btn(btn, down);
+    qemu_input_event_send(src, evt);
+    qapi_free_InputEvent(evt);
 }
 
 void qemu_input_update_buttons(QemuConsole *src, uint32_t *button_map,
@@ -512,35 +513,37 @@ int qemu_input_scale_axis(int value,
     return ((int64_t)value - min_in) * range_out / range_in + min_out;
 }
 
+InputEvent *qemu_input_event_new_move(InputEventKind kind,
+                                      InputAxis axis, int value)
+{
+    InputEvent *evt = g_new0(InputEvent, 1);
+    InputMoveEvent *move = g_new0(InputMoveEvent, 1);
+
+    evt->type = kind;
+    evt->u.rel.data = move; /* evt->u.rel is the same as evt->u.abs */
+    move->axis = axis;
+    move->value = value;
+    return evt;
+}
+
 void qemu_input_queue_rel(QemuConsole *src, InputAxis axis, int value)
 {
-    InputMoveEvent move = {
-        .axis = axis,
-        .value = value,
-    };
-    InputEvent evt = {
-        .type = INPUT_EVENT_KIND_REL,
-        .u.rel.data = &move,
-    };
-
-    qemu_input_event_send(src, &evt);
+    InputEvent *evt;
+    evt = qemu_input_event_new_move(INPUT_EVENT_KIND_REL, axis, value);
+    qemu_input_event_send(src, evt);
+    qapi_free_InputEvent(evt);
 }
 
 void qemu_input_queue_abs(QemuConsole *src, InputAxis axis, int value,
                           int min_in, int max_in)
 {
-    InputMoveEvent move = {
-        .axis = axis,
-        .value = qemu_input_scale_axis(value, min_in, max_in,
+    InputEvent *evt;
+    int scaled = qemu_input_scale_axis(value, min_in, max_in,
                                        INPUT_EVENT_ABS_MIN,
-                                       INPUT_EVENT_ABS_MAX),
-    };
-    InputEvent evt = {
-        .type = INPUT_EVENT_KIND_ABS,
-        .u.abs.data = &move,
-    };
-
-    qemu_input_event_send(src, &evt);
+                                       INPUT_EVENT_ABS_MAX);
+    evt = qemu_input_event_new_move(INPUT_EVENT_KIND_ABS, axis, scaled);
+    qemu_input_event_send(src, evt);
+    qapi_free_InputEvent(evt);
 }
 
 void qemu_input_check_mode_change(void)

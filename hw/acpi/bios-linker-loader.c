@@ -19,6 +19,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "hw/acpi/bios-linker-loader.h"
 #include "hw/nvram/fw_cfg.h"
 
@@ -282,8 +283,6 @@ void bios_linker_loader_add_pointer(BIOSLinker *linker,
     const BiosLinkerFileEntry *source_file =
         bios_linker_find_file(linker, src_file);
 
-    assert(dst_file);
-    assert(source_file);
     assert(dst_patched_offset < dst_file->blob->len);
     assert(dst_patched_offset + dst_patched_size <= dst_file->blob->len);
     assert(src_offset < source_file->blob->len);

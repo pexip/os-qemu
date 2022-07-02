@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # NBD server - fault injection utility
 #
 # Configuration file syntax:
@@ -43,11 +43,15 @@
 # This work is licensed under the terms of the GNU GPL, version 2 or later.
 # See the COPYING file in the top-level directory.
 
+from __future__ import print_function
 import sys
 import socket
 import struct
 import collections
-import configparser
+if sys.version_info.major >= 3:
+    import configparser
+else:
+    import ConfigParser as configparser
 
 FAKE_DISK_SIZE = 8 * 1024 * 1024 * 1024 # 8 GB
 
@@ -111,8 +115,7 @@ class FaultInjectionSocket(object):
             if rule.match(event, io):
                 if rule.when == 0 or bufsize is None:
                     print('Closing connection on rule match %s' % rule.name)
-                    self.sock.close()
-                    sys.stdout.flush()
+                    self.sock.flush()
                     sys.exit(0)
                 if rule.when != -1:
                     return rule.when
@@ -227,7 +230,7 @@ def parse_config(config):
 def load_rules(filename):
     config = configparser.RawConfigParser()
     with open(filename, 'rt') as f:
-        config.read_file(f, filename)
+        config.readfp(f, filename)
     return parse_config(config)
 
 def open_socket(path):

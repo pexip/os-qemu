@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -19,23 +19,22 @@
 
 #include "qemu/osdep.h"
 #include "hw/pci/pci.h"
-#include "hw/irq.h"
-#include "hw/intc/i8259.h"
+#include "hw/i386/pc.h"
 #include "hw/timer/i8254.h"
-#include "migration/vmstate.h"
+#include "hw/timer/mc146818rtc.h"
 #include "hw/audio/pcspk.h"
-#include "qom/object.h"
 
 #define TYPE_I82378 "i82378"
-OBJECT_DECLARE_SIMPLE_TYPE(I82378State, I82378)
+#define I82378(obj) \
+    OBJECT_CHECK(I82378State, (obj), TYPE_I82378)
 
-struct I82378State {
+typedef struct I82378State {
     PCIDevice parent_obj;
 
     qemu_irq out[2];
     qemu_irq *i8259;
     MemoryRegion io;
-};
+} I82378State;
 
 static const VMStateDescription vmstate_i82378 = {
     .name = "pci-i82378",
@@ -67,7 +66,7 @@ static void i82378_realize(PCIDevice *pci, Error **errp)
     I82378State *s = I82378(dev);
     uint8_t *pci_conf;
     ISABus *isabus;
-    ISADevice *pit;
+    ISADevice *isa;
 
     pci_conf = pci->config;
     pci_set_word(pci_conf + PCI_COMMAND,
@@ -99,13 +98,16 @@ static void i82378_realize(PCIDevice *pci, Error **errp)
     isa_bus_irqs(isabus, s->i8259);
 
     /* 1 82C54 (pit) */
-    pit = i8254_pit_init(isabus, 0x40, 0, NULL);
+    isa = i8254_pit_init(isabus, 0x40, 0, NULL);
 
     /* speaker */
-    pcspk_init(isa_new(TYPE_PC_SPEAKER), isabus, pit);
+    pcspk_init(isabus, isa);
 
     /* 2 82C37 (dma) */
-    isa_create_simple(isabus, "i82374");
+    isa = isa_create_simple(isabus, "i82374");
+
+    /* timer */
+    isa_create_simple(isabus, TYPE_MC146818_RTC);
 }
 
 static void i82378_init(Object *obj)

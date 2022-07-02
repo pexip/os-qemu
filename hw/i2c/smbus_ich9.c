@@ -6,54 +6,51 @@
  *               VA Linux Systems Japan K.K.
  * Copyright (C) 2012 Jason Baron <jbaron@redhat.com>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This is based on acpi.c, but heavily rewritten.
  *
- * This program is distributed in the hope that it will be useful,
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License version 2 as published by the Free Software Foundation.
+ *
+ * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>
+ *
+ * Contributions after 2012-01-13 are licensed under the terms of the
+ * GNU GPL, version 2 or (at your option) any later version.
+ *
  */
-
 #include "qemu/osdep.h"
-#include "qemu/range.h"
+#include "hw/hw.h"
 #include "hw/i2c/pm_smbus.h"
 #include "hw/pci/pci.h"
-#include "migration/vmstate.h"
-#include "qemu/module.h"
+#include "sysemu/sysemu.h"
+#include "hw/i2c/i2c.h"
+#include "hw/i2c/smbus.h"
 
 #include "hw/i386/ich9.h"
-#include "qom/object.h"
 
-OBJECT_DECLARE_SIMPLE_TYPE(ICH9SMBState, ICH9_SMB_DEVICE)
+#define ICH9_SMB_DEVICE(obj) \
+     OBJECT_CHECK(ICH9SMBState, (obj), TYPE_ICH9_SMB_DEVICE)
 
-struct ICH9SMBState {
+typedef struct ICH9SMBState {
     PCIDevice dev;
 
     bool irq_enabled;
 
     PMSMBus smb;
-};
-
-static bool ich9_vmstate_need_smbus(void *opaque, int version_id)
-{
-    return pm_smbus_vmstate_needed();
-}
+} ICH9SMBState;
 
 static const VMStateDescription vmstate_ich9_smbus = {
     .name = "ich9_smb",
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
-        VMSTATE_PCI_DEVICE(dev, ICH9SMBState),
-        VMSTATE_BOOL_TEST(irq_enabled, ICH9SMBState, ich9_vmstate_need_smbus),
-        VMSTATE_STRUCT_TEST(smb, ICH9SMBState, ich9_vmstate_need_smbus, 1,
-                            pmsmb_vmstate, PMSMBus),
+        VMSTATE_PCI_DEVICE(dev, struct ICH9SMBState),
         VMSTATE_END_OF_LIST()
     }
 };

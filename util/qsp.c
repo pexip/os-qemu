@@ -56,14 +56,12 @@
  *   Critical-Section Execution to Improve the Performance of Multithreaded
  *   Applications", USENIX ATC'12.
  */
-
 #include "qemu/osdep.h"
-#include "qemu/qemu-print.h"
 #include "qemu/thread.h"
 #include "qemu/timer.h"
 #include "qemu/qht.h"
 #include "qemu/rcu.h"
-#include "qemu/xxhash.h"
+#include "exec/tb-hash-xx.h"
 
 enum QSPType {
     QSP_MUTEX,
@@ -131,20 +129,19 @@ QemuRecMutexLockFunc qemu_rec_mutex_lock_func = qemu_rec_mutex_lock_impl;
 QemuRecMutexTrylockFunc qemu_rec_mutex_trylock_func =
     qemu_rec_mutex_trylock_impl;
 QemuCondWaitFunc qemu_cond_wait_func = qemu_cond_wait_impl;
-QemuCondTimedWaitFunc qemu_cond_timedwait_func = qemu_cond_timedwait_impl;
 
 /*
  * It pays off to _not_ hash callsite->file; hashing a string is slow, and
  * without it we still get a pretty unique hash.
  */
 static inline
-uint32_t do_qsp_callsite_hash(const QSPCallSite *callsite, uint64_t ab)
+uint32_t do_qsp_callsite_hash(const QSPCallSite *callsite, uint64_t a)
 {
-    uint64_t cd = (uint64_t)(uintptr_t)callsite->obj;
+    uint64_t b = (uint64_t)(uintptr_t)callsite->obj;
     uint32_t e = callsite->line;
     uint32_t f = callsite->type;
 
-    return qemu_xxhash6(ab, cd, e, f);
+    return tb_hash_func7(a, b, e, f, 0);
 }
 
 static inline
@@ -172,11 +169,11 @@ static uint32_t qsp_entry_no_thread_hash(const QSPEntry *entry)
 static uint32_t qsp_entry_no_thread_obj_hash(const QSPEntry *entry)
 {
     const QSPCallSite *callsite = entry->callsite;
-    uint64_t ab = g_str_hash(callsite->file);
-    uint64_t cd = callsite->line;
+    uint64_t a = g_str_hash(callsite->file);
+    uint64_t b = callsite->line;
     uint32_t e = callsite->type;
 
-    return qemu_xxhash5(ab, cd, e);
+    return tb_hash_func7(a, b, e, 0, 0);
 }
 
 static bool qsp_callsite_cmp(const void *ap, const void *bp)
@@ -245,11 +242,11 @@ static void qsp_do_init(void)
 
 static __attribute__((noinline)) void qsp_init__slowpath(void)
 {
-    if (qatomic_cmpxchg(&qsp_initializing, false, true) == false) {
+    if (atomic_cmpxchg(&qsp_initializing, false, true) == false) {
         qsp_do_init();
-        qatomic_set(&qsp_initialized, true);
+        atomic_set(&qsp_initialized, true);
     } else {
-        while (!qatomic_read(&qsp_initialized)) {
+        while (!atomic_read(&qsp_initialized)) {
             cpu_relax();
         }
     }
@@ -258,7 +255,7 @@ static __attribute__((noinline)) void qsp_init__slowpath(void)
 /* qsp_init() must be called from _all_ exported functions */
 static inline void qsp_init(void)
 {
-    if (likely(qatomic_read(&qsp_initialized))) {
+    if (likely(atomic_read(&qsp_initialized))) {
         return;
     }
     qsp_init__slowpath();
@@ -346,9 +343,9 @@ static QSPEntry *qsp_entry_get(const void *obj, const char *file, int line,
  */
 static inline void do_qsp_entry_record(QSPEntry *e, int64_t delta, bool acq)
 {
-    qatomic_set_u64(&e->ns, e->ns + delta);
+    atomic_set_u64(&e->ns, e->ns + delta);
     if (acq) {
-        qatomic_set_u64(&e->n_acqs, e->n_acqs + 1);
+        atomic_set_u64(&e->n_acqs, e->n_acqs + 1);
     }
 }
 
@@ -413,48 +410,29 @@ qsp_cond_wait(QemuCond *cond, QemuMutex *mutex, const char *file, int line)
     qsp_entry_record(e, t1 - t0);
 }
 
-static bool
-qsp_cond_timedwait(QemuCond *cond, QemuMutex *mutex, int ms,
-                   const char *file, int line)
-{
-    QSPEntry *e;
-    int64_t t0, t1;
-    bool ret;
-
-    t0 = get_clock();
-    ret = qemu_cond_timedwait_impl(cond, mutex, ms, file, line);
-    t1 = get_clock();
-
-    e = qsp_entry_get(cond, file, line, QSP_CONDVAR);
-    qsp_entry_record(e, t1 - t0);
-    return ret;
-}
-
 bool qsp_is_enabled(void)
 {
-    return qatomic_read(&qemu_mutex_lock_func) == qsp_mutex_lock;
+    return atomic_read(&qemu_mutex_lock_func) == qsp_mutex_lock;
 }
 
 void qsp_enable(void)
 {
-    qatomic_set(&qemu_mutex_lock_func, qsp_mutex_lock);
-    qatomic_set(&qemu_mutex_trylock_func, qsp_mutex_trylock);
-    qatomic_set(&qemu_bql_mutex_lock_func, qsp_bql_mutex_lock);
-    qatomic_set(&qemu_rec_mutex_lock_func, qsp_rec_mutex_lock);
-    qatomic_set(&qemu_rec_mutex_trylock_func, qsp_rec_mutex_trylock);
-    qatomic_set(&qemu_cond_wait_func, qsp_cond_wait);
-    qatomic_set(&qemu_cond_timedwait_func, qsp_cond_timedwait);
+    atomic_set(&qemu_mutex_lock_func, qsp_mutex_lock);
+    atomic_set(&qemu_mutex_trylock_func, qsp_mutex_trylock);
+    atomic_set(&qemu_bql_mutex_lock_func, qsp_bql_mutex_lock);
+    atomic_set(&qemu_rec_mutex_lock_func, qsp_rec_mutex_lock);
+    atomic_set(&qemu_rec_mutex_trylock_func, qsp_rec_mutex_trylock);
+    atomic_set(&qemu_cond_wait_func, qsp_cond_wait);
 }
 
 void qsp_disable(void)
 {
-    qatomic_set(&qemu_mutex_lock_func, qemu_mutex_lock_impl);
-    qatomic_set(&qemu_mutex_trylock_func, qemu_mutex_trylock_impl);
-    qatomic_set(&qemu_bql_mutex_lock_func, qemu_mutex_lock_impl);
-    qatomic_set(&qemu_rec_mutex_lock_func, qemu_rec_mutex_lock_impl);
-    qatomic_set(&qemu_rec_mutex_trylock_func, qemu_rec_mutex_trylock_impl);
-    qatomic_set(&qemu_cond_wait_func, qemu_cond_wait_impl);
-    qatomic_set(&qemu_cond_timedwait_func, qemu_cond_timedwait_impl);
+    atomic_set(&qemu_mutex_lock_func, qemu_mutex_lock_impl);
+    atomic_set(&qemu_mutex_trylock_func, qemu_mutex_trylock_impl);
+    atomic_set(&qemu_bql_mutex_lock_func, qemu_mutex_lock_impl);
+    atomic_set(&qemu_rec_mutex_lock_func, qemu_rec_mutex_lock_impl);
+    atomic_set(&qemu_rec_mutex_trylock_func, qemu_rec_mutex_trylock_impl);
+    atomic_set(&qemu_cond_wait_func, qemu_cond_wait_impl);
 }
 
 static gint qsp_tree_cmp(gconstpointer ap, gconstpointer bp, gpointer up)
@@ -538,8 +516,8 @@ static void qsp_aggregate(void *p, uint32_t h, void *up)
      * The entry is in the global hash table; read from it atomically (as in
      * "read once").
      */
-    agg->ns += qatomic_read_u64(&e->ns);
-    agg->n_acqs += qatomic_read_u64(&e->n_acqs);
+    agg->ns += atomic_read_u64(&e->ns);
+    agg->n_acqs += atomic_read_u64(&e->n_acqs);
 }
 
 static void qsp_iter_diff(void *p, uint32_t hash, void *htp)
@@ -598,6 +576,7 @@ static void qsp_ht_delete(void *p, uint32_t h, void *htp)
 
 static void qsp_mktree(GTree *tree, bool callsite_coalesce)
 {
+    QSPSnapshot *snap;
     struct qht ht, coalesce_ht;
     struct qht *htp;
 
@@ -609,19 +588,20 @@ static void qsp_mktree(GTree *tree, bool callsite_coalesce)
      * We must remain in an RCU read-side critical section until we're done
      * with the snapshot.
      */
-    WITH_RCU_READ_LOCK_GUARD() {
-        QSPSnapshot *snap = qatomic_rcu_read(&qsp_snapshot);
+    rcu_read_lock();
+    snap = atomic_rcu_read(&qsp_snapshot);
 
-        /* Aggregate all results from the global hash table into a local one */
-        qht_init(&ht, qsp_entry_no_thread_cmp, QSP_INITIAL_SIZE,
-                 QHT_MODE_AUTO_RESIZE | QHT_MODE_RAW_MUTEXES);
-        qht_iter(&qsp_ht, qsp_aggregate, &ht);
+    /* Aggregate all results from the global hash table into a local one */
+    qht_init(&ht, qsp_entry_no_thread_cmp, QSP_INITIAL_SIZE,
+             QHT_MODE_AUTO_RESIZE | QHT_MODE_RAW_MUTEXES);
+    qht_iter(&qsp_ht, qsp_aggregate, &ht);
 
-        /* compute the difference wrt the snapshot, if any */
-        if (snap) {
-            qsp_diff(&snap->ht, &ht);
-        }
+    /* compute the difference wrt the snapshot, if any */
+    if (snap) {
+        qsp_diff(&snap->ht, &ht);
     }
+    /* done with the snapshot; RCU can reclaim it */
+    rcu_read_unlock();
 
     htp = &ht;
     if (callsite_coalesce) {
@@ -698,7 +678,8 @@ static gboolean qsp_tree_report(gpointer key, gpointer value, gpointer udata)
     return FALSE;
 }
 
-static void pr_report(const QSPReport *rep)
+static void
+pr_report(const QSPReport *rep, FILE *f, fprintf_function pr)
 {
     char *dashes;
     size_t max_len = 0;
@@ -721,15 +702,15 @@ static void pr_report(const QSPReport *rep)
     /* white space to leave to the right of "Call site" */
     callsite_rspace = callsite_len - strlen("Call site");
 
-    qemu_printf("Type               Object  Call site%*s  Wait Time (s)  "
-                "       Count  Average (us)\n", callsite_rspace, "");
+    pr(f, "Type               Object  Call site%*s  Wait Time (s)  "
+       "       Count  Average (us)\n", callsite_rspace, "");
 
     /* build a horizontal rule with dashes */
     n_dashes = 79 + callsite_rspace;
     dashes = g_malloc(n_dashes + 1);
     memset(dashes, '-', n_dashes);
     dashes[n_dashes] = '\0';
-    qemu_printf("%s\n", dashes);
+    pr(f, "%s\n", dashes);
 
     for (i = 0; i < rep->n_entries; i++) {
         const QSPReportEntry *e = &rep->entries[i];
@@ -745,11 +726,11 @@ static void pr_report(const QSPReport *rep)
                                e->callsite_at,
                                callsite_len - (int)strlen(e->callsite_at), "",
                                e->time_s, e->n_acqs, e->ns_avg * 1e-3);
-        qemu_printf("%s", s->str);
+        pr(f, "%s", s->str);
         g_string_free(s, TRUE);
     }
 
-    qemu_printf("%s\n", dashes);
+    pr(f, "%s\n", dashes);
     g_free(dashes);
 }
 
@@ -765,8 +746,8 @@ static void report_destroy(QSPReport *rep)
     g_free(rep->entries);
 }
 
-void qsp_report(size_t max, enum QSPSortBy sort_by,
-                bool callsite_coalesce)
+void qsp_report(FILE *f, fprintf_function cpu_fprintf, size_t max,
+                enum QSPSortBy sort_by, bool callsite_coalesce)
 {
     GTree *tree = g_tree_new_full(qsp_tree_cmp, &sort_by, g_free, NULL);
     QSPReport rep;
@@ -781,7 +762,7 @@ void qsp_report(size_t max, enum QSPSortBy sort_by,
     g_tree_foreach(tree, qsp_tree_report, &rep);
     g_tree_destroy(tree);
 
-    pr_report(&rep);
+    pr_report(&rep, f, cpu_fprintf);
     report_destroy(&rep);
 }
 
@@ -806,7 +787,7 @@ void qsp_reset(void)
     qht_iter(&qsp_ht, qsp_aggregate, &new->ht);
 
     /* replace the previous snapshot, if any */
-    old = qatomic_xchg(&qsp_snapshot, new);
+    old = atomic_xchg(&qsp_snapshot, new);
     if (old) {
         call_rcu(old, qsp_snapshot_destroy, rcu);
     }

@@ -8,18 +8,19 @@
  * Copyright (C) 2004, Clemens Fruhwirth <clemens@endorphin.org>
  * Copyright (C) 2009-2012, Red Hat, Inc. All rights reserved.
  *
- * This program is free software; you can redistribute it and/or
+ * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * as published by the Free Software Foundation; either version 2
  * of the License, or (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
+ * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ *
  */
 
 #include "qemu/osdep.h"
@@ -58,7 +59,7 @@ static int qcrypto_afsplit_hash(QCryptoHashAlgorithm hash,
     }
 
     for (i = 0; i < hashcount; i++) {
-        g_autofree uint8_t *out = NULL;
+        uint8_t *out = NULL;
         size_t outlen = 0;
         uint32_t iv = cpu_to_be32(i);
         struct iovec in[] = {
@@ -79,6 +80,7 @@ static int qcrypto_afsplit_hash(QCryptoHashAlgorithm hash,
         assert(outlen == digestlen);
         memcpy(block + (i * digestlen), out,
                (i == (hashcount - 1)) ? finallen : digestlen);
+        g_free(out);
     }
 
     return 0;
@@ -92,12 +94,13 @@ int qcrypto_afsplit_encode(QCryptoHashAlgorithm hash,
                            uint8_t *out,
                            Error **errp)
 {
-    g_autofree uint8_t *block = g_new0(uint8_t, blocklen);
+    uint8_t *block = g_new0(uint8_t, blocklen);
     size_t i;
+    int ret = -1;
 
     for (i = 0; i < (stripes - 1); i++) {
         if (qcrypto_random_bytes(out + (i * blocklen), blocklen, errp) < 0) {
-            return -1;
+            goto cleanup;
         }
 
         qcrypto_afsplit_xor(blocklen,
@@ -106,14 +109,18 @@ int qcrypto_afsplit_encode(QCryptoHashAlgorithm hash,
                             block);
         if (qcrypto_afsplit_hash(hash, blocklen, block,
                                  errp) < 0) {
-            return -1;
+            goto cleanup;
         }
     }
     qcrypto_afsplit_xor(blocklen,
                         in,
                         block,
                         out + (i * blocklen));
-    return 0;
+    ret = 0;
+
+ cleanup:
+    g_free(block);
+    return ret;
 }
 
 
@@ -124,8 +131,9 @@ int qcrypto_afsplit_decode(QCryptoHashAlgorithm hash,
                            uint8_t *out,
                            Error **errp)
 {
-    g_autofree uint8_t *block = g_new0(uint8_t, blocklen);
+    uint8_t *block = g_new0(uint8_t, blocklen);
     size_t i;
+    int ret = -1;
 
     for (i = 0; i < (stripes - 1); i++) {
         qcrypto_afsplit_xor(blocklen,
@@ -134,7 +142,7 @@ int qcrypto_afsplit_decode(QCryptoHashAlgorithm hash,
                             block);
         if (qcrypto_afsplit_hash(hash, blocklen, block,
                                  errp) < 0) {
-            return -1;
+            goto cleanup;
         }
     }
 
@@ -142,5 +150,10 @@ int qcrypto_afsplit_decode(QCryptoHashAlgorithm hash,
                         in + (i * blocklen),
                         block,
                         out);
-    return 0;
+
+    ret = 0;
+
+ cleanup:
+    g_free(block);
+    return ret;
 }

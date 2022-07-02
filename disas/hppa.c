@@ -19,7 +19,7 @@
    along with this program; if not, see <http://www.gnu.org/licenses/>. */
 
 #include "qemu/osdep.h"
-#include "disas/dis-asm.h"
+#include "disas/bfd.h"
 
 /* HP PA-RISC SOM object file format:  definitions internal to BFD.
    Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2000,
@@ -2021,7 +2021,7 @@ print_insn_hppa (bfd_vma memaddr, disassemble_info *info)
 			fput_fp_reg (GET_FIELD (insn, 6, 10), info);
 		      break;
 
-		      /* 'fA' will not generate a space before the register
+		      /* 'fA' will not generate a space before the regsiter
 			 name.  Normally that is fine.  Except that it
 			 causes problems with xmpyu which has no FP format
 			 completer.  */

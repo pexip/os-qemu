@@ -26,7 +26,6 @@
 #define QEMU_AIO_WAIT_H
 
 #include "block/aio.h"
-#include "qemu/main-loop.h"
 
 /**
  * AioWait:
@@ -80,7 +79,7 @@ extern AioWait global_aio_wait;
     AioWait *wait_ = &global_aio_wait;                             \
     AioContext *ctx_ = (ctx);                                      \
     /* Increment wait_->num_waiters before evaluating cond. */     \
-    qatomic_inc(&wait_->num_waiters);                              \
+    atomic_inc(&wait_->num_waiters);                               \
     if (ctx_ && in_aio_context_home_thread(ctx_)) {                \
         while ((cond)) {                                           \
             aio_poll(ctx_, true);                                  \
@@ -100,7 +99,7 @@ extern AioWait global_aio_wait;
             waited_ = true;                                        \
         }                                                          \
     }                                                              \
-    qatomic_dec(&wait_->num_waiters);                              \
+    atomic_dec(&wait_->num_waiters);                               \
     waited_; })
 
 /**
@@ -125,25 +124,4 @@ void aio_wait_kick(void);
  */
 void aio_wait_bh_oneshot(AioContext *ctx, QEMUBHFunc *cb, void *opaque);
 
-/**
- * in_aio_context_home_thread:
- * @ctx: the aio context
- *
- * Return whether we are running in the thread that normally runs @ctx.  Note
- * that acquiring/releasing ctx does not affect the outcome, each AioContext
- * still only has one home thread that is responsible for running it.
- */
-static inline bool in_aio_context_home_thread(AioContext *ctx)
-{
-    if (ctx == qemu_get_current_aio_context()) {
-        return true;
-    }
-
-    if (ctx == qemu_get_aio_context()) {
-        return qemu_mutex_iothread_locked();
-    } else {
-        return false;
-    }
-}
-
-#endif /* QEMU_AIO_WAIT_H */
+#endif /* QEMU_AIO_WAIT */

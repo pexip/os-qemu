@@ -31,8 +31,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "cpu.h"
-#include "fpu/softfloat.h"
-#include "qemu/module.h"
+#include "qemu-common.h"
 #include "migration/vmstate.h"
 
 
@@ -54,30 +53,14 @@ static bool xtensa_cpu_has_work(CPUState *cs)
 #endif
 }
 
-#ifdef CONFIG_USER_ONLY
-static bool abi_call0;
-
-void xtensa_set_abi_call0(void)
+/* CPUClass::reset() */
+static void xtensa_cpu_reset(CPUState *s)
 {
-    abi_call0 = true;
-}
-
-bool xtensa_abi_call0(void)
-{
-    return abi_call0;
-}
-#endif
-
-static void xtensa_cpu_reset(DeviceState *dev)
-{
-    CPUState *s = CPU(dev);
     XtensaCPU *cpu = XTENSA_CPU(s);
     XtensaCPUClass *xcc = XTENSA_CPU_GET_CLASS(cpu);
     CPUXtensaState *env = &cpu->env;
-    bool dfpu = xtensa_option_enabled(env->config,
-                                      XTENSA_OPTION_DFP_COPROCESSOR);
 
-    xcc->parent_reset(dev);
+    xcc->parent_reset(s);
 
     env->exception_taken = 0;
     env->pc = env->config->exception_vector[EXC_RESET0 + env->static_vectors];
@@ -87,29 +70,24 @@ static void xtensa_cpu_reset(DeviceState *dev)
             XTENSA_OPTION_INTERRUPT) ? 0x1f : 0x10;
     env->pending_irq_level = 0;
 #else
-    env->sregs[PS] = PS_UM | (3 << PS_RING_SHIFT);
-    if (xtensa_option_enabled(env->config,
-                              XTENSA_OPTION_WINDOWED_REGISTER) &&
-        !xtensa_abi_call0()) {
-        env->sregs[PS] |= PS_WOE;
-    }
-    env->sregs[CPENABLE] = 0xff;
+    env->sregs[PS] =
+        (xtensa_option_enabled(env->config,
+                               XTENSA_OPTION_WINDOWED_REGISTER) ? PS_WOE : 0) |
+        PS_UM | (3 << PS_RING_SHIFT);
 #endif
     env->sregs[VECBASE] = env->config->vecbase;
     env->sregs[IBREAKENABLE] = 0;
     env->sregs[MEMCTL] = MEMCTL_IL0EN & env->config->memctl_mask;
+    env->sregs[CACHEATTR] = 0x22222222;
     env->sregs[ATOMCTL] = xtensa_option_enabled(env->config,
             XTENSA_OPTION_ATOMCTL) ? 0x28 : 0x15;
     env->sregs[CONFIGID0] = env->config->configid[0];
     env->sregs[CONFIGID1] = env->config->configid[1];
-    env->exclusive_addr = -1;
 
 #ifndef CONFIG_USER_ONLY
     reset_mmu(env);
     s->halted = env->runstall;
 #endif
-    set_no_signaling_nans(!dfpu, &env->fp_status);
-    set_use_first_nan(!dfpu, &env->fp_status);
 }
 
 static ObjectClass *xtensa_cpu_class_by_name(const char *cpu_model)
@@ -160,11 +138,12 @@ static void xtensa_cpu_realizefn(DeviceState *dev, Error **errp)
 
 static void xtensa_cpu_initfn(Object *obj)
 {
+    CPUState *cs = CPU(obj);
     XtensaCPU *cpu = XTENSA_CPU(obj);
     XtensaCPUClass *xcc = XTENSA_CPU_GET_CLASS(obj);
     CPUXtensaState *env = &cpu->env;
 
-    cpu_set_cpustate_pointers(cpu);
+    cs->env_ptr = env;
     env->config = xcc->config;
 
 #ifndef CONFIG_USER_ONLY
@@ -190,7 +169,8 @@ static void xtensa_cpu_class_init(ObjectClass *oc, void *data)
     device_class_set_parent_realize(dc, xtensa_cpu_realizefn,
                                     &xcc->parent_realize);
 
-    device_class_set_parent_reset(dc, xtensa_cpu_reset, &xcc->parent_reset);
+    xcc->parent_reset = cc->reset;
+    cc->reset = xtensa_cpu_reset;
 
     cc->class_by_name = xtensa_cpu_class_by_name;
     cc->has_work = xtensa_cpu_has_work;
@@ -201,8 +181,9 @@ static void xtensa_cpu_class_init(ObjectClass *oc, void *data)
     cc->gdb_read_register = xtensa_cpu_gdb_read_register;
     cc->gdb_write_register = xtensa_cpu_gdb_write_register;
     cc->gdb_stop_before_watchpoint = true;
-    cc->tlb_fill = xtensa_cpu_tlb_fill;
-#ifndef CONFIG_USER_ONLY
+#ifdef CONFIG_USER_ONLY
+    cc->handle_mmu_fault = xtensa_cpu_handle_mmu_fault;
+#else
     cc->do_unaligned_access = xtensa_cpu_do_unaligned_access;
     cc->get_phys_page_debug = xtensa_cpu_get_phys_page_debug;
     cc->do_transaction_failed = xtensa_cpu_do_transaction_failed;

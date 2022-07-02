@@ -10,13 +10,11 @@
  * Contributions after 2012-01-13 are licensed under the terms of the
  * GNU GPL, version 2 or (at your option) any later version.
  */
-
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/host-utils.h"
-#include "hw/irq.h"
-#include "hw/display/tc6393xb.h"
-#include "exec/memory.h"
+#include "hw/hw.h"
+#include "hw/devices.h"
 #include "hw/block/flash.h"
 #include "ui/console.h"
 #include "ui/pixel_ops.h"
@@ -139,6 +137,11 @@ struct TC6393xbState {
              blanked : 1;
 };
 
+qemu_irq *tc6393xb_gpio_in_get(TC6393xbState *s)
+{
+    return s->gpio_in;
+}
+
 static void tc6393xb_gpio_set(void *opaque, int line, int level)
 {
 //    TC6393xbState *s = opaque;
@@ -149,6 +152,17 @@ static void tc6393xb_gpio_set(void *opaque, int line, int level)
     }
 
     // FIXME: how does the chip reflect the GPIO input level change?
+}
+
+void tc6393xb_gpio_out_set(TC6393xbState *s, int line,
+                    qemu_irq handler)
+{
+    if (line >= TC6393XB_GPIOS) {
+        fprintf(stderr, "TC6393xb: no GPIO pin %d\n", line);
+        return;
+    }
+
+    s->handler[line] = handler;
 }
 
 static void tc6393xb_gpio_handler_update(TC6393xbState *s)
@@ -305,7 +319,7 @@ static void tc6393xb_scr_writeb(TC6393xbState *s, hwaddr addr, uint32_t value)
         SCR_REG_B(DEBUG);
     }
     fprintf(stderr, "tc6393xb_scr: unhandled write at %08x: %02x\n",
-                                        (uint32_t) addr, value & 0xff);
+					(uint32_t) addr, value & 0xff);
 }
 #undef SCR_REG_B
 #undef SCR_REG_W
@@ -344,7 +358,7 @@ static void tc6393xb_nand_cfg_writeb(TC6393xbState *s, hwaddr addr, uint32_t val
             return;
     }
     fprintf(stderr, "tc6393xb_nand_cfg: unhandled write at %08x: %02x\n",
-                                        (uint32_t) addr, value & 0xff);
+					(uint32_t) addr, value & 0xff);
 }
 
 static uint32_t tc6393xb_nand_readb(TC6393xbState *s, hwaddr addr) {
@@ -407,7 +421,7 @@ static void tc6393xb_nand_writeb(TC6393xbState *s, hwaddr addr, uint32_t value) 
             return;
     }
     fprintf(stderr, "tc6393xb_nand: unhandled write at %08x: %02x\n",
-                                        (uint32_t) addr, value & 0xff);
+					(uint32_t) addr, value & 0xff);
 }
 
 #define BITS 8

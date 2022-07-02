@@ -3,15 +3,13 @@
 
 #include "chardev/char-fe.h"
 #include "chardev/char-serial.h"
-#include "hw/sysbus.h"
 #include "ui/input.h"
-#include "qom/object.h"
 
 /* escc.c */
 #define TYPE_ESCC "escc"
 #define ESCC_SIZE 4
 
-OBJECT_DECLARE_SIMPLE_TYPE(ESCCState, ESCC)
+#define ESCC(obj) OBJECT_CHECK(ESCCState, (obj), TYPE_ESCC)
 
 typedef enum {
     escc_chn_a, escc_chn_b,
@@ -47,15 +45,14 @@ typedef struct ESCCChannelState {
     QemuInputHandlerState *hs;
 } ESCCChannelState;
 
-struct ESCCState {
+typedef struct ESCCState {
     SysBusDevice parent_obj;
 
     struct ESCCChannelState chn[2];
     uint32_t it_shift;
-    bool bit_swap;
     MemoryRegion mmio;
     uint32_t disabled;
     uint32_t frequency;
-};
+} ESCCState;
 
 #endif

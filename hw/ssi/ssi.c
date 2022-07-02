@@ -14,17 +14,13 @@
 
 #include "qemu/osdep.h"
 #include "hw/ssi/ssi.h"
-#include "migration/vmstate.h"
-#include "qemu/module.h"
-#include "qapi/error.h"
-#include "qom/object.h"
 
 struct SSIBus {
     BusState parent_obj;
 };
 
 #define TYPE_SSI_BUS "SSI"
-OBJECT_DECLARE_SIMPLE_TYPE(SSIBus, SSI_BUS)
+#define SSI_BUS(obj) OBJECT_CHECK(SSIBus, (obj), TYPE_SSI_BUS)
 
 static const TypeInfo ssi_bus_info = {
     .name = TYPE_SSI_BUS,
@@ -91,16 +87,16 @@ static const TypeInfo ssi_slave_info = {
     .abstract = true,
 };
 
-bool ssi_realize_and_unref(DeviceState *dev, SSIBus *bus, Error **errp)
+DeviceState *ssi_create_slave_no_init(SSIBus *bus, const char *name)
 {
-    return qdev_realize_and_unref(dev, &bus->parent_obj, errp);
+    return qdev_create(BUS(bus), name);
 }
 
 DeviceState *ssi_create_slave(SSIBus *bus, const char *name)
 {
-    DeviceState *dev = qdev_new(name);
+    DeviceState *dev = ssi_create_slave_no_init(bus, name);
 
-    ssi_realize_and_unref(dev, bus, &error_fatal);
+    qdev_init_nofail(dev);
     return dev;
 }
 
@@ -144,3 +140,36 @@ static void ssi_slave_register_types(void)
 }
 
 type_init(ssi_slave_register_types)
+
+typedef struct SSIAutoConnectArg {
+    qemu_irq **cs_linep;
+    SSIBus *bus;
+} SSIAutoConnectArg;
+
+static int ssi_auto_connect_slave(Object *child, void *opaque)
+{
+    SSIAutoConnectArg *arg = opaque;
+    SSISlave *dev = (SSISlave *)object_dynamic_cast(child, TYPE_SSI_SLAVE);
+    qemu_irq cs_line;
+
+    if (!dev) {
+        return 0;
+    }
+
+    cs_line = qdev_get_gpio_in_named(DEVICE(dev), SSI_GPIO_CS, 0);
+    qdev_set_parent_bus(DEVICE(dev), BUS(arg->bus));
+    **arg->cs_linep = cs_line;
+    (*arg->cs_linep)++;
+    return 0;
+}
+
+void ssi_auto_connect_slaves(DeviceState *parent, qemu_irq *cs_line,
+                             SSIBus *bus)
+{
+    SSIAutoConnectArg arg = {
+        .cs_linep = &cs_line,
+        .bus = bus
+    };
+
+    object_child_foreach(OBJECT(parent), ssi_auto_connect_slave, &arg);
+}

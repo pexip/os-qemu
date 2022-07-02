@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -19,7 +19,6 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
 #include "hw/sysbus.h"
 #include "monitor/monitor.h"
 #include "exec/address-spaces.h"
@@ -64,7 +63,7 @@ void foreach_dynamic_sysbus_device(FindSysbusDeviceFunc *func, void *opaque)
         .opaque = opaque,
     };
 
-    /* Loop through all sysbus devices that were spawned outside the machine */
+    /* Loop through all sysbus devices that were spawened outside the machine */
     container = container_get(qdev_get_machine(), "/peripheral");
     find_sysbus_device(container, &find);
     container = container_get(qdev_get_machine(), "/peripheral-anon");
@@ -93,7 +92,7 @@ bool sysbus_has_irq(SysBusDevice *dev, int n)
     char *prop = g_strdup_printf("%s[%d]", SYSBUS_DEVICE_GPIO_IRQ, n);
     ObjectProperty *r;
 
-    r = object_property_find(OBJECT(dev), prop);
+    r = object_property_find(OBJECT(dev), prop, NULL);
     g_free(prop);
 
     return (r != NULL);
@@ -154,16 +153,6 @@ static void sysbus_mmio_map_common(SysBusDevice *dev, int n, hwaddr addr,
     }
 }
 
-void sysbus_mmio_unmap(SysBusDevice *dev, int n)
-{
-    assert(n >= 0 && n < dev->num_mmio);
-
-    if (dev->mmio[n].addr != (hwaddr)-1) {
-        memory_region_del_subregion(get_system_memory(), dev->mmio[n].memory);
-        dev->mmio[n].addr = (hwaddr)-1;
-    }
-}
-
 void sysbus_mmio_map(SysBusDevice *dev, int n, hwaddr addr)
 {
     sysbus_mmio_map_common(dev, n, addr, false, 0);
@@ -199,7 +188,6 @@ void sysbus_init_mmio(SysBusDevice *dev, MemoryRegion *memory)
 
 MemoryRegion *sysbus_mmio_get_region(SysBusDevice *dev, int n)
 {
-    assert(n >= 0 && n < QDEV_MAX_MMIO);
     return dev->mmio[n].memory;
 }
 
@@ -213,13 +201,18 @@ void sysbus_init_ioports(SysBusDevice *dev, uint32_t ioport, uint32_t size)
     }
 }
 
-/* The purpose of preserving this empty realize function
- * is to prevent the parent_realize field of some subclasses
- * from being set to NULL to break the normal init/realize
- * of some devices.
- */
-static void sysbus_device_realize(DeviceState *dev, Error **errp)
+/* TODO remove once all sysbus devices have been converted to realize */
+static void sysbus_realize(DeviceState *dev, Error **errp)
 {
+    SysBusDevice *sd = SYS_BUS_DEVICE(dev);
+    SysBusDeviceClass *sbc = SYS_BUS_DEVICE_GET_CLASS(sd);
+
+    if (!sbc->init) {
+        return;
+    }
+    if (sbc->init(sd) < 0) {
+        error_setg(errp, "Device initialization failed");
+    }
 }
 
 DeviceState *sysbus_create_varargs(const char *name,
@@ -231,9 +224,9 @@ DeviceState *sysbus_create_varargs(const char *name,
     qemu_irq irq;
     int n;
 
-    dev = qdev_new(name);
+    dev = qdev_create(NULL, name);
     s = SYS_BUS_DEVICE(dev);
-    sysbus_realize_and_unref(s, &error_fatal);
+    qdev_init_nofail(dev);
     if (addr != (hwaddr)-1) {
         sysbus_mmio_map(s, 0, addr);
     }
@@ -251,14 +244,36 @@ DeviceState *sysbus_create_varargs(const char *name,
     return dev;
 }
 
-bool sysbus_realize(SysBusDevice *dev, Error **errp)
+DeviceState *sysbus_try_create_varargs(const char *name,
+                                       hwaddr addr, ...)
 {
-    return qdev_realize(DEVICE(dev), sysbus_get_default(), errp);
-}
+    DeviceState *dev;
+    SysBusDevice *s;
+    va_list va;
+    qemu_irq irq;
+    int n;
 
-bool sysbus_realize_and_unref(SysBusDevice *dev, Error **errp)
-{
-    return qdev_realize_and_unref(DEVICE(dev), sysbus_get_default(), errp);
+    dev = qdev_try_create(NULL, name);
+    if (!dev) {
+        return NULL;
+    }
+    s = SYS_BUS_DEVICE(dev);
+    qdev_init_nofail(dev);
+    if (addr != (hwaddr)-1) {
+        sysbus_mmio_map(s, 0, addr);
+    }
+    va_start(va, addr);
+    n = 0;
+    while (1) {
+        irq = va_arg(va, qemu_irq);
+        if (!irq) {
+            break;
+        }
+        sysbus_connect_irq(s, n, irq);
+        n++;
+    }
+    va_end(va);
+    return dev;
 }
 
 static void sysbus_dev_print(Monitor *mon, DeviceState *dev, int indent)
@@ -312,7 +327,7 @@ MemoryRegion *sysbus_address_space(SysBusDevice *dev)
 static void sysbus_device_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
-    k->realize = sysbus_device_realize;
+    k->realize = sysbus_realize;
     k->bus_type = TYPE_SYSTEM_BUS;
     /*
      * device_add plugs devices into a suitable bus.  For "real" buses,
@@ -336,6 +351,7 @@ static const TypeInfo sysbus_device_type_info = {
     .class_init = sysbus_device_class_init,
 };
 
+/* This is a nasty hack to allow passing a NULL bus to qdev_create.  */
 static BusState *main_system_bus;
 
 static void main_system_bus_create(void)
@@ -346,6 +362,9 @@ static void main_system_bus_create(void)
     qbus_create_inplace(main_system_bus, system_bus_info.instance_size,
                         TYPE_SYSTEM_BUS, NULL, "main-system-bus");
     OBJECT(main_system_bus)->free = g_free;
+    object_property_add_child(container_get(qdev_get_machine(),
+                                            "/unattached"),
+                              "sysbus", OBJECT(main_system_bus), NULL);
 }
 
 BusState *sysbus_get_default(void)
@@ -354,6 +373,14 @@ BusState *sysbus_get_default(void)
         main_system_bus_create();
     }
     return main_system_bus;
+}
+
+void sysbus_init_child_obj(Object *parent, const char *childname, void *child,
+                           size_t childsize, const char *childtype)
+{
+    object_initialize_child(parent, childname, child, childsize, childtype,
+                            &error_abort, NULL);
+    qdev_set_parent_bus(DEVICE(child), sysbus_get_default());
 }
 
 static void sysbus_register_types(void)

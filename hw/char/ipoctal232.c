@@ -10,13 +10,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/ipack/ipack.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties.h"
-#include "migration/vmstate.h"
 #include "qemu/bitops.h"
-#include "qemu/module.h"
 #include "chardev/char-fe.h"
-#include "qom/object.h"
 
 /* #define DEBUG_IPOCTAL */
 
@@ -123,7 +118,8 @@ struct IPOctalState {
 
 #define TYPE_IPOCTAL "ipoctal232"
 
-OBJECT_DECLARE_SIMPLE_TYPE(IPOctalState, IPOCTAL)
+#define IPOCTAL(obj) \
+    OBJECT_CHECK(IPOctalState, (obj), TYPE_IPOCTAL)
 
 static const VMStateDescription vmstate_scc2698_channel = {
     .name = "scc2698_channel",
@@ -503,7 +499,7 @@ static void hostdev_receive(void *opaque, const uint8_t *buf, int size)
     }
 }
 
-static void hostdev_event(void *opaque, QEMUChrEvent event)
+static void hostdev_event(void *opaque, int event)
 {
     SCC2698Channel *ch = opaque;
     switch (event) {
@@ -588,7 +584,7 @@ static void ipoctal_class_init(ObjectClass *klass, void *data)
 
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
     dc->desc    = "GE IP-Octal 232 8-channel RS-232 IndustryPack";
-    device_class_set_props(dc, ipoctal_properties);
+    dc->props   = ipoctal_properties;
     dc->vmsd    = &vmstate_ipoctal;
 }
 

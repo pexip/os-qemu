@@ -20,17 +20,13 @@
  * 4xx SoCs, such as the 440EP. */
 
 #include "qemu/osdep.h"
-#include "hw/irq.h"
+#include "hw/hw.h"
 #include "hw/ppc/ppc.h"
 #include "hw/ppc/ppc4xx.h"
-#include "migration/vmstate.h"
-#include "qemu/module.h"
-#include "sysemu/reset.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_host.h"
 #include "exec/address-spaces.h"
 #include "trace.h"
-#include "qom/object.h"
 
 struct PCIMasterMap {
     uint32_t la;
@@ -44,7 +40,8 @@ struct PCITargetMap {
     uint32_t la;
 };
 
-OBJECT_DECLARE_SIMPLE_TYPE(PPC4xxPCIState, PPC4xx_PCI_HOST_BRIDGE)
+#define PPC4xx_PCI_HOST_BRIDGE(obj) \
+    OBJECT_CHECK(PPC4xxPCIState, (obj), TYPE_PPC4xx_PCI_HOST_BRIDGE)
 
 #define PPC4xx_PCI_NR_PMMS 3
 #define PPC4xx_PCI_NR_PTMS 2
@@ -54,11 +51,12 @@ struct PPC4xxPCIState {
 
     struct PCIMasterMap pmm[PPC4xx_PCI_NR_PMMS];
     struct PCITargetMap ptm[PPC4xx_PCI_NR_PTMS];
-    qemu_irq irq[PCI_NUM_PINS];
+    qemu_irq irq[4];
 
     MemoryRegion container;
     MemoryRegion iomem;
 };
+typedef struct PPC4xxPCIState PPC4xxPCIState;
 
 #define PCIC0_CFGADDR       0x0
 #define PCIC0_CFGDATA       0x4
@@ -255,7 +253,10 @@ static void ppc4xx_pci_set_irq(void *opaque, int irq_num, int level)
     qemu_irq *pci_irqs = opaque;
 
     trace_ppc4xx_pci_set_irq(irq_num);
-    assert(irq_num >= 0);
+    if (irq_num < 0) {
+        fprintf(stderr, "%s: PCI irq %d\n", __func__, irq_num);
+        return;
+    }
     qemu_set_irq(pci_irqs[irq_num], level);
 }
 
@@ -316,8 +317,7 @@ static void ppc4xx_pcihost_realize(DeviceState *dev, Error **errp)
 
     b = pci_register_root_bus(dev, NULL, ppc4xx_pci_set_irq,
                               ppc4xx_pci_map_irq, s->irq, get_system_memory(),
-                              get_system_io(), 0, ARRAY_SIZE(s->irq),
-                              TYPE_PCI_BUS);
+                              get_system_io(), 0, 4, TYPE_PCI_BUS);
     h->bus = b;
 
     pci_create_simple(b, 0, "ppc4xx-host-bridge");

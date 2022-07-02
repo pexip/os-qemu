@@ -8,20 +8,17 @@
  * published by the Free Software Foundation, or any later version.
  * See the COPYING file in the top-level directory.
  */
-
 #include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/sysbus.h"
-#include "qom/object.h"
 
 #undef DEBUG_PUV3
 #include "hw/unicore32/puv3.h"
-#include "qemu/module.h"
-#include "qemu/log.h"
 
 #define TYPE_PUV3_PM "puv3_pm"
-OBJECT_DECLARE_SIMPLE_TYPE(PUV3PMState, PUV3_PM)
+#define PUV3_PM(obj) OBJECT_CHECK(PUV3PMState, (obj), TYPE_PUV3_PM)
 
-struct PUV3PMState {
+typedef struct PUV3PMState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -32,7 +29,7 @@ struct PUV3PMState {
     uint32_t reg_PLL_DDR_CFG;
     uint32_t reg_PLL_VGA_CFG;
     uint32_t reg_DIVCFG;
-};
+} PUV3PMState;
 
 static uint64_t puv3_pm_read(void *opaque, hwaddr offset,
         unsigned size)
@@ -75,9 +72,7 @@ static uint64_t puv3_pm_read(void *opaque, hwaddr offset,
         ret = 0x7;
         break;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
-                      __func__, offset);
+        DPRINTF("Bad offset 0x%x\n", offset);
     }
     DPRINTF("offset 0x%x, value 0x%x\n", offset, ret);
 
@@ -109,9 +104,7 @@ static void puv3_pm_write(void *opaque, hwaddr offset,
     case 0x38:
         break;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
-                      __func__, offset);
+        DPRINTF("Bad offset 0x%x\n", offset);
     }
     DPRINTF("offset 0x%x, value 0x%x\n", offset, value);
 }
@@ -126,7 +119,7 @@ static const MemoryRegionOps puv3_pm_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void puv3_pm_realize(DeviceState *dev, Error **errp)
+static int puv3_pm_init(SysBusDevice *dev)
 {
     PUV3PMState *s = PUV3_PM(dev);
 
@@ -134,14 +127,16 @@ static void puv3_pm_realize(DeviceState *dev, Error **errp)
 
     memory_region_init_io(&s->iomem, OBJECT(s), &puv3_pm_ops, s, "puv3_pm",
             PUV3_REGS_OFFSET);
-    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
+    sysbus_init_mmio(dev, &s->iomem);
+
+    return 0;
 }
 
 static void puv3_pm_class_init(ObjectClass *klass, void *data)
 {
-    DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *sdc = SYS_BUS_DEVICE_CLASS(klass);
 
-    dc->realize = puv3_pm_realize;
+    sdc->init = puv3_pm_init;
 }
 
 static const TypeInfo puv3_pm_info = {

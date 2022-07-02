@@ -27,6 +27,8 @@
 #ifndef QEMU_VNC_H
 #define QEMU_VNC_H
 
+#include "qemu-common.h"
+#include "qapi/qapi-types-ui.h"
 #include "qemu/queue.h"
 #include "qemu/thread.h"
 #include "ui/console.h"
@@ -37,13 +39,11 @@
 #include "io/channel-socket.h"
 #include "io/channel-tls.h"
 #include "io/net-listener.h"
-#include "authz/base.h"
 #include <zlib.h>
 
 #include "keymaps.h"
 #include "vnc-palette.h"
 #include "vnc-enc-zrle.h"
-#include "ui/kbd-state.h"
 
 // #define _VNC_DEBUG 1
 
@@ -155,7 +155,7 @@ struct VncDisplay
     int lock_key_sync;
     QEMUPutLEDEntry *led;
     int ledstate;
-    QKbdState *kbd;
+    int key_delay_ms;
     QemuMutex mutex;
 
     QEMUCursor *cursor;
@@ -177,13 +177,10 @@ struct VncDisplay
     bool lossy;
     bool non_adaptive;
     QCryptoTLSCreds *tlscreds;
-    QAuthZ *tlsauthz;
-    char *tlsauthzid;
+    char *tlsaclname;
 #ifdef CONFIG_VNC_SASL
     VncDisplaySASL sasl;
 #endif
-
-    AudioState *audio_state;
 };
 
 typedef struct VncTight {
@@ -329,6 +326,8 @@ struct VncState
 
     VncReadEvent *read_handler;
     size_t read_handler_expect;
+    /* input */
+    uint8_t modifiers_state[256];
 
     bool abort;
     QemuMutex output_mutex;
@@ -338,10 +337,10 @@ struct VncState
     /* Encoding specific, if you add something here, don't forget to
      *  update vnc_async_encoding_start()
      */
-    VncTight *tight;
+    VncTight tight;
     VncZlib zlib;
     VncHextile hextile;
-    VncZrle *zrle;
+    VncZrle zrle;
     VncZywrle zywrle;
 
     Notifier mouse_mode_notifier;
@@ -547,7 +546,7 @@ uint32_t read_u32(uint8_t *data, size_t offset);
 
 /* Protocol stage functions */
 void vnc_client_error(VncState *vs);
-size_t vnc_client_io_error(VncState *vs, ssize_t ret, Error *err);
+size_t vnc_client_io_error(VncState *vs, ssize_t ret, Error **errp);
 
 void start_client_init(VncState *vs);
 void start_auth_vnc(VncState *vs);

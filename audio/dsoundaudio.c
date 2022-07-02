@@ -27,12 +27,11 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "audio.h"
 
 #define AUDIO_CAP "dsound"
 #include "audio_int.h"
-#include "qemu/host-utils.h"
-#include "qemu/module.h"
 
 #include <windows.h>
 #include <mmsystem.h>
@@ -44,23 +43,35 @@
 /* #define DEBUG_DSOUND */
 
 typedef struct {
+    int bufsize_in;
+    int bufsize_out;
+    int latency_millis;
+} DSoundConf;
+
+typedef struct {
     LPDIRECTSOUND dsound;
     LPDIRECTSOUNDCAPTURE dsound_capture;
     struct audsettings settings;
-    Audiodev *dev;
+    DSoundConf conf;
 } dsound;
 
 typedef struct {
     HWVoiceOut hw;
     LPDIRECTSOUNDBUFFER dsound_buffer;
-    bool first_time;
+    DWORD old_pos;
+    int first_time;
     dsound *s;
+#ifdef DEBUG_DSOUND
+    DWORD old_ppos;
+    DWORD played;
+    DWORD mixed;
+#endif
 } DSoundVoiceOut;
 
 typedef struct {
     HWVoiceIn hw;
+    int first_time;
     LPDIRECTSOUNDCAPTUREBUFFER dsound_capture_buffer;
-    bool first_time;
     dsound *s;
 } DSoundVoiceIn;
 
@@ -237,6 +248,11 @@ static void GCC_FMT_ATTR (3, 4) dsound_logerr2 (
     dsound_log_hresult (hr);
 }
 
+static DWORD millis_to_bytes (struct audio_pcm_info *info, DWORD millis)
+{
+    return (millis * info->bytes_per_second) / 1000;
+}
+
 #ifdef DEBUG_DSOUND
 static void print_wave_format (WAVEFORMATEX *wfx)
 {
@@ -279,7 +295,7 @@ static int dsound_get_status_out (LPDIRECTSOUNDBUFFER dsb, DWORD *statusp,
         return -1;
     }
 
-    if (*statusp & DSBSTATUS_BUFFERLOST) {
+    if (*statusp & DSERR_BUFFERLOST) {
         dsound_restore_out(dsb, s);
         return -1;
     }
@@ -301,6 +317,33 @@ static int dsound_get_status_in (LPDIRECTSOUNDCAPTUREBUFFER dscb,
     return 0;
 }
 
+static void dsound_write_sample (HWVoiceOut *hw, uint8_t *dst, int dst_len)
+{
+    int src_len1 = dst_len;
+    int src_len2 = 0;
+    int pos = hw->rpos + dst_len;
+    struct st_sample *src1 = hw->mix_buf + hw->rpos;
+    struct st_sample *src2 = NULL;
+
+    if (pos > hw->samples) {
+        src_len1 = hw->samples - hw->rpos;
+        src2 = hw->mix_buf;
+        src_len2 = dst_len - src_len1;
+        pos = src_len2;
+    }
+
+    if (src_len1) {
+        hw->clip (dst, src1, src_len1);
+    }
+
+    if (src_len2) {
+        dst = advance (dst, src_len1 << hw->info.shift);
+        hw->clip (dst, src2, src_len2);
+    }
+
+    hw->rpos = pos % hw->samples;
+}
+
 static void dsound_clear_sample (HWVoiceOut *hw, LPDIRECTSOUNDBUFFER dsb,
                                  dsound *s)
 {
@@ -312,7 +355,7 @@ static void dsound_clear_sample (HWVoiceOut *hw, LPDIRECTSOUNDBUFFER dsb,
         dsb,
         &hw->info,
         0,
-        hw->size_emul,
+        hw->samples << hw->info.shift,
         &p1, &p2,
         &blen1, &blen2,
         1,
@@ -322,8 +365,8 @@ static void dsound_clear_sample (HWVoiceOut *hw, LPDIRECTSOUNDBUFFER dsb,
         return;
     }
 
-    len1 = blen1 / hw->info.bytes_per_frame;
-    len2 = blen2 / hw->info.bytes_per_frame;
+    len1 = blen1 >> hw->info.shift;
+    len2 = blen2 >> hw->info.shift;
 
 #ifdef DEBUG_DSOUND
     dolog ("clear %p,%ld,%ld %p,%ld,%ld\n",
@@ -363,7 +406,7 @@ static int dsound_open (dsound *s)
     return 0;
 }
 
-static void dsound_enable_out(HWVoiceOut *hw, bool enable)
+static int dsound_ctl_out (HWVoiceOut *hw, int cmd, ...)
 {
     HRESULT hr;
     DWORD status;
@@ -373,17 +416,18 @@ static void dsound_enable_out(HWVoiceOut *hw, bool enable)
 
     if (!dsb) {
         dolog ("Attempt to control voice without a buffer\n");
-        return;
+        return 0;
     }
 
-    if (enable) {
+    switch (cmd) {
+    case VOICE_ENABLE:
         if (dsound_get_status_out (dsb, &status, s)) {
-            return;
+            return -1;
         }
 
         if (status & DSBSTATUS_PLAYING) {
             dolog ("warning: Voice is already playing\n");
-            return;
+            return 0;
         }
 
         dsound_clear_sample (hw, dsb, s);
@@ -391,85 +435,170 @@ static void dsound_enable_out(HWVoiceOut *hw, bool enable)
         hr = IDirectSoundBuffer_Play (dsb, 0, 0, DSBPLAY_LOOPING);
         if (FAILED (hr)) {
             dsound_logerr (hr, "Could not start playing buffer\n");
-            return;
+            return -1;
         }
-    } else {
+        break;
+
+    case VOICE_DISABLE:
         if (dsound_get_status_out (dsb, &status, s)) {
-            return;
+            return -1;
         }
 
         if (status & DSBSTATUS_PLAYING) {
             hr = IDirectSoundBuffer_Stop (dsb);
             if (FAILED (hr)) {
                 dsound_logerr (hr, "Could not stop playing buffer\n");
-                return;
+                return -1;
             }
         }
         else {
             dolog ("warning: Voice is not playing\n");
         }
+        break;
     }
+    return 0;
 }
 
-static void *dsound_get_buffer_out(HWVoiceOut *hw, size_t *size)
+static int dsound_write (SWVoiceOut *sw, void *buf, int len)
 {
-    DSoundVoiceOut *ds = (DSoundVoiceOut *) hw;
-    LPDIRECTSOUNDBUFFER dsb = ds->dsound_buffer;
-    HRESULT hr;
-    DWORD ppos, wpos, act_size;
-    size_t req_size;
+    return audio_pcm_sw_write (sw, buf, len);
+}
+
+static int dsound_run_out (HWVoiceOut *hw, int live)
+{
     int err;
-    void *ret;
-
-    hr = IDirectSoundBuffer_GetCurrentPosition(
-        dsb, &ppos, ds->first_time ? &wpos : NULL);
-    if (FAILED(hr)) {
-        dsound_logerr(hr, "Could not get playback buffer position\n");
-        *size = 0;
-        return NULL;
-    }
-
-    if (ds->first_time) {
-        hw->pos_emul = wpos;
-        ds->first_time = false;
-    }
-
-    req_size = audio_ring_dist(ppos, hw->pos_emul, hw->size_emul);
-    req_size = MIN(req_size, hw->size_emul - hw->pos_emul);
-
-    if (req_size == 0) {
-        *size = 0;
-        return NULL;
-    }
-
-    err = dsound_lock_out(dsb, &hw->info, hw->pos_emul, req_size, &ret, NULL,
-                          &act_size, NULL, false, ds->s);
-    if (err) {
-        dolog("Failed to lock buffer\n");
-        *size = 0;
-        return NULL;
-    }
-
-    *size = act_size;
-    return ret;
-}
-
-static size_t dsound_put_buffer_out(HWVoiceOut *hw, void *buf, size_t len)
-{
+    HRESULT hr;
     DSoundVoiceOut *ds = (DSoundVoiceOut *) hw;
     LPDIRECTSOUNDBUFFER dsb = ds->dsound_buffer;
-    int err = dsound_unlock_out(dsb, buf, NULL, len, 0);
+    int len, hwshift;
+    DWORD blen1, blen2;
+    DWORD len1, len2;
+    DWORD decr;
+    DWORD wpos, ppos, old_pos;
+    LPVOID p1, p2;
+    int bufsize;
+    dsound *s = ds->s;
+    DSoundConf *conf = &s->conf;
 
-    if (err) {
-        dolog("Failed to unlock buffer!!\n");
+    if (!dsb) {
+        dolog ("Attempt to run empty with playback buffer\n");
         return 0;
     }
-    hw->pos_emul = (hw->pos_emul + len) % hw->size_emul;
 
-    return len;
+    hwshift = hw->info.shift;
+    bufsize = hw->samples << hwshift;
+
+    hr = IDirectSoundBuffer_GetCurrentPosition (
+        dsb,
+        &ppos,
+        ds->first_time ? &wpos : NULL
+        );
+    if (FAILED (hr)) {
+        dsound_logerr (hr, "Could not get playback buffer position\n");
+        return 0;
+    }
+
+    len = live << hwshift;
+
+    if (ds->first_time) {
+        if (conf->latency_millis) {
+            DWORD cur_blat;
+
+            cur_blat = audio_ring_dist (wpos, ppos, bufsize);
+            ds->first_time = 0;
+            old_pos = wpos;
+            old_pos +=
+                millis_to_bytes (&hw->info, conf->latency_millis) - cur_blat;
+            old_pos %= bufsize;
+            old_pos &= ~hw->info.align;
+        }
+        else {
+            old_pos = wpos;
+        }
+#ifdef DEBUG_DSOUND
+        ds->played = 0;
+        ds->mixed = 0;
+#endif
+    }
+    else {
+        if (ds->old_pos == ppos) {
+#ifdef DEBUG_DSOUND
+            dolog ("old_pos == ppos\n");
+#endif
+            return 0;
+        }
+
+#ifdef DEBUG_DSOUND
+        ds->played += audio_ring_dist (ds->old_pos, ppos, hw->bufsize);
+#endif
+        old_pos = ds->old_pos;
+    }
+
+    if ((old_pos < ppos) && ((old_pos + len) > ppos)) {
+        len = ppos - old_pos;
+    }
+    else {
+        if ((old_pos > ppos) && ((old_pos + len) > (ppos + bufsize))) {
+            len = bufsize - old_pos + ppos;
+        }
+    }
+
+    if (audio_bug(__func__, len < 0 || len > bufsize)) {
+        dolog ("len=%d bufsize=%d old_pos=%ld ppos=%ld\n",
+               len, bufsize, old_pos, ppos);
+        return 0;
+    }
+
+    len &= ~hw->info.align;
+    if (!len) {
+        return 0;
+    }
+
+#ifdef DEBUG_DSOUND
+    ds->old_ppos = ppos;
+#endif
+    err = dsound_lock_out (
+        dsb,
+        &hw->info,
+        old_pos,
+        len,
+        &p1, &p2,
+        &blen1, &blen2,
+        0,
+        s
+        );
+    if (err) {
+        return 0;
+    }
+
+    len1 = blen1 >> hwshift;
+    len2 = blen2 >> hwshift;
+    decr = len1 + len2;
+
+    if (p1 && len1) {
+        dsound_write_sample (hw, p1, len1);
+    }
+
+    if (p2 && len2) {
+        dsound_write_sample (hw, p2, len2);
+    }
+
+    dsound_unlock_out (dsb, p1, p2, blen1, blen2);
+    ds->old_pos = (old_pos + (decr << hwshift)) % bufsize;
+
+#ifdef DEBUG_DSOUND
+    ds->mixed += decr << hwshift;
+
+    dolog ("played %lu mixed %lu diff %ld sec %f\n",
+           ds->played,
+           ds->mixed,
+           ds->mixed - ds->played,
+           abs (ds->mixed - ds->played) / (double) hw->info.bytes_per_second);
+#endif
+    return decr;
 }
 
-static void dsound_enable_in(HWVoiceIn *hw, bool enable)
+static int dsound_ctl_in (HWVoiceIn *hw, int cmd, ...)
 {
     HRESULT hr;
     DWORD status;
@@ -478,17 +607,18 @@ static void dsound_enable_in(HWVoiceIn *hw, bool enable)
 
     if (!dscb) {
         dolog ("Attempt to control capture voice without a buffer\n");
-        return;
+        return -1;
     }
 
-    if (enable) {
+    switch (cmd) {
+    case VOICE_ENABLE:
         if (dsound_get_status_in (dscb, &status)) {
-            return;
+            return -1;
         }
 
         if (status & DSCBSTATUS_CAPTURING) {
             dolog ("warning: Voice is already capturing\n");
-            return;
+            return 0;
         }
 
         /* clear ?? */
@@ -496,81 +626,132 @@ static void dsound_enable_in(HWVoiceIn *hw, bool enable)
         hr = IDirectSoundCaptureBuffer_Start (dscb, DSCBSTART_LOOPING);
         if (FAILED (hr)) {
             dsound_logerr (hr, "Could not start capturing\n");
-            return;
+            return -1;
         }
-    } else {
+        break;
+
+    case VOICE_DISABLE:
         if (dsound_get_status_in (dscb, &status)) {
-            return;
+            return -1;
         }
 
         if (status & DSCBSTATUS_CAPTURING) {
             hr = IDirectSoundCaptureBuffer_Stop (dscb);
             if (FAILED (hr)) {
                 dsound_logerr (hr, "Could not stop capturing\n");
-                return;
+                return -1;
             }
         }
         else {
             dolog ("warning: Voice is not capturing\n");
         }
+        break;
     }
+    return 0;
 }
 
-static void *dsound_get_buffer_in(HWVoiceIn *hw, size_t *size)
+static int dsound_read (SWVoiceIn *sw, void *buf, int len)
 {
+    return audio_pcm_sw_read (sw, buf, len);
+}
+
+static int dsound_run_in (HWVoiceIn *hw)
+{
+    int err;
+    HRESULT hr;
     DSoundVoiceIn *ds = (DSoundVoiceIn *) hw;
     LPDIRECTSOUNDCAPTUREBUFFER dscb = ds->dsound_capture_buffer;
-    HRESULT hr;
-    DWORD cpos, rpos, act_size;
-    size_t req_size;
-    int err;
-    void *ret;
+    int live, len, dead;
+    DWORD blen1, blen2;
+    DWORD len1, len2;
+    DWORD decr;
+    DWORD cpos, rpos;
+    LPVOID p1, p2;
+    int hwshift;
+    dsound *s = ds->s;
 
-    hr = IDirectSoundCaptureBuffer_GetCurrentPosition(
-        dscb, &cpos, ds->first_time ? &rpos : NULL);
-    if (FAILED(hr)) {
-        dsound_logerr(hr, "Could not get capture buffer position\n");
-        *size = 0;
-        return NULL;
+    if (!dscb) {
+        dolog ("Attempt to run without capture buffer\n");
+        return 0;
+    }
+
+    hwshift = hw->info.shift;
+
+    live = audio_pcm_hw_get_live_in (hw);
+    dead = hw->samples - live;
+    if (!dead) {
+        return 0;
+    }
+
+    hr = IDirectSoundCaptureBuffer_GetCurrentPosition (
+        dscb,
+        &cpos,
+        ds->first_time ? &rpos : NULL
+        );
+    if (FAILED (hr)) {
+        dsound_logerr (hr, "Could not get capture buffer position\n");
+        return 0;
     }
 
     if (ds->first_time) {
-        hw->pos_emul = rpos;
-        ds->first_time = false;
+        ds->first_time = 0;
+        if (rpos & hw->info.align) {
+            ldebug ("warning: Misaligned capture read position %ld(%d)\n",
+                    rpos, hw->info.align);
+        }
+        hw->wpos = rpos >> hwshift;
     }
 
-    req_size = audio_ring_dist(cpos, hw->pos_emul, hw->size_emul);
-    req_size = MIN(*size, MIN(req_size, hw->size_emul - hw->pos_emul));
-
-    if (req_size == 0) {
-        *size = 0;
-        return NULL;
+    if (cpos & hw->info.align) {
+        ldebug ("warning: Misaligned capture position %ld(%d)\n",
+                cpos, hw->info.align);
     }
+    cpos >>= hwshift;
 
-    err = dsound_lock_in(dscb, &hw->info, hw->pos_emul, req_size, &ret, NULL,
-                         &act_size, NULL, false, ds->s);
+    len = audio_ring_dist (cpos, hw->wpos, hw->samples);
+    if (!len) {
+        return 0;
+    }
+    len = audio_MIN (len, dead);
+
+    err = dsound_lock_in (
+        dscb,
+        &hw->info,
+        hw->wpos << hwshift,
+        len << hwshift,
+        &p1,
+        &p2,
+        &blen1,
+        &blen2,
+        0,
+        s
+        );
     if (err) {
-        dolog("Failed to lock buffer\n");
-        *size = 0;
-        return NULL;
+        return 0;
     }
 
-    *size = act_size;
-    return ret;
+    len1 = blen1 >> hwshift;
+    len2 = blen2 >> hwshift;
+    decr = len1 + len2;
+
+    if (p1 && len1) {
+        hw->conv (hw->conv_buf + hw->wpos, p1, len1);
+    }
+
+    if (p2 && len2) {
+        hw->conv (hw->conv_buf, p2, len2);
+    }
+
+    dsound_unlock_in (dscb, p1, p2, blen1, blen2);
+    hw->wpos = (hw->wpos + decr) % hw->samples;
+    return decr;
 }
 
-static void dsound_put_buffer_in(HWVoiceIn *hw, void *buf, size_t len)
-{
-    DSoundVoiceIn *ds = (DSoundVoiceIn *) hw;
-    LPDIRECTSOUNDCAPTUREBUFFER dscb = ds->dsound_capture_buffer;
-    int err = dsound_unlock_in(dscb, buf, NULL, len, 0);
-
-    if (err) {
-        dolog("Failed to unlock buffer!!\n");
-        return;
-    }
-    hw->pos_emul = (hw->pos_emul + len) % hw->size_emul;
-}
+static DSoundConf glob_conf = {
+    .bufsize_in         = 16384,
+    .bufsize_out        = 16384,
+    .latency_millis     = 10
+};
 
 static void dsound_audio_fini (void *opaque)
 {
@@ -602,22 +783,13 @@ static void dsound_audio_fini (void *opaque)
     g_free(s);
 }
 
-static void *dsound_audio_init(Audiodev *dev)
+static void *dsound_audio_init (void)
 {
     int err;
     HRESULT hr;
     dsound *s = g_malloc0(sizeof(dsound));
-    AudiodevDsoundOptions *dso;
 
-    assert(dev->driver == AUDIODEV_DRIVER_DSOUND);
-    s->dev = dev;
-    dso = &dev->u.dsound;
-
-    if (!dso->has_latency) {
-        dso->has_latency = true;
-        dso->latency = 10000; /* 10 ms */
-    }
-
+    s->conf = glob_conf;
     hr = CoInitialize (NULL);
     if (FAILED (hr)) {
         dsound_logerr (hr, "Could not initialize COM\n");
@@ -682,25 +854,46 @@ static void *dsound_audio_init(Audiodev *dev)
     return s;
 }
 
+static struct audio_option dsound_options[] = {
+    {
+        .name  = "LATENCY_MILLIS",
+        .tag   = AUD_OPT_INT,
+        .valp  = &glob_conf.latency_millis,
+        .descr = "(undocumented)"
+    },
+    {
+        .name  = "BUFSIZE_OUT",
+        .tag   = AUD_OPT_INT,
+        .valp  = &glob_conf.bufsize_out,
+        .descr = "(undocumented)"
+    },
+    {
+        .name  = "BUFSIZE_IN",
+        .tag   = AUD_OPT_INT,
+        .valp  = &glob_conf.bufsize_in,
+        .descr = "(undocumented)"
+    },
+    { /* End of list */ }
+};
+
 static struct audio_pcm_ops dsound_pcm_ops = {
     .init_out = dsound_init_out,
     .fini_out = dsound_fini_out,
-    .write    = audio_generic_write,
-    .get_buffer_out = dsound_get_buffer_out,
-    .put_buffer_out = dsound_put_buffer_out,
-    .enable_out = dsound_enable_out,
+    .run_out  = dsound_run_out,
+    .write    = dsound_write,
+    .ctl_out  = dsound_ctl_out,
 
     .init_in  = dsound_init_in,
     .fini_in  = dsound_fini_in,
-    .read     = audio_generic_read,
-    .get_buffer_in = dsound_get_buffer_in,
-    .put_buffer_in = dsound_put_buffer_in,
-    .enable_in = dsound_enable_in,
+    .run_in   = dsound_run_in,
+    .read     = dsound_read,
+    .ctl_in   = dsound_ctl_in
 };
 
 static struct audio_driver dsound_audio_driver = {
     .name           = "dsound",
     .descr          = "DirectSound http://wikipedia.org/wiki/DirectSound",
+    .options        = dsound_options,
     .init           = dsound_audio_init,
     .fini           = dsound_audio_fini,
     .pcm_ops        = &dsound_pcm_ops,

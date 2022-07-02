@@ -50,6 +50,7 @@
  * 0xf0000 - 0xfffff System BIOS Area Memory Segments
  */
 
+#include "qemu-common.h"
 #include "exec/memory.h"
 
 #define SMRAM_C_BASE    0xa0000
