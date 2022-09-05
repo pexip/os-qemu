@@ -1,3 +1,9 @@
+qemu (1:5.2+dfsg-11+deb11u2pexip4) pexip-bullseye; urgency=medium
+
+  * Bullseye rebuild for ARM64 inclusion
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Mon, 05 Sep 2022 10:35:50 +0100
+
 qemu (1:5.2+dfsg-11+deb11u2pexip3) pexip-bullseye; urgency=medium
 
   * Rebuild without debian/control-in to prevent unwanted
