@@ -1,0 +1,1945 @@
+Subject: v7.2.1
+Date: Wed Apr 5 14:37:42 2023 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.0
+and upstream qemu v7.2.1.
+
+ VERSION                                   |   2 +-
+ block/curl.c                              |  44 +++++--
+ block/io.c                                |   3 +
+ block/iscsi.c                             |   1 +
+ block/qcow2-bitmap.c                      |   5 +-
+ chardev/char-socket.c                     |   1 +
+ configure                                 |   2 +-
+ hw/acpi/cpu_hotplug.c                     |   3 +
+ hw/core/machine.c                         |   3 +
+ hw/i386/intel_iommu.c                     |  15 +++
+ hw/i386/microvm.c                         |   2 +-
+ hw/i386/pc.c                              |   4 +-
+ hw/i386/pc_piix.c                         |   2 -
+ hw/i386/pc_q35.c                          |   2 -
+ hw/i386/x86.c                             |  88 +++----------
+ hw/nvme/ctrl.c                            |  32 ++++-
+ hw/nvram/fw_cfg.c                         |  12 +-
+ hw/smbios/smbios.c                        |   8 +-
+ hw/timer/hpet.c                           |  19 ++-
+ hw/virtio/vhost-shadow-virtqueue.c        |   2 +-
+ hw/virtio/vhost-user-gpio.c               |  10 +-
+ hw/virtio/vhost-user-i2c.c                |   5 +-
+ hw/virtio/vhost-user-rng.c                |   5 +-
+ hw/virtio/vhost-vdpa.c                    |  17 +--
+ hw/virtio/vhost.c                         |  84 ++++++++++---
+ hw/virtio/virtio-mem.c                    |   6 +-
+ include/hw/i386/pc.h                      |   3 -
+ include/hw/i386/x86.h                     |   3 +-
+ include/hw/nvram/fw_cfg.h                 |  22 ----
+ include/hw/virtio/vhost-user-gpio.h       |   2 +-
+ meson.build                               |   2 +-
+ migration/ram.c                           |   9 +-
+ scripts/shaderinclude.pl                  |  16 ---
+ scripts/shaderinclude.py                  |  26 ++++
+ scripts/symlink-install-tree.py           |   1 -
+ subprojects/libvhost-user/libvhost-user.c |   7 ++
+ target/arm/helper.c                       |   3 +
+ target/arm/ptw.c                          |   6 +-
+ target/arm/sve_helper.c                   |  14 ++-
+ target/arm/translate.c                    |   2 +-
+ target/i386/tcg/emit.c.inc                |  59 +++++----
+ target/riscv/translate.c                  |  12 +-
+ target/sh4/cpu.c                          |   2 +-
+ tests/tcg/Makefile.target                 |   2 +
+ tests/tcg/i386/Makefile.target            |   6 +-
+ tests/tcg/i386/test-i386-adcox.c          |  75 ++++++++++++
+ tests/tcg/i386/test-i386-bmi2.c           | 197 ++++++++++++++++--------------
+ tests/tcg/multiarch/linux/linux-test.c    |   6 +-
+ tests/tcg/riscv64/Makefile.target         |   6 +
+ tests/tcg/riscv64/test-noc.S              |  32 +++++
+ 50 files changed, 548 insertions(+), 342 deletions(-)
+
+diff --git a/VERSION b/VERSION
+index 0ee843cc60..b26a34e470 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.0
++7.2.1
+diff --git a/block/curl.c b/block/curl.c
+index cba4c4cac7..0b125095e3 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -37,8 +37,15 @@
+ 
+ // #define DEBUG_VERBOSE
+ 
++/* CURL 7.85.0 switches to a string based API for specifying
++ * the desired protocols.
++ */
++#if LIBCURL_VERSION_NUM >= 0x075500
++#define PROTOCOLS "HTTP,HTTPS,FTP,FTPS"
++#else
+ #define PROTOCOLS (CURLPROTO_HTTP | CURLPROTO_HTTPS | \
+                    CURLPROTO_FTP | CURLPROTO_FTPS)
++#endif
+ 
+ #define CURL_NUM_STATES 8
+ #define CURL_NUM_ACB    8
+@@ -509,9 +516,18 @@ static int curl_init_state(BDRVCURLState *s, CURLState *state)
+          * obscure protocols.  For example, do not allow POP3/SMTP/IMAP see
+          * CVE-2013-0249.
+          *
+-         * Restricting protocols is only supported from 7.19.4 upwards.
++         * Restricting protocols is only supported from 7.19.4 upwards. Note:
++         * version 7.85.0 deprecates CURLOPT_*PROTOCOLS in favour of a string
++         * based CURLOPT_*PROTOCOLS_STR API.
+          */
+-#if LIBCURL_VERSION_NUM >= 0x071304
++#if LIBCURL_VERSION_NUM >= 0x075500
++        if (curl_easy_setopt(state->curl,
++                             CURLOPT_PROTOCOLS_STR, PROTOCOLS) ||
++            curl_easy_setopt(state->curl,
++                             CURLOPT_REDIR_PROTOCOLS_STR, PROTOCOLS)) {
++            goto err;
++        }
++#elif LIBCURL_VERSION_NUM >= 0x071304
+         if (curl_easy_setopt(state->curl, CURLOPT_PROTOCOLS, PROTOCOLS) ||
+             curl_easy_setopt(state->curl, CURLOPT_REDIR_PROTOCOLS, PROTOCOLS)) {
+             goto err;
+@@ -669,7 +685,12 @@ static int curl_open(BlockDriverState *bs, QDict *options, int flags,
+     const char *file;
+     const char *cookie;
+     const char *cookie_secret;
+-    double d;
++    /* CURL >= 7.55.0 uses curl_off_t for content length instead of a double */
++#if LIBCURL_VERSION_NUM >= 0x073700
++    curl_off_t cl;
++#else
++    double cl;
++#endif
+     const char *secretid;
+     const char *protocol_delimiter;
+     int ret;
+@@ -796,27 +817,36 @@ static int curl_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+     if (curl_easy_perform(state->curl))
+         goto out;
+-    if (curl_easy_getinfo(state->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &d)) {
++    /* CURL 7.55.0 deprecates CURLINFO_CONTENT_LENGTH_DOWNLOAD in favour of
++     * the *_T version which returns a more sensible type for content length.
++     */
++#if LIBCURL_VERSION_NUM >= 0x073700
++    if (curl_easy_getinfo(state->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &cl)) {
++        goto out;
++    }
++#else
++    if (curl_easy_getinfo(state->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &cl)) {
+         goto out;
+     }
++#endif
+     /* Prior CURL 7.19.4 return value of 0 could mean that the file size is not
+      * know or the size is zero. From 7.19.4 CURL returns -1 if size is not
+      * known and zero if it is really zero-length file. */
+ #if LIBCURL_VERSION_NUM >= 0x071304
+-    if (d < 0) {
++    if (cl < 0) {
+         pstrcpy(state->errmsg, CURL_ERROR_SIZE,
+                 "Server didn't report file size.");
+         goto out;
+     }
+ #else
+-    if (d <= 0) {
++    if (cl <= 0) {
+         pstrcpy(state->errmsg, CURL_ERROR_SIZE,
+                 "Unknown file size or zero-length file.");
+         goto out;
+     }
+ #endif
+ 
+-    s->len = d;
++    s->len = cl;
+ 
+     if ((!strncasecmp(s->url, "http://", strlen("http://"))
+         || !strncasecmp(s->url, "https://", strlen("https://")))
+diff --git a/block/io.c b/block/io.c
+index b9424024f9..bbaa0d1b2d 100644
+--- a/block/io.c
++++ b/block/io.c
+@@ -2087,6 +2087,9 @@ static int coroutine_fn bdrv_aligned_pwritev(BdrvChild *child,
+         if (bs->detect_zeroes == BLOCKDEV_DETECT_ZEROES_OPTIONS_UNMAP) {
+             flags |= BDRV_REQ_MAY_UNMAP;
+         }
++
++        /* Can't use optimization hint with bufferless zero write */
++        flags &= ~BDRV_REQ_REGISTERED_BUF;
+     }
+ 
+     if (ret < 0) {
+diff --git a/block/iscsi.c b/block/iscsi.c
+index a316d46d96..1bba42a71b 100644
+--- a/block/iscsi.c
++++ b/block/iscsi.c
+@@ -268,6 +268,7 @@ iscsi_co_generic_cb(struct iscsi_context *iscsi, int status,
+                 timer_mod(&iTask->retry_timer,
+                           qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + retry_time);
+                 iTask->do_retry = 1;
++                return;
+             } else if (status == SCSI_STATUS_CHECK_CONDITION) {
+                 int error = iscsi_translate_sense(&task->sense);
+                 if (error == EAGAIN) {
+diff --git a/block/qcow2-bitmap.c b/block/qcow2-bitmap.c
+index bcad567c0c..3dff99ba06 100644
+--- a/block/qcow2-bitmap.c
++++ b/block/qcow2-bitmap.c
+@@ -115,7 +115,7 @@ static int update_header_sync(BlockDriverState *bs)
+     return bdrv_flush(bs->file->bs);
+ }
+ 
+-static inline void bitmap_table_to_be(uint64_t *bitmap_table, size_t size)
++static inline void bitmap_table_bswap_be(uint64_t *bitmap_table, size_t size)
+ {
+     size_t i;
+ 
+@@ -1401,9 +1401,10 @@ static int store_bitmap(BlockDriverState *bs, Qcow2Bitmap *bm, Error **errp)
+         goto fail;
+     }
+ 
+-    bitmap_table_to_be(tb, tb_size);
++    bitmap_table_bswap_be(tb, tb_size);
+     ret = bdrv_pwrite(bs->file, tb_offset, tb_size * sizeof(tb[0]), tb, 0);
+     if (ret < 0) {
++        bitmap_table_bswap_be(tb, tb_size);
+         error_setg_errno(errp, -ret, "Failed to write bitmap '%s' to file",
+                          bm_name);
+         goto fail;
+diff --git a/chardev/char-socket.c b/chardev/char-socket.c
+index 879564aa8a..b00efb1482 100644
+--- a/chardev/char-socket.c
++++ b/chardev/char-socket.c
+@@ -1065,6 +1065,7 @@ static void char_socket_finalize(Object *obj)
+         qio_net_listener_set_client_func_full(s->listener, NULL, NULL,
+                                               NULL, chr->gcontext);
+         object_unref(OBJECT(s->listener));
++        s->listener = NULL;
+     }
+     if (s->tls_creds) {
+         object_unref(OBJECT(s->tls_creds));
+diff --git a/configure b/configure
+index 26c7bc5154..5f1828f1ec 100755
+--- a/configure
++++ b/configure
+@@ -2416,7 +2416,7 @@ echo "QEMU_OBJCFLAGS=$QEMU_OBJCFLAGS" >> $config_host_mak
+ echo "GLIB_CFLAGS=$glib_cflags" >> $config_host_mak
+ echo "GLIB_LIBS=$glib_libs" >> $config_host_mak
+ echo "GLIB_BINDIR=$glib_bindir" >> $config_host_mak
+-echo "GLIB_VERSION=$(pkg-config --modversion glib-2.0)" >> $config_host_mak
++echo "GLIB_VERSION=$($pkg_config --modversion glib-2.0)" >> $config_host_mak
+ echo "QEMU_LDFLAGS=$QEMU_LDFLAGS" >> $config_host_mak
+ echo "EXESUF=$EXESUF" >> $config_host_mak
+ 
+diff --git a/hw/acpi/cpu_hotplug.c b/hw/acpi/cpu_hotplug.c
+index 53654f8638..ff14c3f410 100644
+--- a/hw/acpi/cpu_hotplug.c
++++ b/hw/acpi/cpu_hotplug.c
+@@ -52,6 +52,9 @@ static const MemoryRegionOps AcpiCpuHotplug_ops = {
+     .endianness = DEVICE_LITTLE_ENDIAN,
+     .valid = {
+         .min_access_size = 1,
++        .max_access_size = 4,
++    },
++    .impl = {
+         .max_access_size = 1,
+     },
+ };
+diff --git a/hw/core/machine.c b/hw/core/machine.c
+index 8d34caa31d..035d078a74 100644
+--- a/hw/core/machine.c
++++ b/hw/core/machine.c
+@@ -42,6 +42,9 @@
+ 
+ GlobalProperty hw_compat_7_1[] = {
+     { "virtio-device", "queue_reset", "false" },
++    { "virtio-rng-pci", "vectors", "0" },
++    { "virtio-rng-pci-transitional", "vectors", "0" },
++    { "virtio-rng-pci-non-transitional", "vectors", "0" },
+ };
+ const size_t hw_compat_7_1_len = G_N_ELEMENTS(hw_compat_7_1);
+ 
+diff --git a/hw/i386/intel_iommu.c b/hw/i386/intel_iommu.c
+index a08ee85edf..d025ef2873 100644
+--- a/hw/i386/intel_iommu.c
++++ b/hw/i386/intel_iommu.c
+@@ -3179,6 +3179,7 @@ static int vtd_iommu_notify_flag_changed(IOMMUMemoryRegion *iommu,
+ {
+     VTDAddressSpace *vtd_as = container_of(iommu, VTDAddressSpace, iommu);
+     IntelIOMMUState *s = vtd_as->iommu_state;
++    X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(s);
+ 
+     /* TODO: add support for VFIO and vhost users */
+     if (s->snoop_control) {
+@@ -3186,6 +3187,20 @@ static int vtd_iommu_notify_flag_changed(IOMMUMemoryRegion *iommu,
+                          "Snoop Control with vhost or VFIO is not supported");
+         return -ENOTSUP;
+     }
++    if (!s->caching_mode && (new & IOMMU_NOTIFIER_MAP)) {
++        error_setg_errno(errp, ENOTSUP,
++                         "device %02x.%02x.%x requires caching mode",
++                         pci_bus_num(vtd_as->bus), PCI_SLOT(vtd_as->devfn),
++                         PCI_FUNC(vtd_as->devfn));
++        return -ENOTSUP;
++    }
++    if (!x86_iommu->dt_supported && (new & IOMMU_NOTIFIER_DEVIOTLB_UNMAP)) {
++        error_setg_errno(errp, ENOTSUP,
++                         "device %02x.%02x.%x requires device IOTLB mode",
++                         pci_bus_num(vtd_as->bus), PCI_SLOT(vtd_as->devfn),
++                         PCI_FUNC(vtd_as->devfn));
++        return -ENOTSUP;
++    }
+ 
+     /* Update per-address-space notifier flags */
+     vtd_as->notifier_flags = new;
+diff --git a/hw/i386/microvm.c b/hw/i386/microvm.c
+index 170a331e3f..b231ceda9a 100644
+--- a/hw/i386/microvm.c
++++ b/hw/i386/microvm.c
+@@ -330,7 +330,7 @@ static void microvm_memory_init(MicrovmMachineState *mms)
+     rom_set_fw(fw_cfg);
+ 
+     if (machine->kernel_filename != NULL) {
+-        x86_load_linux(x86ms, fw_cfg, 0, true, false);
++        x86_load_linux(x86ms, fw_cfg, 0, true);
+     }
+ 
+     if (mms->option_roms) {
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index 546b703cb4..ec5a10534b 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -799,7 +799,7 @@ void xen_load_linux(PCMachineState *pcms)
+     rom_set_fw(fw_cfg);
+ 
+     x86_load_linux(x86ms, fw_cfg, pcmc->acpi_data_size,
+-                   pcmc->pvh_enabled, pcmc->legacy_no_rng_seed);
++                   pcmc->pvh_enabled);
+     for (i = 0; i < nb_option_roms; i++) {
+         assert(!strcmp(option_rom[i].name, "linuxboot.bin") ||
+                !strcmp(option_rom[i].name, "linuxboot_dma.bin") ||
+@@ -1119,7 +1119,7 @@ void pc_memory_init(PCMachineState *pcms,
+ 
+     if (linux_boot) {
+         x86_load_linux(x86ms, fw_cfg, pcmc->acpi_data_size,
+-                       pcmc->pvh_enabled, pcmc->legacy_no_rng_seed);
++                       pcmc->pvh_enabled);
+     }
+ 
+     for (i = 0; i < nb_option_roms; i++) {
+diff --git a/hw/i386/pc_piix.c b/hw/i386/pc_piix.c
+index 0ad0ed1603..24616bf924 100644
+--- a/hw/i386/pc_piix.c
++++ b/hw/i386/pc_piix.c
+@@ -449,11 +449,9 @@ DEFINE_I440FX_MACHINE(v7_2, "pc-i440fx-7.2", NULL,
+ 
+ static void pc_i440fx_7_1_machine_options(MachineClass *m)
+ {
+-    PCMachineClass *pcmc = PC_MACHINE_CLASS(m);
+     pc_i440fx_7_2_machine_options(m);
+     m->alias = NULL;
+     m->is_default = false;
+-    pcmc->legacy_no_rng_seed = true;
+     compat_props_add(m->compat_props, hw_compat_7_1, hw_compat_7_1_len);
+     compat_props_add(m->compat_props, pc_compat_7_1, pc_compat_7_1_len);
+ }
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index a496bd6e74..f522874add 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -383,10 +383,8 @@ DEFINE_Q35_MACHINE(v7_2, "pc-q35-7.2", NULL,
+ 
+ static void pc_q35_7_1_machine_options(MachineClass *m)
+ {
+-    PCMachineClass *pcmc = PC_MACHINE_CLASS(m);
+     pc_q35_7_2_machine_options(m);
+     m->alias = NULL;
+-    pcmc->legacy_no_rng_seed = true;
+     compat_props_add(m->compat_props, hw_compat_7_1, hw_compat_7_1_len);
+     compat_props_add(m->compat_props, pc_compat_7_1, pc_compat_7_1_len);
+ }
+diff --git a/hw/i386/x86.c b/hw/i386/x86.c
+index 78cc131926..80be3032cc 100644
+--- a/hw/i386/x86.c
++++ b/hw/i386/x86.c
+@@ -26,7 +26,6 @@
+ #include "qemu/cutils.h"
+ #include "qemu/units.h"
+ #include "qemu/datadir.h"
+-#include "qemu/guest-random.h"
+ #include "qapi/error.h"
+ #include "qapi/qmp/qerror.h"
+ #include "qapi/qapi-visit-common.h"
+@@ -37,7 +36,6 @@
+ #include "sysemu/whpx.h"
+ #include "sysemu/numa.h"
+ #include "sysemu/replay.h"
+-#include "sysemu/reset.h"
+ #include "sysemu/sysemu.h"
+ #include "sysemu/cpu-timers.h"
+ #include "sysemu/xen.h"
+@@ -657,12 +655,12 @@ DeviceState *ioapic_init_secondary(GSIState *gsi_state)
+     return dev;
+ }
+ 
+-typedef struct SetupData {
++struct setup_data {
+     uint64_t next;
+     uint32_t type;
+     uint32_t len;
+     uint8_t data[];
+-} __attribute__((packed)) SetupData;
++} __attribute__((packed));
+ 
+ 
+ /*
+@@ -769,35 +767,10 @@ static bool load_elfboot(const char *kernel_filename,
+     return true;
+ }
+ 
+-typedef struct SetupDataFixup {
+-    void *pos;
+-    hwaddr orig_val, new_val;
+-    uint32_t addr;
+-} SetupDataFixup;
+-
+-static void fixup_setup_data(void *opaque)
+-{
+-    SetupDataFixup *fixup = opaque;
+-    stq_p(fixup->pos, fixup->new_val);
+-}
+-
+-static void reset_setup_data(void *opaque)
+-{
+-    SetupDataFixup *fixup = opaque;
+-    stq_p(fixup->pos, fixup->orig_val);
+-}
+-
+-static void reset_rng_seed(void *opaque)
+-{
+-    SetupData *setup_data = opaque;
+-    qemu_guest_getrandom_nofail(setup_data->data, le32_to_cpu(setup_data->len));
+-}
+-
+ void x86_load_linux(X86MachineState *x86ms,
+                     FWCfgState *fw_cfg,
+                     int acpi_data_size,
+-                    bool pvh_enabled,
+-                    bool legacy_no_rng_seed)
++                    bool pvh_enabled)
+ {
+     bool linuxboot_dma_enabled = X86_MACHINE_GET_CLASS(x86ms)->fwcfg_dma_enabled;
+     uint16_t protocol;
+@@ -805,17 +778,16 @@ void x86_load_linux(X86MachineState *x86ms,
+     int dtb_size, setup_data_offset;
+     uint32_t initrd_max;
+     uint8_t header[8192], *setup, *kernel;
+-    hwaddr real_addr, prot_addr, cmdline_addr, initrd_addr = 0, first_setup_data = 0;
++    hwaddr real_addr, prot_addr, cmdline_addr, initrd_addr = 0;
+     FILE *f;
+     char *vmode;
+     MachineState *machine = MACHINE(x86ms);
+-    SetupData *setup_data;
++    struct setup_data *setup_data;
+     const char *kernel_filename = machine->kernel_filename;
+     const char *initrd_filename = machine->initrd_filename;
+     const char *dtb_filename = machine->dtb;
+     const char *kernel_cmdline = machine->kernel_cmdline;
+     SevKernelLoaderContext sev_load_ctx = {};
+-    enum { RNG_SEED_LENGTH = 32 };
+ 
+     /* Align to 16 bytes as a paranoia measure */
+     cmdline_size = (strlen(kernel_cmdline) + 16) & ~15;
+@@ -1092,41 +1064,19 @@ void x86_load_linux(X86MachineState *x86ms,
+         }
+ 
+         setup_data_offset = QEMU_ALIGN_UP(kernel_size, 16);
+-        kernel_size = setup_data_offset + sizeof(SetupData) + dtb_size;
++        kernel_size = setup_data_offset + sizeof(struct setup_data) + dtb_size;
+         kernel = g_realloc(kernel, kernel_size);
+ 
++        stq_p(header + 0x250, prot_addr + setup_data_offset);
+ 
+-        setup_data = (SetupData *)(kernel + setup_data_offset);
+-        setup_data->next = cpu_to_le64(first_setup_data);
+-        first_setup_data = prot_addr + setup_data_offset;
++        setup_data = (struct setup_data *)(kernel + setup_data_offset);
++        setup_data->next = 0;
+         setup_data->type = cpu_to_le32(SETUP_DTB);
+         setup_data->len = cpu_to_le32(dtb_size);
+ 
+         load_image_size(dtb_filename, setup_data->data, dtb_size);
+     }
+ 
+-    if (!legacy_no_rng_seed) {
+-        setup_data_offset = QEMU_ALIGN_UP(kernel_size, 16);
+-        kernel_size = setup_data_offset + sizeof(SetupData) + RNG_SEED_LENGTH;
+-        kernel = g_realloc(kernel, kernel_size);
+-        setup_data = (SetupData *)(kernel + setup_data_offset);
+-        setup_data->next = cpu_to_le64(first_setup_data);
+-        first_setup_data = prot_addr + setup_data_offset;
+-        setup_data->type = cpu_to_le32(SETUP_RNG_SEED);
+-        setup_data->len = cpu_to_le32(RNG_SEED_LENGTH);
+-        qemu_guest_getrandom_nofail(setup_data->data, RNG_SEED_LENGTH);
+-        qemu_register_reset_nosnapshotload(reset_rng_seed, setup_data);
+-        fw_cfg_add_bytes_callback(fw_cfg, FW_CFG_KERNEL_DATA, reset_rng_seed, NULL,
+-                                  setup_data, kernel, kernel_size, true);
+-    } else {
+-        fw_cfg_add_bytes(fw_cfg, FW_CFG_KERNEL_DATA, kernel, kernel_size);
+-    }
+-
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_ADDR, prot_addr);
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_SIZE, kernel_size);
+-    sev_load_ctx.kernel_data = (char *)kernel;
+-    sev_load_ctx.kernel_size = kernel_size;
+-
+     /*
+      * If we're starting an encrypted VM, it will be OVMF based, which uses the
+      * efi stub for booting and doesn't require any values to be placed in the
+@@ -1135,20 +1085,16 @@ void x86_load_linux(X86MachineState *x86ms,
+      * file the user passed in.
+      */
+     if (!sev_enabled()) {
+-        SetupDataFixup *fixup = g_malloc(sizeof(*fixup));
+-
+         memcpy(setup, header, MIN(sizeof(header), setup_size));
+-        /* Offset 0x250 is a pointer to the first setup_data link. */
+-        fixup->pos = setup + 0x250;
+-        fixup->orig_val = ldq_p(fixup->pos);
+-        fixup->new_val = first_setup_data;
+-        fixup->addr = cpu_to_le32(real_addr);
+-        fw_cfg_add_bytes_callback(fw_cfg, FW_CFG_SETUP_ADDR, fixup_setup_data, NULL,
+-                                  fixup, &fixup->addr, sizeof(fixup->addr), true);
+-        qemu_register_reset(reset_setup_data, fixup);
+-    } else {
+-        fw_cfg_add_i32(fw_cfg, FW_CFG_SETUP_ADDR, real_addr);
+     }
++
++    fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_ADDR, prot_addr);
++    fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_SIZE, kernel_size);
++    fw_cfg_add_bytes(fw_cfg, FW_CFG_KERNEL_DATA, kernel, kernel_size);
++    sev_load_ctx.kernel_data = (char *)kernel;
++    sev_load_ctx.kernel_size = kernel_size;
++
++    fw_cfg_add_i32(fw_cfg, FW_CFG_SETUP_ADDR, real_addr);
+     fw_cfg_add_i32(fw_cfg, FW_CFG_SETUP_SIZE, setup_size);
+     fw_cfg_add_bytes(fw_cfg, FW_CFG_SETUP_DATA, setup, setup_size);
+     sev_load_ctx.setup_data = (char *)setup;
+diff --git a/hw/nvme/ctrl.c b/hw/nvme/ctrl.c
+index e54276dc1d..1d3e058452 100644
+--- a/hw/nvme/ctrl.c
++++ b/hw/nvme/ctrl.c
+@@ -1331,10 +1331,23 @@ static inline void nvme_blk_write(BlockBackend *blk, int64_t offset,
+     }
+ }
+ 
++static void nvme_update_cq_eventidx(const NvmeCQueue *cq)
++{
++    uint32_t v = cpu_to_le32(cq->head);
++
++    //not in 7.2: trace_pci_nvme_update_cq_eventidx(cq->cqid, cq->head);
++
++    pci_dma_write(PCI_DEVICE(cq->ctrl), cq->ei_addr, &v, sizeof(v));
++}
++
+ static void nvme_update_cq_head(NvmeCQueue *cq)
+ {
+-    pci_dma_read(&cq->ctrl->parent_obj, cq->db_addr, &cq->head,
+-            sizeof(cq->head));
++    uint32_t v;
++
++    pci_dma_read(&cq->ctrl->parent_obj, cq->db_addr, &v, sizeof(v));
++
++    cq->head = le32_to_cpu(v);
++
+     trace_pci_nvme_shadow_doorbell_cq(cq->cqid, cq->head);
+ }
+ 
+@@ -1351,6 +1364,7 @@ static void nvme_post_cqes(void *opaque)
+         hwaddr addr;
+ 
+         if (n->dbbuf_enabled) {
++            nvme_update_cq_eventidx(cq);
+             nvme_update_cq_head(cq);
+         }
+ 
+@@ -6141,15 +6155,21 @@ static uint16_t nvme_admin_cmd(NvmeCtrl *n, NvmeRequest *req)
+ 
+ static void nvme_update_sq_eventidx(const NvmeSQueue *sq)
+ {
+-    pci_dma_write(&sq->ctrl->parent_obj, sq->ei_addr, &sq->tail,
+-                  sizeof(sq->tail));
++    uint32_t v = cpu_to_le32(sq->tail);
++
++    pci_dma_write(&sq->ctrl->parent_obj, sq->ei_addr, &v, sizeof(v));
++
+     trace_pci_nvme_eventidx_sq(sq->sqid, sq->tail);
+ }
+ 
+ static void nvme_update_sq_tail(NvmeSQueue *sq)
+ {
+-    pci_dma_read(&sq->ctrl->parent_obj, sq->db_addr, &sq->tail,
+-                 sizeof(sq->tail));
++    uint32_t v;
++
++    pci_dma_read(&sq->ctrl->parent_obj, sq->db_addr, &v, sizeof(v));
++
++    sq->tail = le32_to_cpu(v);
++
+     trace_pci_nvme_shadow_doorbell_sq(sq->sqid, sq->tail);
+ }
+ 
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index 6edf5ea3e9..371a45dfe2 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -693,12 +693,12 @@ static const VMStateDescription vmstate_fw_cfg = {
+     }
+ };
+ 
+-void fw_cfg_add_bytes_callback(FWCfgState *s, uint16_t key,
+-                               FWCfgCallback select_cb,
+-                               FWCfgWriteCallback write_cb,
+-                               void *callback_opaque,
+-                               void *data, size_t len,
+-                               bool read_only)
++static void fw_cfg_add_bytes_callback(FWCfgState *s, uint16_t key,
++                                      FWCfgCallback select_cb,
++                                      FWCfgWriteCallback write_cb,
++                                      void *callback_opaque,
++                                      void *data, size_t len,
++                                      bool read_only)
+ {
+     int arch = !!(key & FW_CFG_ARCH_LOCAL);
+ 
+diff --git a/hw/smbios/smbios.c b/hw/smbios/smbios.c
+index b4243de735..66a020999b 100644
+--- a/hw/smbios/smbios.c
++++ b/hw/smbios/smbios.c
+@@ -749,14 +749,16 @@ static void smbios_build_type_4_table(MachineState *ms, unsigned instance)
+     t->core_count = (ms->smp.cores > 255) ? 0xFF : ms->smp.cores;
+     t->core_enabled = t->core_count;
+ 
+-    t->core_count2 = t->core_enabled2 = cpu_to_le16(ms->smp.cores);
+-
+     t->thread_count = (ms->smp.threads > 255) ? 0xFF : ms->smp.threads;
+-    t->thread_count2 = cpu_to_le16(ms->smp.threads);
+ 
+     t->processor_characteristics = cpu_to_le16(0x02); /* Unknown */
+     t->processor_family2 = cpu_to_le16(0x01); /* Other */
+ 
++    if (tbl_len == SMBIOS_TYPE_4_LEN_V30) {
++        t->core_count2 = t->core_enabled2 = cpu_to_le16(ms->smp.cores);
++        t->thread_count2 = cpu_to_le16(ms->smp.threads);
++    }
++
+     SMBIOS_BUILD_TABLE_POST;
+     smbios_type4_count++;
+ }
+diff --git a/hw/timer/hpet.c b/hw/timer/hpet.c
+index 9520471be2..5f88ffdef8 100644
+--- a/hw/timer/hpet.c
++++ b/hw/timer/hpet.c
+@@ -352,6 +352,16 @@ static const VMStateDescription vmstate_hpet = {
+     }
+ };
+ 
++static void hpet_arm(HPETTimer *t, uint64_t ticks)
++{
++    if (ticks < ns_to_ticks(INT64_MAX / 2)) {
++        timer_mod(t->qemu_timer,
++                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ticks_to_ns(ticks));
++    } else {
++        timer_del(t->qemu_timer);
++    }
++}
++
+ /*
+  * timer expiration callback
+  */
+@@ -374,13 +384,11 @@ static void hpet_timer(void *opaque)
+             }
+         }
+         diff = hpet_calculate_diff(t, cur_tick);
+-        timer_mod(t->qemu_timer,
+-                       qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + (int64_t)ticks_to_ns(diff));
++        hpet_arm(t, diff);
+     } else if (t->config & HPET_TN_32BIT && !timer_is_periodic(t)) {
+         if (t->wrap_flag) {
+             diff = hpet_calculate_diff(t, cur_tick);
+-            timer_mod(t->qemu_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+-                           (int64_t)ticks_to_ns(diff));
++            hpet_arm(t, diff);
+             t->wrap_flag = 0;
+         }
+     }
+@@ -407,8 +415,7 @@ static void hpet_set_timer(HPETTimer *t)
+             t->wrap_flag = 1;
+         }
+     }
+-    timer_mod(t->qemu_timer,
+-                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + (int64_t)ticks_to_ns(diff));
++    hpet_arm(t, diff);
+ }
+ 
+ static void hpet_del_timer(HPETTimer *t)
+diff --git a/hw/virtio/vhost-shadow-virtqueue.c b/hw/virtio/vhost-shadow-virtqueue.c
+index 5bd14cad96..a723073747 100644
+--- a/hw/virtio/vhost-shadow-virtqueue.c
++++ b/hw/virtio/vhost-shadow-virtqueue.c
+@@ -522,7 +522,7 @@ static void vhost_svq_flush(VhostShadowVirtqueue *svq,
+ size_t vhost_svq_poll(VhostShadowVirtqueue *svq)
+ {
+     int64_t start_us = g_get_monotonic_time();
+-    uint32_t len;
++    uint32_t len = 0;
+ 
+     do {
+         if (vhost_svq_more_used(svq)) {
+diff --git a/hw/virtio/vhost-user-gpio.c b/hw/virtio/vhost-user-gpio.c
+index b7b82a1099..97145376eb 100644
+--- a/hw/virtio/vhost-user-gpio.c
++++ b/hw/virtio/vhost-user-gpio.c
+@@ -16,6 +16,7 @@
+ #include "trace.h"
+ 
+ #define REALIZE_CONNECTION_RETRIES 3
++#define VHOST_NVQS 2
+ 
+ /* Features required from VirtIO */
+ static const int feature_bits[] = {
+@@ -198,8 +199,7 @@ static void do_vhost_user_cleanup(VirtIODevice *vdev, VHostUserGPIO *gpio)
+ {
+     virtio_delete_queue(gpio->command_vq);
+     virtio_delete_queue(gpio->interrupt_vq);
+-    g_free(gpio->vhost_dev.vqs);
+-    gpio->vhost_dev.vqs = NULL;
++    g_free(gpio->vhost_vqs);
+     virtio_cleanup(vdev);
+     vhost_user_cleanup(&gpio->vhost_user);
+ }
+@@ -219,6 +219,9 @@ static int vu_gpio_connect(DeviceState *dev, Error **errp)
+     vhost_dev_set_config_notifier(vhost_dev, &gpio_ops);
+     gpio->vhost_user.supports_config = true;
+ 
++    gpio->vhost_dev.nvqs = VHOST_NVQS;
++    gpio->vhost_dev.vqs = gpio->vhost_vqs;
++
+     ret = vhost_dev_init(vhost_dev, &gpio->vhost_user,
+                          VHOST_BACKEND_TYPE_USER, 0, errp);
+     if (ret < 0) {
+@@ -337,10 +340,9 @@ static void vu_gpio_device_realize(DeviceState *dev, Error **errp)
+ 
+     virtio_init(vdev, VIRTIO_ID_GPIO, sizeof(gpio->config));
+ 
+-    gpio->vhost_dev.nvqs = 2;
+     gpio->command_vq = virtio_add_queue(vdev, 256, vu_gpio_handle_output);
+     gpio->interrupt_vq = virtio_add_queue(vdev, 256, vu_gpio_handle_output);
+-    gpio->vhost_dev.vqs = g_new0(struct vhost_virtqueue, gpio->vhost_dev.nvqs);
++    gpio->vhost_vqs = g_new0(struct vhost_virtqueue, VHOST_NVQS);
+ 
+     gpio->connected = false;
+ 
+diff --git a/hw/virtio/vhost-user-i2c.c b/hw/virtio/vhost-user-i2c.c
+index dc5c828ba6..60eaf0d95b 100644
+--- a/hw/virtio/vhost-user-i2c.c
++++ b/hw/virtio/vhost-user-i2c.c
+@@ -143,8 +143,6 @@ static void do_vhost_user_cleanup(VirtIODevice *vdev, VHostUserI2C *i2c)
+     vhost_user_cleanup(&i2c->vhost_user);
+     virtio_delete_queue(i2c->vq);
+     virtio_cleanup(vdev);
+-    g_free(i2c->vhost_dev.vqs);
+-    i2c->vhost_dev.vqs = NULL;
+ }
+ 
+ static int vu_i2c_connect(DeviceState *dev)
+@@ -228,6 +226,7 @@ static void vu_i2c_device_realize(DeviceState *dev, Error **errp)
+     ret = vhost_dev_init(&i2c->vhost_dev, &i2c->vhost_user,
+                          VHOST_BACKEND_TYPE_USER, 0, errp);
+     if (ret < 0) {
++        g_free(i2c->vhost_dev.vqs);
+         do_vhost_user_cleanup(vdev, i2c);
+     }
+ 
+@@ -239,10 +238,12 @@ static void vu_i2c_device_unrealize(DeviceState *dev)
+ {
+     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
+     VHostUserI2C *i2c = VHOST_USER_I2C(dev);
++    struct vhost_virtqueue *vhost_vqs = i2c->vhost_dev.vqs;
+ 
+     /* This will stop vhost backend if appropriate. */
+     vu_i2c_set_status(vdev, 0);
+     vhost_dev_cleanup(&i2c->vhost_dev);
++    g_free(vhost_vqs);
+     do_vhost_user_cleanup(vdev, i2c);
+ }
+ 
+diff --git a/hw/virtio/vhost-user-rng.c b/hw/virtio/vhost-user-rng.c
+index 201a39e220..efc54cd3fb 100644
+--- a/hw/virtio/vhost-user-rng.c
++++ b/hw/virtio/vhost-user-rng.c
+@@ -229,6 +229,7 @@ static void vu_rng_device_realize(DeviceState *dev, Error **errp)
+     return;
+ 
+ vhost_dev_init_failed:
++    g_free(rng->vhost_dev.vqs);
+     virtio_delete_queue(rng->req_vq);
+ virtio_add_queue_failed:
+     virtio_cleanup(vdev);
+@@ -239,12 +240,12 @@ static void vu_rng_device_unrealize(DeviceState *dev)
+ {
+     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
+     VHostUserRNG *rng = VHOST_USER_RNG(dev);
++    struct vhost_virtqueue *vhost_vqs = rng->vhost_dev.vqs;
+ 
+     vu_rng_set_status(vdev, 0);
+ 
+     vhost_dev_cleanup(&rng->vhost_dev);
+-    g_free(rng->vhost_dev.vqs);
+-    rng->vhost_dev.vqs = NULL;
++    g_free(vhost_vqs);
+     virtio_delete_queue(rng->req_vq);
+     virtio_cleanup(vdev);
+     vhost_user_cleanup(&rng->vhost_user);
+diff --git a/hw/virtio/vhost-vdpa.c b/hw/virtio/vhost-vdpa.c
+index 7468e44b87..03c78d25d8 100644
+--- a/hw/virtio/vhost-vdpa.c
++++ b/hw/virtio/vhost-vdpa.c
+@@ -707,26 +707,11 @@ static int vhost_vdpa_get_device_id(struct vhost_dev *dev,
+     return ret;
+ }
+ 
+-static void vhost_vdpa_reset_svq(struct vhost_vdpa *v)
+-{
+-    if (!v->shadow_vqs_enabled) {
+-        return;
+-    }
+-
+-    for (unsigned i = 0; i < v->shadow_vqs->len; ++i) {
+-        VhostShadowVirtqueue *svq = g_ptr_array_index(v->shadow_vqs, i);
+-        vhost_svq_stop(svq);
+-    }
+-}
+-
+ static int vhost_vdpa_reset_device(struct vhost_dev *dev)
+ {
+-    struct vhost_vdpa *v = dev->opaque;
+     int ret;
+     uint8_t status = 0;
+ 
+-    vhost_vdpa_reset_svq(v);
+-
+     ret = vhost_vdpa_call(dev, VHOST_VDPA_SET_STATUS, &status);
+     trace_vhost_vdpa_reset_device(dev, status);
+     return ret;
+@@ -1088,6 +1073,8 @@ static void vhost_vdpa_svqs_stop(struct vhost_dev *dev)
+ 
+     for (unsigned i = 0; i < v->shadow_vqs->len; ++i) {
+         VhostShadowVirtqueue *svq = g_ptr_array_index(v->shadow_vqs, i);
++
++        vhost_svq_stop(svq);
+         vhost_vdpa_svq_unmap_rings(dev, svq);
+     }
+ }
+diff --git a/hw/virtio/vhost.c b/hw/virtio/vhost.c
+index 7fb008bc9e..fdcd1a8fdf 100644
+--- a/hw/virtio/vhost.c
++++ b/hw/virtio/vhost.c
+@@ -20,6 +20,7 @@
+ #include "qemu/range.h"
+ #include "qemu/error-report.h"
+ #include "qemu/memfd.h"
++#include "qemu/log.h"
+ #include "standard-headers/linux/vhost_types.h"
+ #include "hw/virtio/virtio-bus.h"
+ #include "hw/virtio/virtio-access.h"
+@@ -106,6 +107,24 @@ static void vhost_dev_sync_region(struct vhost_dev *dev,
+     }
+ }
+ 
++static bool vhost_dev_has_iommu(struct vhost_dev *dev)
++{
++    VirtIODevice *vdev = dev->vdev;
++
++    /*
++     * For vhost, VIRTIO_F_IOMMU_PLATFORM means the backend support
++     * incremental memory mapping API via IOTLB API. For platform that
++     * does not have IOMMU, there's no need to enable this feature
++     * which may cause unnecessary IOTLB miss/update transactions.
++     */
++    if (vdev) {
++        return virtio_bus_device_iommu_enabled(vdev) &&
++            virtio_host_has_feature(vdev, VIRTIO_F_IOMMU_PLATFORM);
++    } else {
++        return false;
++    }
++}
++
+ static int vhost_sync_dirty_bitmap(struct vhost_dev *dev,
+                                    MemoryRegionSection *section,
+                                    hwaddr first,
+@@ -137,8 +156,51 @@ static int vhost_sync_dirty_bitmap(struct vhost_dev *dev,
+             continue;
+         }
+ 
+-        vhost_dev_sync_region(dev, section, start_addr, end_addr, vq->used_phys,
+-                              range_get_last(vq->used_phys, vq->used_size));
++        if (vhost_dev_has_iommu(dev)) {
++            IOMMUTLBEntry iotlb;
++            hwaddr used_phys = vq->used_phys, used_size = vq->used_size;
++            hwaddr phys, s, offset;
++
++            while (used_size) {
++                rcu_read_lock();
++                iotlb = address_space_get_iotlb_entry(dev->vdev->dma_as,
++                                                      used_phys,
++                                                      true,
++                                                      MEMTXATTRS_UNSPECIFIED);
++                rcu_read_unlock();
++
++                if (!iotlb.target_as) {
++                    qemu_log_mask(LOG_GUEST_ERROR, "translation "
++                                  "failure for used_iova %"PRIx64"\n",
++                                  used_phys);
++                    return -EINVAL;
++                }
++
++                offset = used_phys & iotlb.addr_mask;
++                phys = iotlb.translated_addr + offset;
++
++                /*
++                 * Distance from start of used ring until last byte of
++                 * IOMMU page.
++                 */
++                s = iotlb.addr_mask - offset;
++                /*
++                 * Size of used ring, or of the part of it until end
++                 * of IOMMU page. To avoid zero result, do the adding
++                 * outside of MIN().
++                 */
++                s = MIN(s, used_size - 1) + 1;
++
++                vhost_dev_sync_region(dev, section, start_addr, end_addr, phys,
++                                      range_get_last(phys, s));
++                used_size -= s;
++                used_phys += s;
++            }
++        } else {
++            vhost_dev_sync_region(dev, section, start_addr,
++                                  end_addr, vq->used_phys,
++                                  range_get_last(vq->used_phys, vq->used_size));
++        }
+     }
+     return 0;
+ }
+@@ -306,24 +368,6 @@ static inline void vhost_dev_log_resize(struct vhost_dev *dev, uint64_t size)
+     dev->log_size = size;
+ }
+ 
+-static bool vhost_dev_has_iommu(struct vhost_dev *dev)
+-{
+-    VirtIODevice *vdev = dev->vdev;
+-
+-    /*
+-     * For vhost, VIRTIO_F_IOMMU_PLATFORM means the backend support
+-     * incremental memory mapping API via IOTLB API. For platform that
+-     * does not have IOMMU, there's no need to enable this feature
+-     * which may cause unnecessary IOTLB miss/update transactions.
+-     */
+-    if (vdev) {
+-        return virtio_bus_device_iommu_enabled(vdev) &&
+-            virtio_host_has_feature(vdev, VIRTIO_F_IOMMU_PLATFORM);
+-    } else {
+-        return false;
+-    }
+-}
+-
+ static void *vhost_memory_map(struct vhost_dev *dev, hwaddr addr,
+                               hwaddr *plen, bool is_write)
+ {
+diff --git a/hw/virtio/virtio-mem.c b/hw/virtio/virtio-mem.c
+index ed170def48..56db586c89 100644
+--- a/hw/virtio/virtio-mem.c
++++ b/hw/virtio/virtio-mem.c
+@@ -235,7 +235,7 @@ static int virtio_mem_for_each_plugged_section(const VirtIOMEM *vmem,
+     uint64_t offset, size;
+     int ret = 0;
+ 
+-    first_bit = s->offset_within_region / vmem->bitmap_size;
++    first_bit = s->offset_within_region / vmem->block_size;
+     first_bit = find_next_bit(vmem->bitmap, vmem->bitmap_size, first_bit);
+     while (first_bit < vmem->bitmap_size) {
+         MemoryRegionSection tmp = *s;
+@@ -267,7 +267,7 @@ static int virtio_mem_for_each_unplugged_section(const VirtIOMEM *vmem,
+     uint64_t offset, size;
+     int ret = 0;
+ 
+-    first_bit = s->offset_within_region / vmem->bitmap_size;
++    first_bit = s->offset_within_region / vmem->block_size;
+     first_bit = find_next_zero_bit(vmem->bitmap, vmem->bitmap_size, first_bit);
+     while (first_bit < vmem->bitmap_size) {
+         MemoryRegionSection tmp = *s;
+@@ -341,7 +341,7 @@ static int virtio_mem_notify_plug(VirtIOMEM *vmem, uint64_t offset,
+     if (ret) {
+         /* Notify all already-notified listeners. */
+         QLIST_FOREACH(rdl2, &vmem->rdl_list, next) {
+-            MemoryRegionSection tmp = *rdl->section;
++            MemoryRegionSection tmp = *rdl2->section;
+ 
+             if (rdl2 == rdl) {
+                 break;
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index c95333514e..0c76e82626 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -128,9 +128,6 @@ struct PCMachineClass {
+ 
+     /* create kvmclock device even when KVM PV features are not exposed */
+     bool kvmclock_create_always;
+-
+-    /* skip passing an rng seed for legacy machines */
+-    bool legacy_no_rng_seed;
+ };
+ 
+ #define TYPE_PC_MACHINE "generic-pc-machine"
+diff --git a/include/hw/i386/x86.h b/include/hw/i386/x86.h
+index 62fa5774f8..df82c5fd42 100644
+--- a/include/hw/i386/x86.h
++++ b/include/hw/i386/x86.h
+@@ -126,8 +126,7 @@ void x86_bios_rom_init(MachineState *ms, const char *default_firmware,
+ void x86_load_linux(X86MachineState *x86ms,
+                     FWCfgState *fw_cfg,
+                     int acpi_data_size,
+-                    bool pvh_enabled,
+-                    bool legacy_no_rng_seed);
++                    bool pvh_enabled);
+ 
+ bool x86_machine_is_smm_enabled(const X86MachineState *x86ms);
+ bool x86_machine_is_acpi_enabled(const X86MachineState *x86ms);
+diff --git a/include/hw/nvram/fw_cfg.h b/include/hw/nvram/fw_cfg.h
+index 2e503904dc..c1f81a5f13 100644
+--- a/include/hw/nvram/fw_cfg.h
++++ b/include/hw/nvram/fw_cfg.h
+@@ -117,28 +117,6 @@ struct FWCfgMemState {
+  */
+ void fw_cfg_add_bytes(FWCfgState *s, uint16_t key, void *data, size_t len);
+ 
+-/**
+- * fw_cfg_add_bytes_callback:
+- * @s: fw_cfg device being modified
+- * @key: selector key value for new fw_cfg item
+- * @select_cb: callback function when selecting
+- * @write_cb: callback function after a write
+- * @callback_opaque: argument to be passed into callback function
+- * @data: pointer to start of item data
+- * @len: size of item data
+- * @read_only: is file read only
+- *
+- * Add a new fw_cfg item, available by selecting the given key, as a raw
+- * "blob" of the given size. The data referenced by the starting pointer
+- * is only linked, NOT copied, into the data structure of the fw_cfg device.
+- */
+-void fw_cfg_add_bytes_callback(FWCfgState *s, uint16_t key,
+-                               FWCfgCallback select_cb,
+-                               FWCfgWriteCallback write_cb,
+-                               void *callback_opaque,
+-                               void *data, size_t len,
+-                               bool read_only);
+-
+ /**
+  * fw_cfg_add_string:
+  * @s: fw_cfg device being modified
+diff --git a/include/hw/virtio/vhost-user-gpio.h b/include/hw/virtio/vhost-user-gpio.h
+index a9305c5e6c..a9d3f9b049 100644
+--- a/include/hw/virtio/vhost-user-gpio.h
++++ b/include/hw/virtio/vhost-user-gpio.h
+@@ -23,7 +23,7 @@ struct VHostUserGPIO {
+     VirtIODevice parent_obj;
+     CharBackend chardev;
+     struct virtio_gpio_config config;
+-    struct vhost_virtqueue *vhost_vq;
++    struct vhost_virtqueue *vhost_vqs;
+     struct vhost_dev vhost_dev;
+     VhostUserState vhost_user;
+     VirtQueue *command_vq;
+diff --git a/meson.build b/meson.build
+index 5c6b5a1c75..b88867ca9d 100644
+--- a/meson.build
++++ b/meson.build
+@@ -2777,7 +2777,7 @@ config_host_data.set('CONFIG_SLIRP', slirp.found())
+ genh += configure_file(output: 'config-host.h', configuration: config_host_data)
+ 
+ hxtool = find_program('scripts/hxtool')
+-shaderinclude = find_program('scripts/shaderinclude.pl')
++shaderinclude = find_program('scripts/shaderinclude.py')
+ qapi_gen = find_program('scripts/qapi-gen.py')
+ qapi_gen_depends = [ meson.current_source_dir() / 'scripts/qapi/__init__.py',
+                      meson.current_source_dir() / 'scripts/qapi/commands.py',
+diff --git a/migration/ram.c b/migration/ram.c
+index 1338e47665..f25ebd9620 100644
+--- a/migration/ram.c
++++ b/migration/ram.c
+@@ -1765,13 +1765,15 @@ out:
+ static inline void populate_read_range(RAMBlock *block, ram_addr_t offset,
+                                        ram_addr_t size)
+ {
++    const ram_addr_t end = offset + size;
++
+     /*
+      * We read one byte of each page; this will preallocate page tables if
+      * required and populate the shared zeropage on MAP_PRIVATE anonymous memory
+      * where no page was populated yet. This might require adaption when
+      * supporting other mappings, like shmem.
+      */
+-    for (; offset < size; offset += block->page_size) {
++    for (; offset < end; offset += block->page_size) {
+         char tmp = *((char *)block->host + offset);
+ 
+         /* Don't optimize the read out */
+@@ -1885,13 +1887,14 @@ int ram_write_tracking_start(void)
+                 block->max_length, UFFDIO_REGISTER_MODE_WP, NULL)) {
+             goto fail;
+         }
++        block->flags |= RAM_UF_WRITEPROTECT;
++        memory_region_ref(block->mr);
++
+         /* Apply UFFD write protection to the block memory range */
+         if (uffd_change_protection(rs->uffdio_fd, block->host,
+                 block->max_length, true, false)) {
+             goto fail;
+         }
+-        block->flags |= RAM_UF_WRITEPROTECT;
+-        memory_region_ref(block->mr);
+ 
+         trace_ram_write_tracking_ramblock_start(block->idstr, block->page_size,
+                 block->host, block->max_length);
+diff --git a/scripts/shaderinclude.pl b/scripts/shaderinclude.pl
+deleted file mode 100644
+index cd3bb40b12..0000000000
+--- a/scripts/shaderinclude.pl
++++ /dev/null
+@@ -1,16 +0,0 @@
+-#!/usr/bin/env perl
+-use strict;
+-use warnings;
+-
+-my $file = shift;
+-open FILE, "<", $file or die "open $file: $!";
+-my $name = $file;
+-$name =~ s|.*/||;
+-$name =~ s/[-.]/_/g;
+-print "static GLchar ${name}_src[] =\n";
+-while (<FILE>) {
+-    chomp;
+-    printf "    \"%s\\n\"\n", $_;
+-}
+-print "    \"\\n\";\n";
+-close FILE;
+diff --git a/scripts/shaderinclude.py b/scripts/shaderinclude.py
+new file mode 100644
+index 0000000000..ab2aade2cd
+--- /dev/null
++++ b/scripts/shaderinclude.py
+@@ -0,0 +1,26 @@
++#!/usr/bin/env python3
++#
++# Copyright (C) 2023 Red Hat, Inc.
++#
++# SPDX-License-Identifier: GPL-2.0-or-later
++
++import sys
++import os
++
++
++def main(args):
++    file_path = args[1]
++    basename = os.path.basename(file_path)
++    varname = basename.replace('-', '_').replace('.', '_')
++
++    with os.fdopen(sys.stdout.fileno(), "wt", closefd=False, newline='\n') as stdout:
++        with open(file_path, "r", encoding='utf-8') as file:
++            print(f'static GLchar {varname}_src[] =', file=stdout)
++            for line in file:
++                line = line.rstrip()
++                print(f'    "{line}\\n"', file=stdout)
++            print('    "\\n";', file=stdout)
++
++
++if __name__ == '__main__':
++    sys.exit(main(sys.argv))
+diff --git a/scripts/symlink-install-tree.py b/scripts/symlink-install-tree.py
+index a5bf0b0d6d..67cb86dd52 100644
+--- a/scripts/symlink-install-tree.py
++++ b/scripts/symlink-install-tree.py
+@@ -17,7 +17,6 @@ def destdir_join(d1: str, d2: str) -> str:
+ out = subprocess.run([*introspect.split(' '), '--installed'],
+                      stdout=subprocess.PIPE, check=True).stdout
+ for source, dest in json.loads(out).items():
+-    assert os.path.isabs(source)
+     bundle_dest = destdir_join('qemu-bundle', dest)
+     path = os.path.dirname(bundle_dest)
+     try:
+diff --git a/subprojects/libvhost-user/libvhost-user.c b/subprojects/libvhost-user/libvhost-user.c
+index d6ee6e7d91..b17e82b2b0 100644
+--- a/subprojects/libvhost-user/libvhost-user.c
++++ b/subprojects/libvhost-user/libvhost-user.c
+@@ -2547,6 +2547,10 @@ virtqueue_alloc_element(size_t sz,
+ 
+     assert(sz >= sizeof(VuVirtqElement));
+     elem = malloc(out_sg_end);
++    if (!elem) {
++        DPRINT("%s: failed to malloc virtqueue element\n", __func__);
++        return NULL;
++    }
+     elem->out_num = out_num;
+     elem->in_num = in_num;
+     elem->in_sg = (void *)elem + in_sg_ofs;
+@@ -2633,6 +2637,9 @@ vu_queue_map_desc(VuDev *dev, VuVirtq *vq, unsigned int idx, size_t sz)
+ 
+     /* Now copy what we have collected and mapped */
+     elem = virtqueue_alloc_element(sz, out_num, in_num);
++    if (!elem) {
++        return NULL;
++    }
+     elem->index = idx;
+     for (i = 0; i < out_num; i++) {
+         elem->out_sg[i] = iov[i];
+diff --git a/target/arm/helper.c b/target/arm/helper.c
+index d8c8223ec3..22bc935242 100644
+--- a/target/arm/helper.c
++++ b/target/arm/helper.c
+@@ -1820,6 +1820,9 @@ static void scr_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+         if (cpu_isar_feature(aa64_sme, cpu)) {
+             valid_mask |= SCR_ENTP2;
+         }
++        if (cpu_isar_feature(aa64_hcx, cpu)) {
++            valid_mask |= SCR_HXEN;
++        }
+     } else {
+         valid_mask &= ~(SCR_RW | SCR_ST);
+         if (cpu_isar_feature(aa32_ras, cpu)) {
+diff --git a/target/arm/ptw.c b/target/arm/ptw.c
+index f812734bfb..0b16068557 100644
+--- a/target/arm/ptw.c
++++ b/target/arm/ptw.c
+@@ -238,8 +238,8 @@ static bool S1_ptw_translate(CPUARMState *env, S1Translate *ptw,
+             };
+             GetPhysAddrResult s2 = { };
+ 
+-            if (!get_phys_addr_lpae(env, &s2ptw, addr, MMU_DATA_LOAD,
+-                                    false, &s2, fi)) {
++            if (get_phys_addr_lpae(env, &s2ptw, addr, MMU_DATA_LOAD,
++                                   false, &s2, fi)) {
+                 goto fail;
+             }
+             ptw->out_phys = s2.f.phys_addr;
+@@ -266,7 +266,7 @@ static bool S1_ptw_translate(CPUARMState *env, S1Translate *ptw,
+         if (unlikely(flags & TLB_INVALID_MASK)) {
+             goto fail;
+         }
+-        ptw->out_phys = full->phys_addr;
++        ptw->out_phys = full->phys_addr | (addr & ~TARGET_PAGE_MASK);
+         ptw->out_rw = full->prot & PAGE_WRITE;
+         pte_attrs = full->pte_attrs;
+         pte_secure = full->attrs.secure;
+diff --git a/target/arm/sve_helper.c b/target/arm/sve_helper.c
+index 1afeadf9c8..521fc9b969 100644
+--- a/target/arm/sve_helper.c
++++ b/target/arm/sve_helper.c
+@@ -5354,15 +5354,10 @@ bool sve_probe_page(SVEHostPage *info, bool nofault, CPUARMState *env,
+ #ifdef CONFIG_USER_ONLY
+     flags = probe_access_flags(env, addr, access_type, mmu_idx, nofault,
+                                &info->host, retaddr);
+-    memset(&info->attrs, 0, sizeof(info->attrs));
+-    /* Require both ANON and MTE; see allocation_tag_mem(). */
+-    info->tagged = (flags & PAGE_ANON) && (flags & PAGE_MTE);
+ #else
+     CPUTLBEntryFull *full;
+     flags = probe_access_full(env, addr, access_type, mmu_idx, nofault,
+                               &info->host, &full, retaddr);
+-    info->attrs = full->attrs;
+-    info->tagged = full->pte_attrs == 0xf0;
+ #endif
+     info->flags = flags;
+ 
+@@ -5371,6 +5366,15 @@ bool sve_probe_page(SVEHostPage *info, bool nofault, CPUARMState *env,
+         return false;
+     }
+ 
++#ifdef CONFIG_USER_ONLY
++    memset(&info->attrs, 0, sizeof(info->attrs));
++    /* Require both ANON and MTE; see allocation_tag_mem(). */
++    info->tagged = (flags & PAGE_ANON) && (flags & PAGE_MTE);
++#else
++    info->attrs = full->attrs;
++    info->tagged = full->pte_attrs == 0xf0;
++#endif
++
+     /* Ensure that info->host[] is relative to addr, not addr + mem_off. */
+     info->host -= mem_off;
+     return true;
+diff --git a/target/arm/translate.c b/target/arm/translate.c
+index 74a903072f..1dcaefb8e7 100644
+--- a/target/arm/translate.c
++++ b/target/arm/translate.c
+@@ -1184,7 +1184,7 @@ static inline void gen_hlt(DisasContext *s, int imm)
+      * semihosting, to provide some semblance of security
+      * (and for consistency with our 32-bit semihosting).
+      */
+-    if (semihosting_enabled(s->current_el != 0) &&
++    if (semihosting_enabled(s->current_el == 0) &&
+         (imm == (s->thumb ? 0x3c : 0xf000))) {
+         gen_exception_internal_insn(s, EXCP_SEMIHOST);
+         return;
+diff --git a/target/i386/tcg/emit.c.inc b/target/i386/tcg/emit.c.inc
+index 7037ff91c6..7296f3952c 100644
+--- a/target/i386/tcg/emit.c.inc
++++ b/target/i386/tcg/emit.c.inc
+@@ -1015,6 +1015,7 @@ VSIB_AVX(VPGATHERQ, vpgatherq)
+ 
+ static void gen_ADCOX(DisasContext *s, CPUX86State *env, MemOp ot, int cc_op)
+ {
++    int opposite_cc_op;
+     TCGv carry_in = NULL;
+     TCGv carry_out = (cc_op == CC_OP_ADCX ? cpu_cc_dst : cpu_cc_src2);
+     TCGv zero;
+@@ -1022,14 +1023,8 @@ static void gen_ADCOX(DisasContext *s, CPUX86State *env, MemOp ot, int cc_op)
+     if (cc_op == s->cc_op || s->cc_op == CC_OP_ADCOX) {
+         /* Re-use the carry-out from a previous round.  */
+         carry_in = carry_out;
+-        cc_op = s->cc_op;
+-    } else if (s->cc_op == CC_OP_ADCX || s->cc_op == CC_OP_ADOX) {
+-        /* Merge with the carry-out from the opposite instruction.  */
+-        cc_op = CC_OP_ADCOX;
+-    }
+-
+-    /* If we don't have a carry-in, get it out of EFLAGS.  */
+-    if (!carry_in) {
++    } else {
++        /* We don't have a carry-in, get it out of EFLAGS.  */
+         if (s->cc_op != CC_OP_ADCX && s->cc_op != CC_OP_ADOX) {
+             gen_compute_eflags(s);
+         }
+@@ -1053,7 +1048,14 @@ static void gen_ADCOX(DisasContext *s, CPUX86State *env, MemOp ot, int cc_op)
+         tcg_gen_add2_tl(s->T0, carry_out, s->T0, carry_out, s->T1, zero);
+         break;
+     }
+-    set_cc_op(s, cc_op);
++
++    opposite_cc_op = cc_op == CC_OP_ADCX ? CC_OP_ADOX : CC_OP_ADCX;
++    if (s->cc_op == CC_OP_ADCOX || s->cc_op == opposite_cc_op) {
++        /* Merge with the carry-out from the opposite instruction.  */
++        set_cc_op(s, CC_OP_ADCOX);
++    } else {
++        set_cc_op(s, cc_op);
++    }
+ }
+ 
+ static void gen_ADCX(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+@@ -1078,30 +1080,30 @@ static void gen_ANDN(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+ static void gen_BEXTR(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+ {
+     MemOp ot = decode->op[0].ot;
+-    TCGv bound, zero;
++    TCGv bound = tcg_constant_tl(ot == MO_64 ? 63 : 31);
++    TCGv zero = tcg_constant_tl(0);
++    TCGv mone = tcg_constant_tl(-1);
+ 
+     /*
+      * Extract START, and shift the operand.
+      * Shifts larger than operand size get zeros.
+      */
+     tcg_gen_ext8u_tl(s->A0, s->T1);
++    if (TARGET_LONG_BITS == 64 && ot == MO_32) {
++        tcg_gen_ext32u_tl(s->T0, s->T0);
++    }
+     tcg_gen_shr_tl(s->T0, s->T0, s->A0);
+ 
+-    bound = tcg_constant_tl(ot == MO_64 ? 63 : 31);
+-    zero = tcg_constant_tl(0);
+     tcg_gen_movcond_tl(TCG_COND_LEU, s->T0, s->A0, bound, s->T0, zero);
+ 
+     /*
+-     * Extract the LEN into a mask.  Lengths larger than
+-     * operand size get all ones.
++     * Extract the LEN into an inverse mask.  Lengths larger than
++     * operand size get all zeros, length 0 gets all ones.
+      */
+     tcg_gen_extract_tl(s->A0, s->T1, 8, 8);
+-    tcg_gen_movcond_tl(TCG_COND_LEU, s->A0, s->A0, bound, s->A0, bound);
+-
+-    tcg_gen_movi_tl(s->T1, 1);
+-    tcg_gen_shl_tl(s->T1, s->T1, s->A0);
+-    tcg_gen_subi_tl(s->T1, s->T1, 1);
+-    tcg_gen_and_tl(s->T0, s->T0, s->T1);
++    tcg_gen_shl_tl(s->T1, mone, s->A0);
++    tcg_gen_movcond_tl(TCG_COND_LEU, s->T1, s->A0, bound, s->T1, zero);
++    tcg_gen_andc_tl(s->T0, s->T0, s->T1);
+ 
+     gen_op_update1_cc(s);
+     set_cc_op(s, CC_OP_LOGICB + ot);
+@@ -1111,6 +1113,7 @@ static void gen_BLSI(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+ {
+     MemOp ot = decode->op[0].ot;
+ 
++    tcg_gen_mov_tl(cpu_cc_src, s->T0);
+     tcg_gen_neg_tl(s->T1, s->T0);
+     tcg_gen_and_tl(s->T0, s->T0, s->T1);
+     tcg_gen_mov_tl(cpu_cc_dst, s->T0);
+@@ -1121,6 +1124,7 @@ static void gen_BLSMSK(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode
+ {
+     MemOp ot = decode->op[0].ot;
+ 
++    tcg_gen_mov_tl(cpu_cc_src, s->T0);
+     tcg_gen_subi_tl(s->T1, s->T0, 1);
+     tcg_gen_xor_tl(s->T0, s->T0, s->T1);
+     tcg_gen_mov_tl(cpu_cc_dst, s->T0);
+@@ -1131,6 +1135,7 @@ static void gen_BLSR(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+ {
+     MemOp ot = decode->op[0].ot;
+ 
++    tcg_gen_mov_tl(cpu_cc_src, s->T0);
+     tcg_gen_subi_tl(s->T1, s->T0, 1);
+     tcg_gen_and_tl(s->T0, s->T0, s->T1);
+     tcg_gen_mov_tl(cpu_cc_dst, s->T0);
+@@ -1140,20 +1145,20 @@ static void gen_BLSR(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+ static void gen_BZHI(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+ {
+     MemOp ot = decode->op[0].ot;
+-    TCGv bound;
++    TCGv bound = tcg_constant_tl(ot == MO_64 ? 63 : 31);
++    TCGv zero = tcg_constant_tl(0);
++    TCGv mone = tcg_constant_tl(-1);
+ 
+-    tcg_gen_ext8u_tl(s->T1, cpu_regs[s->vex_v]);
+-    bound = tcg_constant_tl(ot == MO_64 ? 63 : 31);
++    tcg_gen_ext8u_tl(s->T1, s->T1);
+ 
+     /*
+      * Note that since we're using BMILG (in order to get O
+      * cleared) we need to store the inverse into C.
+      */
+-    tcg_gen_setcond_tl(TCG_COND_LT, cpu_cc_src, s->T1, bound);
+-    tcg_gen_movcond_tl(TCG_COND_GT, s->T1, s->T1, bound, bound, s->T1);
++    tcg_gen_setcond_tl(TCG_COND_LEU, cpu_cc_src, s->T1, bound);
+ 
+-    tcg_gen_movi_tl(s->A0, -1);
+-    tcg_gen_shl_tl(s->A0, s->A0, s->T1);
++    tcg_gen_shl_tl(s->A0, mone, s->T1);
++    tcg_gen_movcond_tl(TCG_COND_LEU, s->A0, s->T1, bound, s->A0, zero);
+     tcg_gen_andc_tl(s->T0, s->T0, s->A0);
+ 
+     gen_op_update1_cc(s);
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index db123da5ec..1ed4bb5ec3 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1064,14 +1064,10 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
+ 
+     /* Check for compressed insn */
+     if (insn_len(opcode) == 2) {
+-        if (!has_ext(ctx, RVC)) {
+-            gen_exception_illegal(ctx);
+-        } else {
+-            ctx->opcode = opcode;
+-            ctx->pc_succ_insn = ctx->base.pc_next + 2;
+-            if (decode_insn16(ctx, opcode)) {
+-                return;
+-            }
++        ctx->opcode = opcode;
++        ctx->pc_succ_insn = ctx->base.pc_next + 2;
++        if (has_ext(ctx, RVC) && decode_insn16(ctx, opcode)) {
++            return;
+         }
+     } else {
+         uint32_t opcode32 = opcode;
+diff --git a/target/sh4/cpu.c b/target/sh4/cpu.c
+index 453268392b..827cee25af 100644
+--- a/target/sh4/cpu.c
++++ b/target/sh4/cpu.c
+@@ -47,7 +47,7 @@ static void superh_cpu_synchronize_from_tb(CPUState *cs,
+     SuperHCPU *cpu = SUPERH_CPU(cs);
+ 
+     cpu->env.pc = tb_pc(tb);
+-    cpu->env.flags = tb->flags;
++    cpu->env.flags = tb->flags & TB_FLAG_ENVFLAGS_MASK;
+ }
+ 
+ static void superh_restore_state_to_opc(CPUState *cs,
+diff --git a/tests/tcg/Makefile.target b/tests/tcg/Makefile.target
+index 75257f2b29..14bc013181 100644
+--- a/tests/tcg/Makefile.target
++++ b/tests/tcg/Makefile.target
+@@ -117,6 +117,8 @@ endif
+ 
+ %: %.c
+ 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $< -o $@ $(LDFLAGS)
++%: %.S
++	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $< -o $@ $(LDFLAGS)
+ else
+ # For softmmu targets we include a different Makefile fragement as the
+ # build options for bare programs are usually pretty different. They
+diff --git a/tests/tcg/i386/Makefile.target b/tests/tcg/i386/Makefile.target
+index 81831cafbc..bafd8c2180 100644
+--- a/tests/tcg/i386/Makefile.target
++++ b/tests/tcg/i386/Makefile.target
+@@ -14,7 +14,7 @@ config-cc.mak: Makefile
+ I386_SRCS=$(notdir $(wildcard $(I386_SRC)/*.c))
+ ALL_X86_TESTS=$(I386_SRCS:.c=)
+ SKIP_I386_TESTS=test-i386-ssse3 test-avx test-3dnow test-mmx
+-X86_64_TESTS:=$(filter test-i386-bmi2 $(SKIP_I386_TESTS), $(ALL_X86_TESTS))
++X86_64_TESTS:=$(filter test-i386-adcox test-i386-bmi2 $(SKIP_I386_TESTS), $(ALL_X86_TESTS))
+ 
+ test-i386-sse-exceptions: CFLAGS += -msse4.1 -mfpmath=sse
+ run-test-i386-sse-exceptions: QEMU_OPTS += -cpu max
+@@ -28,6 +28,10 @@ test-i386-bmi2: CFLAGS=-O2
+ run-test-i386-bmi2: QEMU_OPTS += -cpu max
+ run-plugin-test-i386-bmi2-%: QEMU_OPTS += -cpu max
+ 
++test-i386-adcox: CFLAGS=-O2
++run-test-i386-adcox: QEMU_OPTS += -cpu max
++run-plugin-test-i386-adcox-%: QEMU_OPTS += -cpu max
++
+ #
+ # hello-i386 is a barebones app
+ #
+diff --git a/tests/tcg/i386/test-i386-adcox.c b/tests/tcg/i386/test-i386-adcox.c
+new file mode 100644
+index 0000000000..16169efff8
+--- /dev/null
++++ b/tests/tcg/i386/test-i386-adcox.c
+@@ -0,0 +1,75 @@
++/* See if various BMI2 instructions give expected results */
++#include <assert.h>
++#include <stdint.h>
++#include <stdio.h>
++
++#define CC_C 1
++#define CC_O (1 << 11)
++
++#ifdef __x86_64__
++#define REG uint64_t
++#else
++#define REG uint32_t
++#endif
++
++void test_adox_adcx(uint32_t in_c, uint32_t in_o, REG adcx_operand, REG adox_operand)
++{
++    REG flags;
++    REG out_adcx, out_adox;
++
++    asm("pushf; pop %0" : "=r"(flags));
++    flags &= ~(CC_C | CC_O);
++    flags |= (in_c ? CC_C : 0);
++    flags |= (in_o ? CC_O : 0);
++
++    out_adcx = adcx_operand;
++    out_adox = adox_operand;
++    asm("push %0; popf;"
++        "adox %3, %2;"
++        "adcx %3, %1;"
++        "pushf; pop %0"
++        : "+r" (flags), "+r" (out_adcx), "+r" (out_adox)
++        : "r" ((REG)-1), "0" (flags), "1" (out_adcx), "2" (out_adox));
++
++    assert(out_adcx == in_c + adcx_operand - 1);
++    assert(out_adox == in_o + adox_operand - 1);
++    assert(!!(flags & CC_C) == (in_c || adcx_operand));
++    assert(!!(flags & CC_O) == (in_o || adox_operand));
++}
++
++void test_adcx_adox(uint32_t in_c, uint32_t in_o, REG adcx_operand, REG adox_operand)
++{
++    REG flags;
++    REG out_adcx, out_adox;
++
++    asm("pushf; pop %0" : "=r"(flags));
++    flags &= ~(CC_C | CC_O);
++    flags |= (in_c ? CC_C : 0);
++    flags |= (in_o ? CC_O : 0);
++
++    out_adcx = adcx_operand;
++    out_adox = adox_operand;
++    asm("push %0; popf;"
++        "adcx %3, %1;"
++        "adox %3, %2;"
++        "pushf; pop %0"
++        : "+r" (flags), "+r" (out_adcx), "+r" (out_adox)
++        : "r" ((REG)-1), "0" (flags), "1" (out_adcx), "2" (out_adox));
++
++    assert(out_adcx == in_c + adcx_operand - 1);
++    assert(out_adox == in_o + adox_operand - 1);
++    assert(!!(flags & CC_C) == (in_c || adcx_operand));
++    assert(!!(flags & CC_O) == (in_o || adox_operand));
++}
++
++int main(int argc, char *argv[]) {
++    /* try all combinations of input CF, input OF, CF from op1+op2,  OF from op2+op1 */
++    int i;
++    for (i = 0; i <= 15; i++) {
++        printf("%d\n", i);
++        test_adcx_adox(!!(i & 1), !!(i & 2), !!(i & 4), !!(i & 8));
++        test_adox_adcx(!!(i & 1), !!(i & 2), !!(i & 4), !!(i & 8));
++    }
++    return 0;
++}
++
+diff --git a/tests/tcg/i386/test-i386-bmi2.c b/tests/tcg/i386/test-i386-bmi2.c
+index 5fadf47510..0244df7987 100644
+--- a/tests/tcg/i386/test-i386-bmi2.c
++++ b/tests/tcg/i386/test-i386-bmi2.c
+@@ -3,34 +3,40 @@
+ #include <stdint.h>
+ #include <stdio.h>
+ 
++#ifdef __x86_64
++typedef uint64_t reg_t;
++#else
++typedef uint32_t reg_t;
++#endif
++
+ #define insn1q(name, arg0)                                                           \
+-static inline uint64_t name##q(uint64_t arg0)                                        \
++static inline reg_t name##q(reg_t arg0)                                              \
+ {                                                                                    \
+-    uint64_t result64;                                                               \
++    reg_t result64;                                                                  \
+     asm volatile (#name "q   %1, %0" : "=r"(result64) : "rm"(arg0));                 \
+     return result64;                                                                 \
+ }
+ 
+ #define insn1l(name, arg0)                                                           \
+-static inline uint32_t name##l(uint32_t arg0)                                        \
++static inline reg_t name##l(reg_t arg0)                                              \
+ {                                                                                    \
+-    uint32_t result32;                                                               \
++    reg_t result32;                                                                  \
+     asm volatile (#name "l   %k1, %k0" : "=r"(result32) : "rm"(arg0));               \
+     return result32;                                                                 \
+ }
+ 
+ #define insn2q(name, arg0, c0, arg1, c1)                                             \
+-static inline uint64_t name##q(uint64_t arg0, uint64_t arg1)                         \
++static inline reg_t name##q(reg_t arg0, reg_t arg1)                                  \
+ {                                                                                    \
+-    uint64_t result64;                                                               \
++    reg_t result64;                                                                  \
+     asm volatile (#name "q   %2, %1, %0" : "=r"(result64) : c0(arg0), c1(arg1));     \
+     return result64;                                                                 \
+ }
+ 
+ #define insn2l(name, arg0, c0, arg1, c1)                                             \
+-static inline uint32_t name##l(uint32_t arg0, uint32_t arg1)                         \
++static inline reg_t name##l(reg_t arg0, reg_t arg1)                                  \
+ {                                                                                    \
+-    uint32_t result32;                                                               \
++    reg_t result32;                                                                  \
+     asm volatile (#name "l   %k2, %k1, %k0" : "=r"(result32) : c0(arg0), c1(arg1));  \
+     return result32;                                                                 \
+ }
+@@ -65,130 +71,143 @@ insn1l(blsr, src)
+ int main(int argc, char *argv[]) {
+     uint64_t ehlo = 0x202020204f4c4845ull;
+     uint64_t mask = 0xa080800302020001ull;
+-    uint32_t result32;
++    reg_t result;
+ 
+ #ifdef __x86_64
+-    uint64_t result64;
+-
+     /* 64 bits */
+-    result64 = andnq(mask, ehlo);
+-    assert(result64 == 0x002020204d4c4844);
++    result = andnq(mask, ehlo);
++    assert(result == 0x002020204d4c4844);
++
++    result = pextq(ehlo, mask);
++    assert(result == 133);
+ 
+-    result64 = pextq(ehlo, mask);
+-    assert(result64 == 133);
++    result = pdepq(result, mask);
++    assert(result == (ehlo & mask));
+ 
+-    result64 = pdepq(result64, mask);
+-    assert(result64 == (ehlo & mask));
++    result = pextq(-1ull, mask);
++    assert(result == 511); /* mask has 9 bits set */
+ 
+-    result64 = pextq(-1ull, mask);
+-    assert(result64 == 511); /* mask has 9 bits set */
++    result = pdepq(-1ull, mask);
++    assert(result == mask);
+ 
+-    result64 = pdepq(-1ull, mask);
+-    assert(result64 == mask);
++    result = bextrq(mask, 0x3f00);
++    assert(result == (mask & ~INT64_MIN));
+ 
+-    result64 = bextrq(mask, 0x3f00);
+-    assert(result64 == (mask & ~INT64_MIN));
++    result = bextrq(mask, 0x1038);
++    assert(result == 0xa0);
+ 
+-    result64 = bextrq(mask, 0x1038);
+-    assert(result64 == 0xa0);
++    result = bextrq(mask, 0x10f8);
++    assert(result == 0);
+ 
+-    result64 = bextrq(mask, 0x10f8);
+-    assert(result64 == 0);
++    result = bextrq(0xfedcba9876543210ull, 0x7f00);
++    assert(result == 0xfedcba9876543210ull);
+ 
+-    result64 = blsiq(0x30);
+-    assert(result64 == 0x10);
++    result = blsiq(0x30);
++    assert(result == 0x10);
+ 
+-    result64 = blsiq(0x30ull << 32);
+-    assert(result64 == 0x10ull << 32);
++    result = blsiq(0x30ull << 32);
++    assert(result == 0x10ull << 32);
+ 
+-    result64 = blsmskq(0x30);
+-    assert(result64 == 0x1f);
++    result = blsmskq(0x30);
++    assert(result == 0x1f);
+ 
+-    result64 = blsrq(0x30);
+-    assert(result64 == 0x20);
++    result = blsrq(0x30);
++    assert(result == 0x20);
+ 
+-    result64 = blsrq(0x30ull << 32);
+-    assert(result64 == 0x20ull << 32);
++    result = blsrq(0x30ull << 32);
++    assert(result == 0x20ull << 32);
+ 
+-    result64 = bzhiq(mask, 0x3f);
+-    assert(result64 == (mask & ~INT64_MIN));
++    result = bzhiq(mask, 0x3f);
++    assert(result == (mask & ~INT64_MIN));
+ 
+-    result64 = bzhiq(mask, 0x1f);
+-    assert(result64 == (mask & ~(-1 << 30)));
++    result = bzhiq(mask, 0x1f);
++    assert(result == (mask & ~(-1 << 30)));
+ 
+-    result64 = rorxq(0x2132435465768798, 8);
+-    assert(result64 == 0x9821324354657687);
++    result = bzhiq(mask, 0x40);
++    assert(result == mask);
+ 
+-    result64 = sarxq(0xffeeddccbbaa9988, 8);
+-    assert(result64 == 0xffffeeddccbbaa99);
++    result = rorxq(0x2132435465768798, 8);
++    assert(result == 0x9821324354657687);
+ 
+-    result64 = sarxq(0x77eeddccbbaa9988, 8 | 64);
+-    assert(result64 == 0x0077eeddccbbaa99);
++    result = sarxq(0xffeeddccbbaa9988, 8);
++    assert(result == 0xffffeeddccbbaa99);
+ 
+-    result64 = shrxq(0xffeeddccbbaa9988, 8);
+-    assert(result64 == 0x00ffeeddccbbaa99);
++    result = sarxq(0x77eeddccbbaa9988, 8 | 64);
++    assert(result == 0x0077eeddccbbaa99);
+ 
+-    result64 = shrxq(0x77eeddccbbaa9988, 8 | 192);
+-    assert(result64 == 0x0077eeddccbbaa99);
++    result = shrxq(0xffeeddccbbaa9988, 8);
++    assert(result == 0x00ffeeddccbbaa99);
+ 
+-    result64 = shlxq(0xffeeddccbbaa9988, 8);
+-    assert(result64 == 0xeeddccbbaa998800);
++    result = shrxq(0x77eeddccbbaa9988, 8 | 192);
++    assert(result == 0x0077eeddccbbaa99);
++
++    result = shlxq(0xffeeddccbbaa9988, 8);
++    assert(result == 0xeeddccbbaa998800);
+ #endif
+ 
+     /* 32 bits */
+-    result32 = andnl(mask, ehlo);
+-    assert(result32 == 0x04d4c4844);
++    result = andnl(mask, ehlo);
++    assert(result == 0x04d4c4844);
++
++    result = pextl((uint32_t) ehlo, mask);
++    assert(result == 5);
++
++    result = pdepl(result, mask);
++    assert(result == (uint32_t)(ehlo & mask));
++
++    result = pextl(-1u, mask);
++    assert(result == 7); /* mask has 3 bits set */
+ 
+-    result32 = pextl((uint32_t) ehlo, mask);
+-    assert(result32 == 5);
++    result = pdepl(-1u, mask);
++    assert(result == (uint32_t)mask);
+ 
+-    result32 = pdepl(result32, mask);
+-    assert(result32 == (uint32_t)(ehlo & mask));
++    result = bextrl(mask, 0x1f00);
++    assert(result == (mask & ~INT32_MIN));
+ 
+-    result32 = pextl(-1u, mask);
+-    assert(result32 == 7); /* mask has 3 bits set */
++    result = bextrl(ehlo, 0x1018);
++    assert(result == 0x4f);
+ 
+-    result32 = pdepl(-1u, mask);
+-    assert(result32 == (uint32_t)mask);
++    result = bextrl(mask, 0x1038);
++    assert(result == 0);
+ 
+-    result32 = bextrl(mask, 0x1f00);
+-    assert(result32 == (mask & ~INT32_MIN));
++    result = bextrl((reg_t)0x8f635a775ad3b9b4ull, 0x3018);
++    assert(result == 0x5a);
+ 
+-    result32 = bextrl(ehlo, 0x1018);
+-    assert(result32 == 0x4f);
++    result = bextrl((reg_t)0xfedcba9876543210ull, 0x7f00);
++    assert(result == 0x76543210u);
+ 
+-    result32 = bextrl(mask, 0x1038);
+-    assert(result32 == 0);
++    result = bextrl(-1, 0);
++    assert(result == 0);
+ 
+-    result32 = blsil(0xffff);
+-    assert(result32 == 1);
++    result = blsil(0xffff);
++    assert(result == 1);
+ 
+-    result32 = blsmskl(0x300);
+-    assert(result32 == 0x1ff);
++    result = blsmskl(0x300);
++    assert(result == 0x1ff);
+ 
+-    result32 = blsrl(0xffc);
+-    assert(result32 == 0xff8);
++    result = blsrl(0xffc);
++    assert(result == 0xff8);
+ 
+-    result32 = bzhil(mask, 0xf);
+-    assert(result32 == 1);
++    result = bzhil(mask, 0xf);
++    assert(result == 1);
+ 
+-    result32 = rorxl(0x65768798, 8);
+-    assert(result32 == 0x98657687);
++    result = rorxl(0x65768798, 8);
++    assert(result == 0x98657687);
+ 
+-    result32 = sarxl(0xffeeddcc, 8);
+-    assert(result32 == 0xffffeedd);
++    result = sarxl(0xffeeddcc, 8);
++    assert(result == 0xffffeedd);
+ 
+-    result32 = sarxl(0x77eeddcc, 8 | 32);
+-    assert(result32 == 0x0077eedd);
++    result = sarxl(0x77eeddcc, 8 | 32);
++    assert(result == 0x0077eedd);
+ 
+-    result32 = shrxl(0xffeeddcc, 8);
+-    assert(result32 == 0x00ffeedd);
++    result = shrxl(0xffeeddcc, 8);
++    assert(result == 0x00ffeedd);
+ 
+-    result32 = shrxl(0x77eeddcc, 8 | 128);
+-    assert(result32 == 0x0077eedd);
++    result = shrxl(0x77eeddcc, 8 | 128);
++    assert(result == 0x0077eedd);
+ 
+-    result32 = shlxl(0xffeeddcc, 8);
+-    assert(result32 == 0xeeddcc00);
++    result = shlxl(0xffeeddcc, 8);
++    assert(result == 0xeeddcc00);
+ 
+     return 0;
+ }
+diff --git a/tests/tcg/multiarch/linux/linux-test.c b/tests/tcg/multiarch/linux/linux-test.c
+index 5a2a4f2258..64f57cb287 100644
+--- a/tests/tcg/multiarch/linux/linux-test.c
++++ b/tests/tcg/multiarch/linux/linux-test.c
+@@ -354,13 +354,17 @@ static void test_pipe(void)
+             if (FD_ISSET(fds[0], &rfds)) {
+                 chk_error(read(fds[0], &ch, 1));
+                 rcount++;
+-                if (rcount >= WCOUNT_MAX)
++                if (rcount >= WCOUNT_MAX) {
+                     break;
++                }
+             }
+             if (FD_ISSET(fds[1], &wfds)) {
+                 ch = 'a';
+                 chk_error(write(fds[1], &ch, 1));
+                 wcount++;
++                if (wcount >= WCOUNT_MAX) {
++                    break;
++                }
+             }
+         }
+     }
+diff --git a/tests/tcg/riscv64/Makefile.target b/tests/tcg/riscv64/Makefile.target
+index b5b89dfb0e..cc3ed65ffd 100644
+--- a/tests/tcg/riscv64/Makefile.target
++++ b/tests/tcg/riscv64/Makefile.target
+@@ -4,3 +4,9 @@
+ VPATH += $(SRC_PATH)/tests/tcg/riscv64
+ TESTS += test-div
+ TESTS += noexec
++
++# Disable compressed instructions for test-noc
++TESTS += test-noc
++test-noc: LDFLAGS = -nostdlib -static
++run-test-noc: QEMU_OPTS += -cpu rv64,c=false
++run-plugin-test-noc-%: QEMU_OPTS += -cpu rv64,c=false
+diff --git a/tests/tcg/riscv64/test-noc.S b/tests/tcg/riscv64/test-noc.S
+new file mode 100644
+index 0000000000..e29d60c8b3
+--- /dev/null
++++ b/tests/tcg/riscv64/test-noc.S
+@@ -0,0 +1,32 @@
++#include <asm/unistd.h>
++
++	.text
++	.globl _start
++_start:
++	.option	norvc
++	li	a0, 4		/* SIGILL */
++	la	a1, sa
++	li	a2, 0
++	li	a3, 8
++	li	a7, __NR_rt_sigaction
++	scall
++
++	.option	rvc
++	li	a0, 1
++	j	exit
++	.option	norvc
++
++pass:
++	li	a0, 0
++exit:
++	li	a7, __NR_exit
++	scall
++
++	.data
++	/* struct kernel_sigaction sa = { .sa_handler = pass }; */
++	.type	sa, @object
++	.size	sa, 32
++sa:
++	.dword	pass
++	.zero	24
++

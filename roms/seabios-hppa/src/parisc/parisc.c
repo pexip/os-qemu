@@ -1,6 +1,6 @@
 // Glue code for parisc architecture
 //
-// Copyright (C) 2017-2019  Helge Deller <deller@gmx.de>
+// Copyright (C) 2017-2022  Helge Deller <deller@gmx.de>
 // Copyright (C) 2019 Sven Schnelle <svens@stackframe.org>
 //
 // This file may be distributed under the terms of the GNU LGPLv3 license.
@@ -31,7 +31,7 @@
 
 #include "vgabios.h"
 
-#define SEABIOS_HPPA_VERSION 1
+#define SEABIOS_HPPA_VERSION 6
 
 /*
  * Various variables which are needed by x86 code.
@@ -41,6 +41,15 @@ int HaveRunPost;
 u8 ExtraStack[BUILD_EXTRA_STACK_SIZE+1] __aligned(8);
 u8 *StackPos;
 u8 __VISIBLE parisc_stack[32*1024] __aligned(64);
+
+volatile int num_online_cpus;
+int __VISIBLE toc_lock = 1;
+union {
+	struct pdc_toc_pim_11 pim11;
+	struct pdc_toc_pim_20 pim20;
+} pim_toc_data[HPPA_MAX_CPUS] __VISIBLE __aligned(8);
+
+#define is_64bit()	0	/* we only support 32-bit PDC for now. */
 
 u8 BiosChecksum;
 
@@ -103,6 +112,18 @@ extern unsigned long boot_args[];
 #define DEBUG_PDC       0x0001
 #define DEBUG_IODC      0x0002
 
+int pdc_console;
+/* flags for pdc_console */
+#define CONSOLE_DEFAULT   0x0000
+#define CONSOLE_SERIAL    0x0001
+#define CONSOLE_GRAPHICS  0x0002
+
+int sti_font;
+
+/* Want PDC boot menu? Enable via qemu "-boot menu=on" option. */
+unsigned int show_boot_menu;
+unsigned int interact_ipl;
+
 unsigned long PORT_QEMU_CFG_CTL;
 unsigned int tlb_entries = 256;
 unsigned int btlb_entries = 8;
@@ -159,6 +180,7 @@ void __VISIBLE __noreturn hlt(void)
     if (pdc_debug)
         printf("HALT initiated from %p\n",  __builtin_return_address(0));
     printf("SeaBIOS wants SYSTEM HALT.\n\n");
+    /* call qemu artificial "halt" asm instruction */
     asm volatile("\t.word 0xfffdead0": : :"memory");
     while (1);
 }
@@ -172,7 +194,7 @@ static void check_powersw_button(void)
     }
 }
 
-void __noreturn reset(void)
+void __VISIBLE __noreturn reset(void)
 {
     if (pdc_debug)
         printf("RESET initiated from %p\n",  __builtin_return_address(0));
@@ -180,6 +202,7 @@ void __noreturn reset(void)
             "***************************\n");
     check_powersw_button();
     PAGE0->imm_soft_boot = 1;
+    /* call qemu artificial "reset" asm instruction */
     asm volatile("\t.word 0xfffdead1": : :"memory");
     while (1);
 }
@@ -327,6 +350,14 @@ int HPA_is_graphics_device(unsigned long hpa)
 {
     return (hpa == LASI_GFX_HPA) || (hpa == 0xf4000000) ||
            (hpa == 0xf8000000)   || (hpa == 0xfa000000);
+}
+
+static const char *hpa_device_name(unsigned long hpa, int output)
+{
+    return HPA_is_graphics_device(hpa) ? "GRAPHICS(1)" :
+            HPA_is_keyboard_device(hpa) ? "PS2" :
+            ((hpa + 0x800) == PORT_SERIAL1) ?
+                "SERIAL_1.9600.8.none" : "SERIAL_2.9600.8.none";
 }
 
 static unsigned long keep_list[] = { PARISC_KEEP_LIST };
@@ -483,7 +514,7 @@ static hppa_device_t *find_hppa_device_by_path(struct pdc_module_path *search,
 #define SERIAL_TIMEOUT 20
 static unsigned long parisc_serial_in(char *c, unsigned long maxchars)
 {
-    const portaddr_t addr = PARISC_SERIAL_CONSOLE;
+    portaddr_t addr = PAGE0->mem_kbd.hpa + 0x800; /* PARISC_SERIAL_CONSOLE */
     unsigned long end = timer_calc(SERIAL_TIMEOUT);
     unsigned long count = 0;
     while (count < maxchars) {
@@ -501,10 +532,10 @@ static unsigned long parisc_serial_in(char *c, unsigned long maxchars)
 
 static void parisc_serial_out(char c)
 {
+    portaddr_t addr = PAGE0->mem_cons.hpa + 0x800; /* PARISC_SERIAL_CONSOLE */
     for (;;) {
         if (c == '\n')
             parisc_serial_out('\r');
-        const portaddr_t addr = PORT_SERIAL1;
         u8 lsr = inb(addr+SEROFF_LSR);
         if ((lsr & 0x60) == 0x60) {
             // Success - can write data
@@ -514,12 +545,35 @@ static void parisc_serial_out(char c)
     }
 }
 
-void parisc_screenc(char c)
+static void parisc_putchar_internal(char c)
 {
     if (HPA_is_graphics_device(PAGE0->mem_cons.hpa))
         sti_putc(c);
     else
         parisc_serial_out(c);
+}
+
+/* print char to default PDC output device */
+void parisc_putchar(char c)
+{
+    if (c == '\n')
+        parisc_putchar_internal('\r');
+    parisc_putchar_internal(c);
+}
+
+/* read char from default PDC input device (serial port / ps2-kbd) */
+static char parisc_getchar(void)
+{
+    int count;
+    char c;
+
+    if (HPA_is_serial_device(PAGE0->mem_kbd.hpa))
+        count = parisc_serial_in(&c, sizeof(c));
+    else
+        count = lasips2_kbd_in(&c, sizeof(c));
+    if (count == 0)
+        c = 0;
+    return c;
 }
 
 void iodc_log_call(unsigned int *arg, const char *func)
@@ -565,6 +619,7 @@ int __VISIBLE parisc_iodc_ENTRY_IO(unsigned int *arg FUNC_MANY_ARGS)
             return PDC_OK;
         case ENTRY_IO_CIN: /* console input, with 5 seconds timeout */
             c = (char*)ARG6;
+            /* FIXME: Add loop to wait for up to 5 seconds for input */
             if (HPA_is_serial_device(hpa))
                 result[0] = parisc_serial_in(c, ARG7);
             else if (HPA_is_keyboard_device(hpa))
@@ -822,33 +877,62 @@ static int pdc_pim(unsigned int *arg)
 {
     unsigned long option = ARG1;
     unsigned long *result = (unsigned long *)ARG2;
+    unsigned long hpa;
+    int i;
+    unsigned int count, default_size;
+
+    if (is_64bit())
+	default_size = sizeof(struct pdc_toc_pim_20);
+    else
+	default_size = sizeof(struct pdc_toc_pim_11);
 
     switch (option) {
         case PDC_PIM_HPMC:
             break;
         case PDC_PIM_RETURN_SIZE:
-            *result = sizeof(struct pdc_hpmc_pim_11); // FIXME 64bit!
+            *result = default_size;
             // B160 returns only "2". Why?
             return PDC_OK;
         case PDC_PIM_LPMC:
         case PDC_PIM_SOFT_BOOT:
-            return PDC_BAD_OPTION;
-        case PDC_PIM_TOC:
             break;
+        case PDC_PIM_TOC:
+            hpa = mfctl(CPU_HPA_CR_REG); /* get CPU HPA from cr7 */
+            i = index_of_CPU_HPA(hpa);
+            if (i < 0 || i >= HPPA_MAX_CPUS) {
+                *result = PDC_INVALID_ARG;
+                return PDC_OK;
+            }
+            if (( is_64bit() && pim_toc_data[i].pim20.cpu_state.val == 0) ||
+                (!is_64bit() && pim_toc_data[i].pim11.cpu_state.val == 0)) {
+                /* PIM contents invalid */
+                *result = PDC_NE_MOD;
+                return PDC_OK;
+            }
+            count = (default_size < ARG4) ? default_size : ARG4;
+            memcpy((void *)ARG3, &pim_toc_data[i], count);
+            *result = count;
+            /* clear PIM contents */
+            if (is_64bit())
+                pim_toc_data[i].pim20.cpu_state.val = 0;
+            else
+                pim_toc_data[i].pim11.cpu_state.val = 0;
+            return PDC_OK;
     }
-    return PDC_BAD_PROC;
+    return PDC_BAD_OPTION;
 }
+
+static struct pdc_model model = { PARISC_PDC_MODEL };
 
 static int pdc_model(unsigned int *arg)
 {
-    static unsigned long model[] = { PARISC_PDC_MODEL };
     static const char model_str[] = PARISC_MODEL;
     unsigned long option = ARG1;
     unsigned long *result = (unsigned long *)ARG2;
 
     switch (option) {
         case PDC_MODEL_INFO:
-            memcpy(result, model, sizeof(model));
+            memcpy(result, &model, sizeof(model));
             return PDC_OK;
         case PDC_MODEL_VERSIONS:
             switch (ARG3) {
@@ -866,7 +950,7 @@ static int pdc_model(unsigned int *arg)
             return PDC_OK;
         case PDC_MODEL_ENSPEC:
         case PDC_MODEL_DISPEC:
-            if (ARG3 != model[7])
+            if (ARG3 != model.pot_key)
                 return -20;
             return PDC_OK;
         case PDC_MODEL_CPU_ID:
@@ -952,12 +1036,14 @@ static int pdc_coproc(unsigned int *arg)
 {
     unsigned long option = ARG1;
     unsigned long *result = (unsigned long *)ARG2;
-    unsigned char mask;
+    unsigned long mask;
     switch (option) {
         case PDC_COPROC_CFG:
             memset(result, 0, 32 * sizeof(unsigned long));
-            mask = ~((1 << (8-smp_cpus))-1);
-            /* set bit per cpu in ccr_functional and ccr_present: */
+            /* Set one bit per cpu in ccr_functional and ccr_present.
+               Ignore that specification only mentions 8 bits for cr10
+               and set all FPUs functional */
+            mask = -1UL;
             mtctl(mask, 10); /* initialize cr10 */
             result[0] = mask;
             result[1] = mask;
@@ -1146,6 +1232,11 @@ static int pdc_proc(unsigned int *arg)
         case 1:
             if (ARG2 != 0)
                 return PDC_BAD_PROC;
+            if (pdc_debug & DEBUG_PDC)
+                printf("\nSeaBIOS: CPU%d enters rendenzvous loop.\n",
+                        index_of_CPU_HPA(mfctl(CPU_HPA_CR_REG)));
+            /* wait until all outstanding timer irqs arrived. */
+            msleep(500);
             /* let the current CPU sleep until rendenzvous. */
             enter_smp_idle_loop();
             return PDC_OK;
@@ -1558,6 +1649,91 @@ int __VISIBLE parisc_pdc_entry(unsigned int *arg FUNC_MANY_ARGS)
     return PDC_BAD_PROC;
 }
 
+/********************************************************
+ * TOC HANDLER
+ ********************************************************/
+
+unsigned long __VISIBLE toc_handler(struct pdc_toc_pim_11 *pim)
+{
+        unsigned long hpa, os_toc_handler;
+        int cpu, y;
+        unsigned long *p;
+        struct pdc_toc_pim_11 *pim11;
+        struct pdc_toc_pim_20 *pim20;
+        struct pim_cpu_state_cf state = { .iqv=1, .iqf=1, .ipv=1, .grv=1, .crv=1, .srv=1, .trv=1, .td=1 };
+
+        hpa = mfctl(CPU_HPA_CR_REG); /* get CPU HPA from cr7 */
+        cpu = index_of_CPU_HPA(hpa);
+
+        pim11 = &pim_toc_data[cpu].pim11;
+        pim20 = &pim_toc_data[cpu].pim20;
+        if (is_64bit())
+                pim20->cpu_state = state;
+        else
+                pim11->cpu_state = state;
+
+        /* check that we use the same PIM entries as assembly code */
+        BUG_ON(pim11 != pim);
+
+        printf("\n");
+        printf("##### CPU %d HPA %lx: SeaBIOS TOC register dump #####\n", cpu, hpa);
+        for (y = 0; y < 32; y += 8) {
+                if (is_64bit())
+                        p = (unsigned long *)&pim20->gr[y];
+                else
+                        p = (unsigned long *)&pim11->gr[y];
+                printf("GR%02d: %lx %lx %lx %lx",  y, p[0], p[1], p[2], p[3]);
+                printf(       " %lx %lx %lx %lx\n",   p[4], p[5], p[6], p[7]);
+        }
+        printf("\n");
+        for (y = 0; y < 32; y += 8) {
+                if (is_64bit())
+                        p = (unsigned long *)&pim20->cr[y];
+                else
+                        p = (unsigned long *)&pim11->cr[y];
+                printf("CR%02d: %lx %lx %lx %lx", y, p[0], p[1], p[2], p[3]);
+                printf(       " %lx %lx %lx %lx\n",  p[4], p[5], p[6], p[7]);
+        }
+        printf("\n");
+        if (is_64bit())
+                p = (unsigned long *)&pim20->sr[0];
+        else
+                p = (unsigned long *)&pim11->sr[0];
+        printf("SR0: %lx %lx %lx %lx %lx %lx %lx %lx\n", p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+        if (is_64bit()) {
+                printf("IAQ: %lx.%lx %lx.%lx\n",
+                        (unsigned long)pim20->cr[17], (unsigned long)pim20->cr[18],
+                        (unsigned long)pim20->iasq_back, (unsigned long)pim20->iaoq_back);
+                printf("RP(r2): %lx\n", (unsigned long)pim20->gr[2]);
+        } else {
+                printf("IAQ: %x.%x %x.%x\n", pim11->cr[17], pim11->cr[18],
+                        pim11->iasq_back, pim11->iaoq_back);
+                printf("RP(r2): %x\n", pim11->gr[2]);
+        }
+
+        os_toc_handler = PAGE0->vec_toc;
+        if (is_64bit())
+                os_toc_handler |= ((unsigned long long) PAGE0->vec_toc_hi << 32);
+
+        /* release lock - let other CPUs join now. */
+        toc_lock = 1;
+
+        num_online_cpus--;
+
+        if (os_toc_handler) {
+                /* will call OS handler, after all CPUs are here */
+                while (num_online_cpus)
+                        ; /* wait */
+                return os_toc_handler; /* let asm code call os handler */
+        }
+
+        /* No OS handler installed. Wait for all CPUs, then last CPU will reset. */
+        if (num_online_cpus)
+                while (1) /* this CPU will wait endless. */;
+
+        printf("SeaBIOS: Resetting machine after TOC.\n");
+        reset();
+}
 
 /********************************************************
  * BOOT MENU
@@ -1567,6 +1743,147 @@ extern void find_initial_parisc_boot_drives(
         struct drive_s **harddisc,
         struct drive_s **cdrom);
 extern struct drive_s *select_parisc_boot_drive(char bootdrive);
+extern int parisc_get_scsi_target(struct drive_s **boot_drive, int target);
+
+static void print_menu(void)
+{
+    printf("\n------- Main Menu -------------------------------------------------------------\n\n"
+            "        Command                         Description\n"
+            "        -------                         -----------\n"
+            "        BOot [PRI|ALT|<path>]           Boot from specified path\n"
+#if 0
+            "        PAth [PRI|ALT|CON|KEY] [<path>] Display or modify a path\n"
+            "        SEArch [DIsplay|IPL] [<path>]   Search for boot devices\n\n"
+            "        COnfiguration [<command>]       Access Configuration menu/commands\n"
+            "        INformation [<command>]         Access Information menu/commands\n"
+            "        SERvice [<command>]             Access Service menu/commands\n\n"
+            "        DIsplay                         Redisplay the current menu\n"
+#endif
+            "        HElp [<menu>|<command>]         Display help for menu or command\n"
+            "        RESET                           Restart the system\n"
+            "-------\n");
+}
+
+/* Copyright (C) 1999 Jason L. Eckhardt (jle@cygnus.com) - taken from palo */
+static char *enter_text(char *txt, int maxchars)
+{
+    char c;
+    int pos;
+    for (pos = 0; txt[pos]; pos++);	/* calculate no. of chars */
+    if (pos > maxchars)	/* if input too long, shorten it */
+    {
+        pos = maxchars;
+        txt[pos] = '\0';
+    }
+    printf(txt);		/* print initial text */
+    do
+    {
+        c = parisc_getchar();
+        if (c == 13)
+        {			/* CR -> finish! */
+            if (pos <= maxchars)
+                txt[pos] = 0;
+            else
+                txt[maxchars] = '\0';
+            return txt;
+        };
+        if (c == '\b' || c == 127 )
+        {			/* BS -> delete prev. char */
+            if (pos)
+            {
+                pos--;
+                c='\b';
+                parisc_putchar(c);
+                parisc_putchar(' ');
+                parisc_putchar(c);
+            }
+        } else if (c == 21)
+        {			/* CTRL-U */
+            while (pos)
+            {
+                pos--;
+                c='\b';
+                parisc_putchar(c);
+                parisc_putchar(' ');
+                parisc_putchar(c);
+            }
+            txt[0] = 0;
+        } else if ((pos < maxchars) && c >= ' ')
+        {
+            txt[pos] = c;
+            pos++;
+            parisc_putchar(c);
+        }
+    }
+    while (c != 13);
+    return txt;
+}
+
+static void menu_loop(void)
+{
+    int scsi_boot_target;
+    char input[24];
+    char *c, reply;
+
+    // snprintf(input, sizeof(input), "BOOT FWSCSI.%d.0", boot_drive->target);
+again:
+    print_menu();
+
+again2:
+    input[0] = '\0';
+    printf("Main Menu: Enter command > ");
+    /* ask user for boot menu command */
+    enter_text(input, sizeof(input)-1);
+    parisc_putchar('\n');
+
+    /* convert to uppercase */
+    c = input;
+    while (*c) {
+        if ((*c >= 'a') && (*c <= 'z'))
+            *c += 'A'-'a';
+        c++;
+    }
+
+    if (input[0] == 'R' && input[1] == 'E')     // RESET?
+        reset();
+    if (input[0] == 'H' && input[1] == 'E')     // HELP?
+        goto again;
+    if (input[0] != 'B' || input[1] != 'O') {   // BOOT?
+        printf("Unknown command, please try again.\n\n");
+        goto again2;
+    }
+    // from here on we handle "BOOT PRI/ALT/FWSCSI.x"
+    c = input;
+    while (*c && (*c != ' '))   c++;    // search space
+    // preset with default boot target (this is same as "BOOT PRI"
+    scsi_boot_target = boot_drive->target;
+    if (c[0] == 'A' && c[1] == 'L' && c[2] == 'T')
+        scsi_boot_target = parisc_boot_cdrom->target;
+    while (*c) {
+        if (*c >= '0' && *c <= '9') {
+            scsi_boot_target = *c - '0';
+            break;
+        }
+        c++;
+    }
+
+    if (!parisc_get_scsi_target(&boot_drive, scsi_boot_target)) {
+        printf("No FWSCSI.%d.0 device available for boot. Please try again.\n\n",
+            scsi_boot_target);
+        goto again2;
+    }
+
+    printf("Interact with IPL (Y, N, or Cancel)?> ");
+    input[0] = '\0';
+    enter_text(input, 1);
+    parisc_putchar('\n');
+    reply = input[0];
+    if (reply == 'C' || reply == 'c')
+        goto again2;
+    // allow Z as Y. It's the key used on german keyboards.
+    if (reply == 'Y' || reply == 'y' || reply == 'Z' || reply == 'z')
+        interact_ipl = 1;
+}
 
 static int parisc_boot_menu(unsigned long *iplstart, unsigned long *iplend,
         char bootdrive)
@@ -1581,11 +1898,20 @@ static int parisc_boot_menu(unsigned long *iplstart, unsigned long *iplend,
     };
 
     boot_drive = select_parisc_boot_drive(bootdrive);
+
+    /* enter main menu if booted with "boot menu=on" */
+    if (show_boot_menu)
+        menu_loop();
+    else
+        interact_ipl = 0;
+
     disk_op.drive_fl = boot_drive;
     if (boot_drive == NULL) {
         printf("SeaBIOS: No boot device.\n");
         return 0;
     }
+
+    printf("\nBooting from FWSCSI.%d.0 ...\n", boot_drive->target);
 
     /* seek to beginning of disc/CD */
     disk_op.drive_fl = boot_drive;
@@ -1676,13 +2002,13 @@ static const struct pz_device mem_kbd_sti_boot = {
     .cl_class = CL_KEYBD,
 };
 
-static const struct pz_device mem_cons_boot = {
+static struct pz_device mem_cons_boot = {
     .hpa = PARISC_SERIAL_CONSOLE - 0x800,
     .iodc_io = (unsigned long)&iodc_entry,
     .cl_class = CL_DUPLEX,
 };
 
-static const struct pz_device mem_kbd_boot = {
+static struct pz_device mem_kbd_boot = {
     .hpa = PARISC_SERIAL_CONSOLE - 0x800,
     .iodc_io = (unsigned long)&iodc_entry,
     .cl_class = CL_KEYBD,
@@ -1768,25 +2094,42 @@ void __VISIBLE start_parisc_firmware(void)
 {
     unsigned int i, cpu_hz;
     unsigned long iplstart, iplend;
+    char *str;
 
-    unsigned long interactive = (linux_kernel_entry == 1) ? 1:0;
     char bootdrive = (char)cmdline; // c = hdd, d = CD/DVD
+    show_boot_menu = (linux_kernel_entry == 1);
 
     if (smp_cpus > HPPA_MAX_CPUS)
         smp_cpus = HPPA_MAX_CPUS;
+    num_online_cpus = smp_cpus;
 
     if (ram_size >= FIRMWARE_START)
         ram_size = FIRMWARE_START;
 
+    /* Initialize malloc stack */
+    malloc_preinit();
+
     /* Initialize qemu fw_cfg interface */
     PORT_QEMU_CFG_CTL = fw_cfg_port;
     qemu_cfg_init();
+
+    /* Initialize boot structures. Needs working fw_cfg for bootprio option. */
+    boot_init();
 
     i = romfile_loadint("/etc/firmware-min-version", 0);
     if (i && i > SEABIOS_HPPA_VERSION) {
         printf("\nSeaBIOS firmware is version %d, but version %d is required. "
             "Please update.\n", (int)SEABIOS_HPPA_VERSION, i);
         hlt();
+    }
+    /* Qemu versions which request a SEABIOS_HPPA_VERSION < 6 have the bug that
+     * they use the DINO UART instead of the LASI UART as serial port #0.
+     * Fix it up here and switch the serial console code to use PORT_SERIAL2
+     * for such Qemu versions, so that we can still use this higher SeaBIOS
+     * version with older Qemus. */
+    if (i < 6) {
+        mem_cons_boot.hpa = PORT_SERIAL2 - 0x800;
+        mem_kbd_boot.hpa = PORT_SERIAL2 - 0x800;
     }
 
     tlb_entries = romfile_loadint("/etc/cpu/tlb_entries", 256);
@@ -1798,7 +2141,23 @@ void __VISIBLE start_parisc_firmware(void)
     powersw_ptr = (int *) (unsigned long)
         romfile_loadint("/etc/power-button-addr", (unsigned long)&powersw_nop);
 
+    /* use -fw_cfg opt/pdc_debug,string=255 to enable all firmware debug infos */
     pdc_debug = romfile_loadstring_to_int("opt/pdc_debug", 0);
+
+    pdc_console = CONSOLE_DEFAULT;
+    str = romfile_loadfile("opt/console", NULL);
+    if (str) {
+	if (strcmp(str, "serial") == 0)
+		pdc_console = CONSOLE_SERIAL;
+	if (strcmp(str, "graphics") == 0)
+		pdc_console = CONSOLE_GRAPHICS;
+    }
+
+    /* 0,1 = default 8x16 font, 2 = 16x32 font */
+    sti_font = romfile_loadstring_to_int("opt/font", 0);
+
+    model.sw_id = romfile_loadstring_to_int("opt/hostid", model.sw_id);
+    dprintf(0, "fw_cfg: machine hostid %lu\n", model.sw_id);
 
     /* Initialize PAGE0 */
     memset((void*)PAGE0, 0, sizeof(*PAGE0));
@@ -1818,6 +2177,7 @@ void __VISIBLE start_parisc_firmware(void)
 
     BUG_ON(PAGE0->mem_free <= MEM_PDC_ENTRY);
     BUG_ON(smp_cpus < 1 || smp_cpus > HPPA_MAX_CPUS);
+    BUG_ON(sizeof(pim_toc_data[0]) != PIM_STORAGE_SIZE);
 
     /* Put QEMU/SeaBIOS marker in PAGE0.
      * The Linux kernel will search for it. */
@@ -1830,18 +2190,29 @@ void __VISIBLE start_parisc_firmware(void)
     PAGE0->imm_spa_size = ram_size;
     PAGE0->imm_max_mem = ram_size;
 
-    // Initialize boot paths (disc, display & keyboard)
+    /* initialize graphics (if available) */
     if (artist_present()) {
         sti_rom_init();
         sti_console_init(&sti_proc_rom);
-        ps2port_setup();
-        prepare_boot_path(&(PAGE0->mem_cons), &mem_cons_sti_boot, 0x60);
-        prepare_boot_path(&(PAGE0->mem_kbd),  &mem_kbd_sti_boot, 0xa0);
         PAGE0->proc_sti = (u32)&sti_proc_rom;
+        ps2port_setup();
     } else {
         remove_from_keep_list(LASI_GFX_HPA);
         remove_from_keep_list(LASI_PS2KBD_HPA);
         remove_from_keep_list(LASI_PS2MOU_HPA);
+    }
+
+    // Initialize boot paths (graphics & keyboard)
+    if (pdc_console == CONSOLE_DEFAULT) {
+	if (artist_present())
+            pdc_console = CONSOLE_GRAPHICS;
+	else
+            pdc_console = CONSOLE_SERIAL;
+    }
+    if (pdc_console == CONSOLE_GRAPHICS) {
+        prepare_boot_path(&(PAGE0->mem_cons), &mem_cons_sti_boot, 0x60);
+        prepare_boot_path(&(PAGE0->mem_kbd),  &mem_kbd_sti_boot, 0xa0);
+    } else {
         prepare_boot_path(&(PAGE0->mem_cons), &mem_cons_boot, 0x60);
         prepare_boot_path(&(PAGE0->mem_kbd),  &mem_kbd_boot, 0xa0);
     }
@@ -1858,8 +2229,6 @@ void __VISIBLE start_parisc_firmware(void)
     init_stable_storage();
 
     chassis_code = 0;
-
-    malloc_preinit();
 
     // set Qemu serial debug port
     DebugOutputPort = PARISC_SERIAL_CONSOLE;
@@ -1894,10 +2263,9 @@ void __VISIBLE start_parisc_firmware(void)
     printf("SeaBIOS PA-RISC Firmware Version %d\n"
             "\n"
             "Duplex Console IO Dependent Code (IODC) revision 1\n"
-            "\n"
-            "Memory Test/Initialization Completed\n\n", SEABIOS_HPPA_VERSION);
+            "\n", SEABIOS_HPPA_VERSION);
     printf("------------------------------------------------------------------------------\n"
-            "  (c) Copyright 2017-2020 Helge Deller <deller@gmx.de> and SeaBIOS developers.\n"
+            "  (c) Copyright 2017-2022 Helge Deller <deller@gmx.de> and SeaBIOS developers.\n"
             "------------------------------------------------------------------------------\n\n");
     printf( "  Processor   Speed            State           Coprocessor State  Cache Size\n"
             "  ---------  --------   ---------------------  -----------------  ----------\n");
@@ -1916,11 +2284,11 @@ void __VISIBLE start_parisc_firmware(void)
     printf("  Primary boot path:    FWSCSI.%d.%d\n"
            "  Alternate boot path:  FWSCSI.%d.%d\n"
            "  Console path:         %s\n"
-           "  Keyboard path:        PS2\n\n",
+           "  Keyboard path:        %s\n\n",
             parisc_boot_harddisc->target, parisc_boot_harddisc->lun,
             parisc_boot_cdrom->target, parisc_boot_cdrom->lun,
-            HPA_is_graphics_device(PAGE0->mem_cons.hpa) ? "GRAPHICS(1)" :
-            ((PARISC_SERIAL_CONSOLE == PORT_SERIAL1) ? "SERIAL_1.9600.8.none" : "SERIAL_2.9600.8.none"));
+            hpa_device_name(PAGE0->mem_cons.hpa, 1),
+            hpa_device_name(PAGE0->mem_kbd.hpa, 0));
 
     if (bootdrive == 'c')
         boot_drive = parisc_boot_harddisc;
@@ -1962,23 +2330,6 @@ void __VISIBLE start_parisc_firmware(void)
         hlt(); /* this ends the emulator */
     }
 
-#if 0
-    printf("------- Main Menu -------------------------------------------------------------\n\n"
-            "        Command                         Description\n"
-            "        -------                         -----------\n"
-            "        BOot [PRI|ALT|<path>]           Boot from specified path\n"
-            "        PAth [PRI|ALT|CON|KEY] [<path>] Display or modify a path\n"
-            "        SEArch [DIsplay|IPL] [<path>]   Search for boot devices\n\n"
-            "        COnfiguration [<command>]       Access Configuration menu/commands\n"
-            "        INformation [<command>]         Access Information menu/commands\n"
-            "        SERvice [<command>]             Access Service menu/commands\n\n"
-            "        DIsplay                         Redisplay the current menu\n"
-            "        HElp [<menu>|<command>]         Display help for menu or command\n"
-            "        RESET                           Restart the system\n"
-            "-------\n"
-            "Main Menu: Enter command > ");
-#endif
-
     /* check for bootable drives, and load and start IPL bootloader if possible */
     if (parisc_boot_menu(&iplstart, &iplend, bootdrive)) {
         void (*start_ipl)(long interactive, long iplend);
@@ -1990,7 +2341,7 @@ void __VISIBLE start_parisc_firmware(void)
                 "Boot IO Dependent Code (IODC) revision 153\n\n"
                 "%s Booted.\n", PAGE0->imm_soft_boot ? "SOFT":"HARD");
         start_ipl = (void *) iplstart;
-        start_ipl(interactive, iplend);
+        start_ipl(interact_ipl, iplend);
     }
 
     hlt(); /* this ends the emulator */

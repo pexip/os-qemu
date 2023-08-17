@@ -31,6 +31,7 @@ typedef int64_t  Elf64_Sxword;
 #define PT_LOPROC  0x70000000
 #define PT_HIPROC  0x7fffffff
 
+#define PT_GNU_STACK      (PT_LOOS + 0x474e551)
 #define PT_GNU_PROPERTY   (PT_LOOS + 0x474e553)
 
 #define PT_MIPS_REGINFO   0x70000000
@@ -174,13 +175,15 @@ typedef struct mips_elf_abiflags_v0 {
 
 #define EM_OPENRISC     92        /* OpenCores OpenRISC */
 
-#define EM_UNICORE32    110     /* UniCore32 */
+#define EM_HEXAGON      164     /* Qualcomm Hexagon */
 
 #define EM_RX           173     /* Renesas RX family */
 
 #define EM_RISCV        243     /* RISC-V */
 
 #define EM_NANOMIPS     249     /* Wave Computing nanoMIPS */
+
+#define EM_LOONGARCH    258     /* LoongArch */
 
 /*
  * This is an interim value that we will use until the committee comes
@@ -204,11 +207,6 @@ typedef struct mips_elf_abiflags_v0 {
 #define EM_XTENSA   94      /* Tensilica Xtensa */
 
 #define EM_AARCH64  183
-
-#define EM_TILEGX   191 /* TILE-Gx */
-
-#define EM_MOXIE           223     /* Moxie processor family */
-#define EM_MOXIE_OLD       0xFEED
 
 #define EF_AVR_MACH     0x7F       /* Mask for AVR e_flags to get core type */
 
@@ -610,6 +608,13 @@ typedef struct {
 #define HWCAP_S390_HIGH_GPRS    512
 #define HWCAP_S390_TE           1024
 #define HWCAP_S390_VXRS         2048
+#define HWCAP_S390_VXRS_BCD     4096
+#define HWCAP_S390_VXRS_EXT     8192
+#define HWCAP_S390_GS           16384
+#define HWCAP_S390_VXRS_EXT2    32768
+#define HWCAP_S390_VXRS_PDE     65536
+#define HWCAP_S390_SORT         131072
+#define HWCAP_S390_DFLT         262144
 
 /* M68K specific definitions. */
 /* We use the top 24 bits to encode information about the
@@ -1645,6 +1650,8 @@ typedef struct elf64_shdr {
 #define NT_TASKSTRUCT	4
 #define NT_AUXV		6
 #define NT_PRXFPREG     0x46e62b7f      /* copied from gdb5.1/include/elf/common.h */
+#define NT_S390_PV_CPU_DATA	0x30e	/* s390 protvirt cpu dump data */
+#define NT_S390_RI_CB	0x30d		/* s390 runtime instrumentation */
 #define NT_S390_GS_CB   0x30b           /* s390 guarded storage registers */
 #define NT_S390_VXRS_HIGH 0x30a         /* s390 vector registers 16-31 */
 #define NT_S390_VXRS_LOW  0x309         /* s390 vector registers 0-15 (lower half) */

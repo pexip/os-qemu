@@ -56,6 +56,7 @@ REG32(IDR2,                0x8)
 REG32(IDR3,                0xc)
      FIELD(IDR3, HAD,         2, 1);
      FIELD(IDR3, RIL,        10, 1);
+     FIELD(IDR3, BBML,       11, 2);
 REG32(IDR4,                0x10)
 REG32(IDR5,                0x14)
      FIELD(IDR5, OAS,         0, 3);
@@ -387,7 +388,6 @@ typedef struct SMMUEventInfo {
     SMMUEventType type;
     uint32_t sid;
     bool recorded;
-    bool record_trans_faults;
     bool inval_ste_allowed;
     union {
         struct {
@@ -570,7 +570,7 @@ static inline int pa_range(STE *ste)
 
 /* CD fields */
 
-#define CD_VALID(x)   extract32((x)->word[0], 30, 1)
+#define CD_VALID(x)   extract32((x)->word[0], 31, 1)
 #define CD_ASID(x)    extract32((x)->word[1], 16, 16)
 #define CD_TTB(x, sel)                                      \
     ({                                                      \
@@ -594,13 +594,6 @@ static inline int pa_range(STE *ste)
 #define CD_R(x)          extract32((x)->word[1], 13, 1)
 #define CD_A(x)          extract32((x)->word[1], 14, 1)
 #define CD_AARCH64(x)    extract32((x)->word[1], 9 , 1)
-
-#define CDM_VALID(x)    ((x)->word[0] & 0x1)
-
-static inline int is_cd_valid(SMMUv3State *s, STE *ste, CD *cd)
-{
-    return CD_VALID(cd);
-}
 
 /**
  * tg2granule - Decodes the CD translation granule size field according
@@ -633,6 +626,6 @@ static inline uint64_t l1std_l2ptr(STEDesc *desc)
     return hi << 32 | lo;
 }
 
-#define L1STD_SPAN(stm) (extract32((stm)->word[0], 0, 4))
+#define L1STD_SPAN(stm) (extract32((stm)->word[0], 0, 5))
 
 #endif

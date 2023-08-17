@@ -52,6 +52,7 @@ cryptodev_vhost_init(
 {
     int r;
     CryptoDevBackendVhost *crypto;
+    Error *local_err = NULL;
 
     crypto = g_new(CryptoDevBackendVhost, 1);
     crypto->dev.max_queues = 1;
@@ -66,8 +67,10 @@ cryptodev_vhost_init(
     /* vhost-user needs vq_index to initiate a specific queue pair */
     crypto->dev.vq_index = crypto->cc->queue_index * crypto->dev.nvqs;
 
-    r = vhost_dev_init(&crypto->dev, options->opaque, options->backend_type, 0);
+    r = vhost_dev_init(&crypto->dev, options->opaque, options->backend_type, 0,
+                       &local_err);
     if (r < 0) {
+        error_report_err(local_err);
         goto fail;
     }
 
@@ -91,7 +94,7 @@ cryptodev_vhost_start_one(CryptoDevBackendVhost *crypto,
         goto fail_notifiers;
     }
 
-    r = vhost_dev_start(&crypto->dev, dev);
+    r = vhost_dev_start(&crypto->dev, dev, false);
     if (r < 0) {
         goto fail_start;
     }
@@ -108,7 +111,7 @@ static void
 cryptodev_vhost_stop_one(CryptoDevBackendVhost *crypto,
                                  VirtIODevice *dev)
 {
-    vhost_dev_stop(&crypto->dev, dev);
+    vhost_dev_stop(&crypto->dev, dev, false);
     vhost_dev_disable_notifiers(&crypto->dev, dev);
 }
 

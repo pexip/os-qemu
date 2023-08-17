@@ -23,14 +23,11 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/cutils.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
-#include "exec/exec-all.h"
 #include "sysemu/cpus.h"
-#include "sysemu/qtest.h"
 #include "qemu/main-loop.h"
 #include "qemu/option.h"
 #include "qemu/seqlock.h"
@@ -189,11 +186,12 @@ static const VMStateDescription icount_vmstate_adjust_timers = {
 
 static const VMStateDescription icount_vmstate_shift = {
     .name = "timer/icount/shift",
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .needed = icount_shift_state_needed,
     .fields = (VMStateField[]) {
         VMSTATE_INT16(icount_time_shift, TimersState),
+        VMSTATE_INT64(last_delta, TimersState),
         VMSTATE_END_OF_LIST()
     }
 };

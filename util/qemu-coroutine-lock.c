@@ -39,10 +39,15 @@ void qemu_co_queue_init(CoQueue *queue)
     QSIMPLEQ_INIT(&queue->entries);
 }
 
-void coroutine_fn qemu_co_queue_wait_impl(CoQueue *queue, QemuLockable *lock)
+void coroutine_fn qemu_co_queue_wait_impl(CoQueue *queue, QemuLockable *lock,
+                                          CoQueueWaitFlags flags)
 {
     Coroutine *self = qemu_coroutine_self();
-    QSIMPLEQ_INSERT_TAIL(&queue->entries, self, co_queue_next);
+    if (flags & CO_QUEUE_WAIT_FRONT) {
+        QSIMPLEQ_INSERT_HEAD(&queue->entries, self, co_queue_next);
+    } else {
+        QSIMPLEQ_INSERT_TAIL(&queue->entries, self, co_queue_next);
+    }
 
     if (lock) {
         qemu_lockable_unlock(lock);
@@ -67,34 +72,6 @@ void coroutine_fn qemu_co_queue_wait_impl(CoQueue *queue, QemuLockable *lock)
     }
 }
 
-static bool qemu_co_queue_do_restart(CoQueue *queue, bool single)
-{
-    Coroutine *next;
-
-    if (QSIMPLEQ_EMPTY(&queue->entries)) {
-        return false;
-    }
-
-    while ((next = QSIMPLEQ_FIRST(&queue->entries)) != NULL) {
-        QSIMPLEQ_REMOVE_HEAD(&queue->entries, co_queue_next);
-        aio_co_wake(next);
-        if (single) {
-            break;
-        }
-    }
-    return true;
-}
-
-bool qemu_co_queue_next(CoQueue *queue)
-{
-    return qemu_co_queue_do_restart(queue, true);
-}
-
-void qemu_co_queue_restart_all(CoQueue *queue)
-{
-    qemu_co_queue_do_restart(queue, false);
-}
-
 bool qemu_co_enter_next_impl(CoQueue *queue, QemuLockable *lock)
 {
     Coroutine *next;
@@ -113,6 +90,25 @@ bool qemu_co_enter_next_impl(CoQueue *queue, QemuLockable *lock)
         qemu_lockable_lock(lock);
     }
     return true;
+}
+
+bool coroutine_fn qemu_co_queue_next(CoQueue *queue)
+{
+    /* No unlock/lock needed in coroutine context.  */
+    return qemu_co_enter_next_impl(queue, NULL);
+}
+
+void qemu_co_enter_all_impl(CoQueue *queue, QemuLockable *lock)
+{
+    while (qemu_co_enter_next_impl(queue, lock)) {
+        /* just loop */
+    }
+}
+
+void coroutine_fn qemu_co_queue_restart_all(CoQueue *queue)
+{
+    /* No unlock/lock needed in coroutine context.  */
+    qemu_co_enter_all_impl(queue, NULL);
 }
 
 bool qemu_co_queue_empty(CoQueue *queue)
@@ -144,7 +140,7 @@ typedef struct CoWaitRecord {
     QSLIST_ENTRY(CoWaitRecord) next;
 } CoWaitRecord;
 
-static void push_waiter(CoMutex *mutex, CoWaitRecord *w)
+static void coroutine_fn push_waiter(CoMutex *mutex, CoWaitRecord *w)
 {
     w->co = qemu_coroutine_self();
     QSLIST_INSERT_HEAD_ATOMIC(&mutex->from_push, w, next);
@@ -204,7 +200,6 @@ static void coroutine_fn qemu_co_mutex_lock_slowpath(AioContext *ctx,
     unsigned old_handoff;
 
     trace_qemu_co_mutex_lock_entry(mutex, self);
-    w.co = self;
     push_waiter(mutex, &w);
 
     /* This is the "Responsibility Hand-Off" protocol; a lock() picks from
@@ -328,97 +323,141 @@ void coroutine_fn qemu_co_mutex_unlock(CoMutex *mutex)
     trace_qemu_co_mutex_unlock_return(mutex, self);
 }
 
+struct CoRwTicket {
+    bool read;
+    Coroutine *co;
+    QSIMPLEQ_ENTRY(CoRwTicket) next;
+};
+
 void qemu_co_rwlock_init(CoRwlock *lock)
 {
-    memset(lock, 0, sizeof(*lock));
-    qemu_co_queue_init(&lock->queue);
     qemu_co_mutex_init(&lock->mutex);
+    lock->owners = 0;
+    QSIMPLEQ_INIT(&lock->tickets);
 }
 
-void qemu_co_rwlock_rdlock(CoRwlock *lock)
+/* Releases the internal CoMutex.  */
+static void coroutine_fn qemu_co_rwlock_maybe_wake_one(CoRwlock *lock)
+{
+    CoRwTicket *tkt = QSIMPLEQ_FIRST(&lock->tickets);
+    Coroutine *co = NULL;
+
+    /*
+     * Setting lock->owners here prevents rdlock and wrlock from
+     * sneaking in between unlock and wake.
+     */
+
+    if (tkt) {
+        if (tkt->read) {
+            if (lock->owners >= 0) {
+                lock->owners++;
+                co = tkt->co;
+            }
+        } else {
+            if (lock->owners == 0) {
+                lock->owners = -1;
+                co = tkt->co;
+            }
+        }
+    }
+
+    if (co) {
+        QSIMPLEQ_REMOVE_HEAD(&lock->tickets, next);
+        qemu_co_mutex_unlock(&lock->mutex);
+        aio_co_wake(co);
+    } else {
+        qemu_co_mutex_unlock(&lock->mutex);
+    }
+}
+
+void coroutine_fn qemu_co_rwlock_rdlock(CoRwlock *lock)
 {
     Coroutine *self = qemu_coroutine_self();
 
     qemu_co_mutex_lock(&lock->mutex);
     /* For fairness, wait if a writer is in line.  */
-    while (lock->pending_writer) {
-        qemu_co_queue_wait(&lock->queue, &lock->mutex);
-    }
-    lock->reader++;
-    qemu_co_mutex_unlock(&lock->mutex);
+    if (lock->owners == 0 || (lock->owners > 0 && QSIMPLEQ_EMPTY(&lock->tickets))) {
+        lock->owners++;
+        qemu_co_mutex_unlock(&lock->mutex);
+    } else {
+        CoRwTicket my_ticket = { true, self };
 
-    /* The rest of the read-side critical section is run without the mutex.  */
+        QSIMPLEQ_INSERT_TAIL(&lock->tickets, &my_ticket, next);
+        qemu_co_mutex_unlock(&lock->mutex);
+        qemu_coroutine_yield();
+        assert(lock->owners >= 1);
+
+        /* Possibly wake another reader, which will wake the next in line.  */
+        qemu_co_mutex_lock(&lock->mutex);
+        qemu_co_rwlock_maybe_wake_one(lock);
+    }
+
     self->locks_held++;
 }
 
-void qemu_co_rwlock_unlock(CoRwlock *lock)
+void coroutine_fn qemu_co_rwlock_unlock(CoRwlock *lock)
 {
     Coroutine *self = qemu_coroutine_self();
 
     assert(qemu_in_coroutine());
-    if (!lock->reader) {
-        /* The critical section started in qemu_co_rwlock_wrlock.  */
-        qemu_co_queue_restart_all(&lock->queue);
-    } else {
-        self->locks_held--;
+    self->locks_held--;
 
-        qemu_co_mutex_lock(&lock->mutex);
-        lock->reader--;
-        assert(lock->reader >= 0);
-        /* Wakeup only one waiting writer */
-        if (!lock->reader) {
-            qemu_co_queue_next(&lock->queue);
-        }
+    qemu_co_mutex_lock(&lock->mutex);
+    if (lock->owners > 0) {
+        lock->owners--;
+    } else {
+        assert(lock->owners == -1);
+        lock->owners = 0;
     }
-    qemu_co_mutex_unlock(&lock->mutex);
+
+    qemu_co_rwlock_maybe_wake_one(lock);
 }
 
-void qemu_co_rwlock_downgrade(CoRwlock *lock)
+void coroutine_fn qemu_co_rwlock_downgrade(CoRwlock *lock)
+{
+    qemu_co_mutex_lock(&lock->mutex);
+    assert(lock->owners == -1);
+    lock->owners = 1;
+
+    /* Possibly wake another reader, which will wake the next in line.  */
+    qemu_co_rwlock_maybe_wake_one(lock);
+}
+
+void coroutine_fn qemu_co_rwlock_wrlock(CoRwlock *lock)
 {
     Coroutine *self = qemu_coroutine_self();
 
-    /* lock->mutex critical section started in qemu_co_rwlock_wrlock or
-     * qemu_co_rwlock_upgrade.
-     */
-    assert(lock->reader == 0);
-    lock->reader++;
-    qemu_co_mutex_unlock(&lock->mutex);
+    qemu_co_mutex_lock(&lock->mutex);
+    if (lock->owners == 0) {
+        lock->owners = -1;
+        qemu_co_mutex_unlock(&lock->mutex);
+    } else {
+        CoRwTicket my_ticket = { false, qemu_coroutine_self() };
 
-    /* The rest of the read-side critical section is run without the mutex.  */
+        QSIMPLEQ_INSERT_TAIL(&lock->tickets, &my_ticket, next);
+        qemu_co_mutex_unlock(&lock->mutex);
+        qemu_coroutine_yield();
+        assert(lock->owners == -1);
+    }
+
     self->locks_held++;
 }
 
-void qemu_co_rwlock_wrlock(CoRwlock *lock)
+void coroutine_fn qemu_co_rwlock_upgrade(CoRwlock *lock)
 {
     qemu_co_mutex_lock(&lock->mutex);
-    lock->pending_writer++;
-    while (lock->reader) {
-        qemu_co_queue_wait(&lock->queue, &lock->mutex);
+    assert(lock->owners > 0);
+    /* For fairness, wait if a writer is in line.  */
+    if (lock->owners == 1 && QSIMPLEQ_EMPTY(&lock->tickets)) {
+        lock->owners = -1;
+        qemu_co_mutex_unlock(&lock->mutex);
+    } else {
+        CoRwTicket my_ticket = { false, qemu_coroutine_self() };
+
+        lock->owners--;
+        QSIMPLEQ_INSERT_TAIL(&lock->tickets, &my_ticket, next);
+        qemu_co_rwlock_maybe_wake_one(lock);
+        qemu_coroutine_yield();
+        assert(lock->owners == -1);
     }
-    lock->pending_writer--;
-
-    /* The rest of the write-side critical section is run with
-     * the mutex taken, so that lock->reader remains zero.
-     * There is no need to update self->locks_held.
-     */
-}
-
-void qemu_co_rwlock_upgrade(CoRwlock *lock)
-{
-    Coroutine *self = qemu_coroutine_self();
-
-    qemu_co_mutex_lock(&lock->mutex);
-    assert(lock->reader > 0);
-    lock->reader--;
-    lock->pending_writer++;
-    while (lock->reader) {
-        qemu_co_queue_wait(&lock->queue, &lock->mutex);
-    }
-    lock->pending_writer--;
-
-    /* The rest of the write-side critical section is run with
-     * the mutex taken, similar to qemu_co_rwlock_wrlock.  Do
-     * not account for the lock twice in self->locks_held.
-     */
-    self->locks_held--;
 }

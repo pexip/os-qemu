@@ -28,6 +28,12 @@ int qemu_mutex_trylock_impl(QemuMutex *mutex, const char *file, const int line);
 void qemu_mutex_lock_impl(QemuMutex *mutex, const char *file, const int line);
 void qemu_mutex_unlock_impl(QemuMutex *mutex, const char *file, const int line);
 
+void qemu_rec_mutex_init(QemuRecMutex *mutex);
+void qemu_rec_mutex_destroy(QemuRecMutex *mutex);
+void qemu_rec_mutex_lock_impl(QemuRecMutex *mutex, const char *file, int line);
+int qemu_rec_mutex_trylock_impl(QemuRecMutex *mutex, const char *file, int line);
+void qemu_rec_mutex_unlock_impl(QemuRecMutex *mutex, const char *file, int line);
+
 typedef void (*QemuMutexLockFunc)(QemuMutex *m, const char *f, int l);
 typedef int (*QemuMutexTrylockFunc)(QemuMutex *m, const char *f, int l);
 typedef void (*QemuRecMutexLockFunc)(QemuRecMutex *m, const char *f, int l);
@@ -104,6 +110,9 @@ extern QemuCondTimedWaitFunc qemu_cond_timedwait_func;
 #define qemu_mutex_unlock(mutex) \
         qemu_mutex_unlock_impl(mutex, __FILE__, __LINE__)
 
+#define qemu_rec_mutex_unlock(mutex) \
+        qemu_rec_mutex_unlock_impl(mutex, __FILE__, __LINE__)
+
 static inline void (qemu_mutex_lock)(QemuMutex *mutex)
 {
     qemu_mutex_lock(mutex);
@@ -129,8 +138,10 @@ static inline int (qemu_rec_mutex_trylock)(QemuRecMutex *mutex)
     return qemu_rec_mutex_trylock(mutex);
 }
 
-/* Prototypes for other functions are in thread-posix.h/thread-win32.h.  */
-void qemu_rec_mutex_init(QemuRecMutex *mutex);
+static inline void (qemu_rec_mutex_unlock)(QemuRecMutex *mutex)
+{
+    qemu_rec_mutex_unlock(mutex);
+}
 
 void qemu_cond_init(QemuCond *cond);
 void qemu_cond_destroy(QemuCond *cond);
@@ -174,10 +185,14 @@ void qemu_event_destroy(QemuEvent *ev);
 void qemu_thread_create(QemuThread *thread, const char *name,
                         void *(*start_routine)(void *),
                         void *arg, int mode);
+int qemu_thread_set_affinity(QemuThread *thread, unsigned long *host_cpus,
+                             unsigned long nbits);
+int qemu_thread_get_affinity(QemuThread *thread, unsigned long **host_cpus,
+                             unsigned long *nbits);
 void *qemu_thread_join(QemuThread *thread);
 void qemu_thread_get_self(QemuThread *thread);
 bool qemu_thread_is_self(QemuThread *thread);
-void qemu_thread_exit(void *retval) QEMU_NORETURN;
+G_NORETURN void qemu_thread_exit(void *retval);
 void qemu_thread_naming(bool enable);
 
 struct Notifier;
@@ -216,7 +231,7 @@ struct QemuSpin {
 
 static inline void qemu_spin_init(QemuSpin *spin)
 {
-    __sync_lock_release(&spin->value);
+    qatomic_set(&spin->value, 0);
 #ifdef CONFIG_TSAN
     __tsan_mutex_create(spin, __tsan_mutex_not_static);
 #endif
@@ -235,7 +250,7 @@ static inline void qemu_spin_lock(QemuSpin *spin)
 #ifdef CONFIG_TSAN
     __tsan_mutex_pre_lock(spin, 0);
 #endif
-    while (unlikely(__sync_lock_test_and_set(&spin->value, true))) {
+    while (unlikely(qatomic_xchg(&spin->value, 1))) {
         while (qatomic_read(&spin->value)) {
             cpu_relax();
         }
@@ -250,7 +265,7 @@ static inline bool qemu_spin_trylock(QemuSpin *spin)
 #ifdef CONFIG_TSAN
     __tsan_mutex_pre_lock(spin, __tsan_mutex_try_lock);
 #endif
-    bool busy = __sync_lock_test_and_set(&spin->value, true);
+    bool busy = qatomic_xchg(&spin->value, true);
 #ifdef CONFIG_TSAN
     unsigned flags = __tsan_mutex_try_lock;
     flags |= busy ? __tsan_mutex_try_lock_failed : 0;
@@ -269,7 +284,7 @@ static inline void qemu_spin_unlock(QemuSpin *spin)
 #ifdef CONFIG_TSAN
     __tsan_mutex_pre_unlock(spin, 0);
 #endif
-    __sync_lock_release(&spin->value);
+    qatomic_store_release(&spin->value, 0);
 #ifdef CONFIG_TSAN
     __tsan_mutex_post_unlock(spin, 0);
 #endif

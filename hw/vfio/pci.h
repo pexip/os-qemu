@@ -19,6 +19,7 @@
 #include "qemu/queue.h"
 #include "qemu/timer.h"
 #include "qom/object.h"
+#include "sysemu/kvm.h"
 
 #define PCI_ANY_ID (~0)
 
@@ -171,6 +172,7 @@ struct VFIOPCIDevice {
     bool no_kvm_ioeventfd;
     bool no_vfio_ioeventfd;
     bool enable_ramfb;
+    bool defer_kvm_irq_routing;
     VFIODisplay *dpy;
     Notifier irqchip_change_notifier;
 };
@@ -197,7 +199,7 @@ void vfio_pci_write_config(PCIDevice *pdev,
 uint64_t vfio_vga_read(void *opaque, hwaddr addr, unsigned size);
 void vfio_vga_write(void *opaque, hwaddr addr, uint64_t data, unsigned size);
 
-bool vfio_blacklist_opt_rom(VFIOPCIDevice *vdev);
+bool vfio_opt_rom_in_denylist(VFIOPCIDevice *vdev);
 void vfio_vga_quirk_setup(VFIOPCIDevice *vdev);
 void vfio_vga_quirk_exit(VFIOPCIDevice *vdev);
 void vfio_vga_quirk_finalize(VFIOPCIDevice *vdev);

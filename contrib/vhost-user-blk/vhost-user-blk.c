@@ -17,8 +17,7 @@
 
 #include "qemu/osdep.h"
 #include "standard-headers/linux/virtio_blk.h"
-#include "contrib/libvhost-user/libvhost-user-glib.h"
-#include "contrib/libvhost-user/libvhost-user.h"
+#include "libvhost-user-glib.h"
 
 #if defined(__linux__)
 #include <linux/fs.h>
@@ -107,10 +106,7 @@ static void vub_req_complete(VubReq *req)
                   req->size + 1);
     vu_queue_notify(vu_dev, req->vq);
 
-    if (req->elem) {
-        free(req->elem);
-    }
-
+    g_free(req->elem);
     g_free(req);
 }
 
@@ -147,7 +143,7 @@ vub_readv(VubReq *req, struct iovec *iov, uint32_t iovcnt)
     req->size = vub_iov_size(iov, iovcnt);
     rc = preadv(vdev_blk->blk_fd, iov, iovcnt, req->sector_num * 512);
     if (rc < 0) {
-        fprintf(stderr, "%s, Sector %"PRIu64", Size %lu failed with %s\n",
+        fprintf(stderr, "%s, Sector %"PRIu64", Size %zu failed with %s\n",
                 vdev_blk->blk_name, req->sector_num, req->size,
                 strerror(errno));
         return -1;
@@ -170,7 +166,7 @@ vub_writev(VubReq *req, struct iovec *iov, uint32_t iovcnt)
     req->size = vub_iov_size(iov, iovcnt);
     rc = pwritev(vdev_blk->blk_fd, iov, iovcnt, req->sector_num * 512);
     if (rc < 0) {
-        fprintf(stderr, "%s, Sector %"PRIu64", Size %lu failed with %s\n",
+        fprintf(stderr, "%s, Sector %"PRIu64", Size %zu failed with %s\n",
                 vdev_blk->blk_name, req->sector_num, req->size,
                 strerror(errno));
         return -1;
@@ -189,7 +185,7 @@ vub_discard_write_zeroes(VubReq *req, struct iovec *iov, uint32_t iovcnt,
 
     size = vub_iov_size(iov, iovcnt);
     if (size != sizeof(*desc)) {
-        fprintf(stderr, "Invalid size %ld, expect %ld\n", size, sizeof(*desc));
+        fprintf(stderr, "Invalid size %zd, expect %zd\n", size, sizeof(*desc));
         return -1;
     }
     buf = g_new0(char, size);
@@ -244,7 +240,7 @@ static int vub_virtio_process_req(VubDev *vdev_blk,
     /* refer to hw/block/virtio_blk.c */
     if (elem->out_num < 1 || elem->in_num < 1) {
         fprintf(stderr, "virtio-blk request missing headers\n");
-        free(elem);
+        g_free(elem);
         return -1;
     }
 
@@ -326,7 +322,7 @@ static int vub_virtio_process_req(VubDev *vdev_blk,
     return 0;
 
 err:
-    free(elem);
+    g_free(elem);
     g_free(req);
     return -1;
 }
@@ -404,7 +400,9 @@ vub_get_config(VuDev *vu_dev, uint8_t *config, uint32_t len)
     VugDev *gdev;
     VubDev *vdev_blk;
 
-    g_return_val_if_fail(len <= sizeof(struct virtio_blk_config), -1);
+    if (len > sizeof(struct virtio_blk_config)) {
+        return -1;
+    }
 
     gdev = container_of(vu_dev, VugDev, parent);
     vdev_blk = container_of(gdev, VubDev, parent);
@@ -592,7 +590,8 @@ static GOptionEntry entries[] = {
     {"blk-file", 'b', 0, G_OPTION_ARG_FILENAME, &opt_blk_file,
      "block device or file path", "PATH"},
     { "read-only", 'r', 0, G_OPTION_ARG_NONE, &opt_read_only,
-      "Enable read-only", NULL }
+      "Enable read-only", NULL },
+    { NULL, },
 };
 
 int main(int argc, char **argv)

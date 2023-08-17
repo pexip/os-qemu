@@ -23,8 +23,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "monitor/monitor.h"
+#include "qemu/coroutine-tls.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-machine.h"
 #include "qapi/qapi-commands-misc.h"
@@ -32,7 +32,7 @@
 #include "qapi/qmp/qerror.h"
 #include "exec/gdbstub.h"
 #include "sysemu/hw_accel.h"
-#include "exec/exec-all.h"
+#include "exec/cpu-common.h"
 #include "qemu/thread.h"
 #include "qemu/plugin.h"
 #include "sysemu/cpus.h"
@@ -41,8 +41,10 @@
 #include "sysemu/replay.h"
 #include "sysemu/runstate.h"
 #include "sysemu/cpu-timers.h"
+#include "sysemu/whpx.h"
 #include "hw/boards.h"
 #include "hw/hw.h"
+#include "trace.h"
 
 #ifdef CONFIG_LINUX
 
@@ -64,6 +66,11 @@
 
 static QemuMutex qemu_global_mutex;
 
+/*
+ * The chosen accelerator is supposed to register this.
+ */
+static const AccelOpsClass *cpus_accel;
+
 bool cpu_is_stopped(CPUState *cpu)
 {
     return cpu->stopped || !runstate_is_running();
@@ -71,12 +78,7 @@ bool cpu_is_stopped(CPUState *cpu)
 
 bool cpu_work_list_empty(CPUState *cpu)
 {
-    bool ret;
-
-    qemu_mutex_lock(&cpu->work_mutex);
-    ret = QSIMPLEQ_EMPTY(&cpu->work_list);
-    qemu_mutex_unlock(&cpu->work_mutex);
-    return ret;
+    return QSIMPLEQ_EMPTY_ATOMIC(&cpu->work_list);
 }
 
 bool cpu_thread_is_idle(CPUState *cpu)
@@ -87,9 +89,11 @@ bool cpu_thread_is_idle(CPUState *cpu)
     if (cpu_is_stopped(cpu)) {
         return true;
     }
-    if (!cpu->halted || cpu_has_work(cpu) ||
-        kvm_halt_in_kernel()) {
+    if (!cpu->halted || cpu_has_work(cpu)) {
         return false;
+    }
+    if (cpus_accel->cpu_thread_is_idle) {
+        return cpus_accel->cpu_thread_is_idle(cpu);
     }
     return true;
 }
@@ -123,11 +127,6 @@ void hw_error(const char *fmt, ...)
     va_end(ap);
     abort();
 }
-
-/*
- * The chosen accelerator is supposed to register this.
- */
-static const CpusAccel *cpus_accel;
 
 void cpu_synchronize_all_states(void)
 {
@@ -191,6 +190,14 @@ void cpu_synchronize_pre_loadvm(CPUState *cpu)
     if (cpus_accel->synchronize_pre_loadvm) {
         cpus_accel->synchronize_pre_loadvm(cpu);
     }
+}
+
+bool cpus_are_resettable(void)
+{
+    if (cpus_accel->cpus_are_resettable) {
+        return cpus_accel->cpus_are_resettable();
+    }
+    return true;
 }
 
 int64_t cpus_get_virtual_clock(void)
@@ -260,6 +267,7 @@ static int do_vm_stop(RunState state, bool send_stop)
 
     bdrv_drain_all();
     ret = bdrv_flush_all();
+    trace_vm_stop_flush_all(ret);
 
     return ret;
 }
@@ -317,7 +325,7 @@ static void sigbus_reraise(void)
         sigaddset(&set, SIGBUS);
         pthread_sigmask(SIG_UNBLOCK, &set, NULL);
     }
-    perror("Failed to re-raise SIGBUS!\n");
+    perror("Failed to re-raise SIGBUS!");
     abort();
 }
 
@@ -344,6 +352,10 @@ static void qemu_init_sigbus(void)
 {
     struct sigaction action;
 
+    /*
+     * ALERT: when modifying this, take care that SIGBUS forwarding in
+     * qemu_prealloc_mem() will continue working as expected.
+     */
     memset(&action, 0, sizeof(action));
     action.sa_flags = SA_SIGINFO;
     action.sa_sigaction = sigbus_handler;
@@ -425,18 +437,19 @@ void qemu_wait_io_event(CPUState *cpu)
 
 void cpus_kick_thread(CPUState *cpu)
 {
-#ifndef _WIN32
-    int err;
-
     if (cpu->thread_kicked) {
         return;
     }
     cpu->thread_kicked = true;
-    err = pthread_kill(cpu->thread->thread, SIG_IPI);
+
+#ifndef _WIN32
+    int err = pthread_kill(cpu->thread->thread, SIG_IPI);
     if (err && err != ESRCH) {
         fprintf(stderr, "qemu:%s: %s", __func__, strerror(err));
         exit(1);
     }
+#else
+    qemu_sem_post(&cpu->sem);
 #endif
 }
 
@@ -466,11 +479,16 @@ bool qemu_in_vcpu_thread(void)
     return current_cpu && qemu_cpu_is_self(current_cpu);
 }
 
-static __thread bool iothread_locked = false;
+QEMU_DEFINE_STATIC_CO_TLS(bool, iothread_locked)
 
 bool qemu_mutex_iothread_locked(void)
 {
-    return iothread_locked;
+    return get_iothread_locked();
+}
+
+bool qemu_in_main_thread(void)
+{
+    return qemu_mutex_iothread_locked();
 }
 
 /*
@@ -483,13 +501,13 @@ void qemu_mutex_lock_iothread_impl(const char *file, int line)
 
     g_assert(!qemu_mutex_iothread_locked());
     bql_lock(&qemu_global_mutex, file, line);
-    iothread_locked = true;
+    set_iothread_locked(true);
 }
 
 void qemu_mutex_unlock_iothread(void)
 {
     g_assert(qemu_mutex_iothread_locked());
-    iothread_locked = false;
+    set_iothread_locked(false);
     qemu_mutex_unlock(&qemu_global_mutex);
 }
 
@@ -593,11 +611,18 @@ void cpu_remove_sync(CPUState *cpu)
     qemu_mutex_lock_iothread();
 }
 
-void cpus_register_accel(const CpusAccel *ca)
+void cpus_register_accel(const AccelOpsClass *ops)
 {
-    assert(ca != NULL);
-    assert(ca->create_vcpu_thread != NULL); /* mandatory */
-    cpus_accel = ca;
+    assert(ops != NULL);
+    assert(ops->create_vcpu_thread != NULL); /* mandatory */
+    cpus_accel = ops;
+}
+
+const AccelOpsClass *cpus_get_accel(void)
+{
+    /* broken if we call this early */
+    assert(cpus_accel);
+    return cpus_accel;
 }
 
 void qemu_init_vcpu(CPUState *cpu)
@@ -617,7 +642,7 @@ void qemu_init_vcpu(CPUState *cpu)
         cpu_address_space_init(cpu, 0, "cpu-memory", cpu->memory);
     }
 
-    /* accelerators all implement the CpusAccel interface */
+    /* accelerators all implement the AccelOpsClass */
     g_assert(cpus_accel != NULL && cpus_accel->create_vcpu_thread != NULL);
     cpus_accel->create_vcpu_thread(cpu);
 
@@ -655,7 +680,7 @@ int vm_stop(RunState state)
  * Returns -1 if the vCPUs are not to be restarted (e.g. if they are already
  * running or in case of an error condition), 0 otherwise.
  */
-int vm_prepare_start(void)
+int vm_prepare_start(bool step_pending)
 {
     RunState requested;
 
@@ -675,6 +700,14 @@ int vm_prepare_start(void)
         return -1;
     }
 
+    /*
+     * WHPX accelerator needs to know whether we are going to step
+     * any CPUs, before starting the first one.
+     */
+    if (cpus_accel->synchronize_pre_resume) {
+        cpus_accel->synchronize_pre_resume(step_pending);
+    }
+
     /* We are sending this now, but the CPUs will be resumed shortly later */
     qapi_event_send_resume();
 
@@ -686,7 +719,7 @@ int vm_prepare_start(void)
 
 void vm_start(void)
 {
-    if (!vm_prepare_start()) {
+    if (!vm_prepare_start(false)) {
         resume_all_vcpus();
     }
 }
@@ -698,21 +731,16 @@ int vm_stop_force_state(RunState state)
     if (runstate_is_running()) {
         return vm_stop(state);
     } else {
+        int ret;
         runstate_set(state);
 
         bdrv_drain_all();
         /* Make sure to return an error if the flush in a previous vm_stop()
          * failed. */
-        return bdrv_flush_all();
+        ret = bdrv_flush_all();
+        trace_vm_stop_flush_all(ret);
+        return ret;
     }
-}
-
-void list_cpus(const char *optarg)
-{
-    /* XXX: implement xxx_cpu_list for targets that still miss it */
-#if defined(cpu_list)
-    cpu_list();
-#endif
 }
 
 void qmp_memsave(int64_t addr, int64_t size, const char *filename,

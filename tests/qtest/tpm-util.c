@@ -13,9 +13,10 @@
  */
 
 #include "qemu/osdep.h"
+#include <glib/gstdio.h>
 
 #include "hw/acpi/tpm.h"
-#include "libqos/libqtest.h"
+#include "libqtest.h"
 #include "tpm-util.h"
 #include "qapi/qmp/qdict.h"
 
@@ -250,7 +251,7 @@ void tpm_util_wait_for_migration_complete(QTestState *who)
         status = qdict_get_str(rsp_return, "status");
         completed = strcmp(status, "completed") == 0;
         g_assert_cmpstr(status, !=,  "failed");
-        qobject_unref(rsp_return);
+        qobject_unref(rsp);
         if (completed) {
             return;
         }
@@ -289,6 +290,24 @@ void tpm_util_migration_start_qemu(QTestState **src_qemu,
 
     *dst_qemu = qtest_init(dst_qemu_args);
 
-    free(src_qemu_args);
-    free(dst_qemu_args);
+    g_free(src_qemu_args);
+    g_free(dst_qemu_args);
+}
+
+/* Remove directory with remainders of swtpm */
+void tpm_util_rmdir(const char *path)
+{
+    char *filename;
+    int ret;
+
+    filename = g_strdup_printf("%s/tpm2-00.permall", path);
+    g_unlink(filename);
+    g_free(filename);
+
+    filename = g_strdup_printf("%s/.lock", path);
+    g_unlink(filename);
+    g_free(filename);
+
+    ret = g_rmdir(path);
+    g_assert(!ret);
 }

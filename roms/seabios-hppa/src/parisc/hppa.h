@@ -9,6 +9,9 @@
 #include "types.h" // u32
 #include "byteorder.h" // le16_to_cpu
 
+/* Pointer to zero-page of PA-RISC */
+#define PAGE0 ((volatile struct zeropage *) 0UL)
+
 #define   PSW_I   0x00000001
 
 static inline unsigned long arch_local_save_flags(void)
@@ -190,6 +193,11 @@ static inline u32 rol(u32 val, u16 rol) {
     resr = val >> (32-rol);
     res |= resr;
     return res;
+}
+
+static inline u32 ror(u32 word, unsigned int shift)
+{
+        return (word >> (shift & 31)) | (word << ((-shift) & 31));
 }
 
 #define pci_ioport_addr(port) ((port >= 0x1000)  && (port < FIRMWARE_START))

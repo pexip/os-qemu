@@ -18,7 +18,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "cpu.h"
 #include "sysemu/cpus.h"
 #include "sysemu/tcg.h"
 #include "exec/exec-all.h"
@@ -72,7 +71,7 @@ void cpu_loop_exit(CPUState *cpu)
 void cpu_loop_exit_restore(CPUState *cpu, uintptr_t pc)
 {
     if (pc) {
-        cpu_restore_state(cpu, pc, true);
+        cpu_restore_state(cpu, pc);
     }
     cpu_loop_exit(cpu);
 }
