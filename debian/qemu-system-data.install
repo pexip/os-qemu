@@ -1,9 +1,3 @@
 pc-bios/keymaps usr/share/qemu
-pc-bios/qemu-icon.bmp usr/share/qemu
-pc-bios/qemu_logo_no_text.svg usr/share/qemu
-# x86 optionrom and other firmware files
-b/fw/*.bin usr/share/qemu
-# s390x firmware
-b/fw/s390*.img usr/share/qemu
-# alpha firmware
-b/qemu-palcode/palcode-clipper usr/share/qemu
+ui/qemu.desktop usr/share/applications
+ui/icons/qemu.svg usr/share/icons/hicolor/scalable/apps

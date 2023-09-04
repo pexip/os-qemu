@@ -11,11 +11,15 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "qemu/module.h"
 #include "qapi/error.h"
 #include "trace.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/registerfields.h"
+#include "hw/irq.h"
 #include "hw/misc/tz-mpc.h"
+#include "hw/qdev-properties.h"
 
 /* Our IOMMU has two IOMMU indexes, one for secure transactions and one for
  * non-secure transactions.
@@ -150,7 +154,7 @@ static MemTxResult tz_mpc_reg_read(void *opaque, hwaddr addr,
         r = s->ctrl;
         break;
     case A_BLK_MAX:
-        r = s->blk_max;
+        r = s->blk_max - 1;
         break;
     case A_BLK_CFG:
         /* We are never in "init in progress state", so this just indicates
@@ -448,7 +452,7 @@ static int tz_mpc_attrs_to_index(IOMMUMemoryRegion *iommu, MemTxAttrs attrs)
 {
     /* We treat unspecified attributes like secure. Transactions with
      * unspecified attributes come from places like
-     * cpu_physical_memory_write_rom() for initial image load, and we want
+     * rom_reset() for initial image load, and we want
      * those to pass through the from-reset "everything is secure" config.
      * All the real during-emulation transactions from the CPU will
      * specify attributes.
@@ -592,7 +596,7 @@ static void tz_mpc_class_init(ObjectClass *klass, void *data)
     dc->realize = tz_mpc_realize;
     dc->vmsd = &tz_mpc_vmstate;
     dc->reset = tz_mpc_reset;
-    dc->props = tz_mpc_properties;
+    device_class_set_props(dc, tz_mpc_properties);
 }
 
 static const TypeInfo tz_mpc_info = {

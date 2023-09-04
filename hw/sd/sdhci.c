@@ -1,6 +1,8 @@
 /*
  * SD Association Host Standard Specification v2.0 controller emulation
  *
+ * Datasheet: PartA2_SD_Host_Controller_Simplified_Specification_Ver2.00.pdf
+ *
  * Copyright (c) 2011 Samsung Electronics Co., Ltd.
  * Mitsyanko Igor <i.mitsyanko@samsung.com>
  * Peter A.G. Crosthwaite <peter.crosthwaite@petalogix.com>
@@ -26,37 +28,25 @@
 #include "qemu/units.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "sysemu/dma.h"
 #include "qemu/timer.h"
 #include "qemu/bitops.h"
 #include "hw/sd/sdhci.h"
+#include "migration/vmstate.h"
 #include "sdhci-internal.h"
 #include "qemu/log.h"
+#include "qemu/module.h"
 #include "trace.h"
+#include "qom/object.h"
 
 #define TYPE_SDHCI_BUS "sdhci-bus"
-#define SDHCI_BUS(obj) OBJECT_CHECK(SDBus, (obj), TYPE_SDHCI_BUS)
+/* This is reusing the SDBus typedef from SD_BUS */
+DECLARE_INSTANCE_CHECKER(SDBus, SDHCI_BUS,
+                         TYPE_SDHCI_BUS)
 
 #define MASKED_WRITE(reg, mask, val)  (reg = (reg & (mask)) | (val))
-
-/* Default SD/MMC host controller features information, which will be
- * presented in CAPABILITIES register of generic SD host controller at reset.
- *
- * support:
- * - 3.3v and 1.8v voltages
- * - SDMA/ADMA1/ADMA2
- * - high-speed
- * max host controller R/W buffers size: 512B
- * max clock frequency for SDclock: 52 MHz
- * timeout clock frequency: 52 MHz
- *
- * does not support:
- * - 3.0v voltage
- * - 64-bit system bus
- * - suspend/resume
- */
-#define SDHC_CAPAB_REG_DEFAULT 0x057834b4
 
 static inline unsigned int sdhci_get_fifolen(SDHCIState *s)
 {
@@ -228,9 +218,14 @@ static uint8_t sdhci_slotint(SDHCIState *s)
          ((s->norintsts & SDHC_NIS_REMOVE) && (s->wakcon & SDHC_WKUP_ON_RMV));
 }
 
-static inline void sdhci_update_irq(SDHCIState *s)
+/* Return true if IRQ was pending and delivered */
+static bool sdhci_update_irq(SDHCIState *s)
 {
-    qemu_set_irq(s->irq, sdhci_slotint(s));
+    bool pending = sdhci_slotint(s);
+
+    qemu_set_irq(s->irq, pending);
+
+    return pending;
 }
 
 static void sdhci_raise_insertion_irq(void *opaque)
@@ -414,8 +409,6 @@ static void sdhci_end_transfer(SDHCIState *s)
 /* Fill host controller's read buffer with BLKSIZE bytes of data from card */
 static void sdhci_read_block_from_card(SDHCIState *s)
 {
-    int index = 0;
-    uint8_t data;
     const uint16_t blk_size = s->blksize & BLOCK_SIZE_MASK;
 
     if ((s->trnmod & SDHC_TRNS_MULTI) &&
@@ -423,12 +416,9 @@ static void sdhci_read_block_from_card(SDHCIState *s)
         return;
     }
 
-    for (index = 0; index < blk_size; index++) {
-        data = sdbus_read_data(&s->sdbus);
-        if (!FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, EXECUTE_TUNING)) {
-            /* Device is not in tuning */
-            s->fifo_buffer[index] = data;
-        }
+    if (!FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, EXECUTE_TUNING)) {
+        /* Device is not in tuning */
+        sdbus_read_data(&s->sdbus, s->fifo_buffer, blk_size);
     }
 
     if (FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, EXECUTE_TUNING)) {
@@ -511,8 +501,6 @@ static uint32_t sdhci_read_dataport(SDHCIState *s, unsigned size)
 /* Write data from host controller FIFO to card */
 static void sdhci_write_block_to_card(SDHCIState *s)
 {
-    int index = 0;
-
     if (s->prnsts & SDHC_SPACE_AVAILABLE) {
         if (s->norintstsen & SDHC_NISEN_WBUFRDY) {
             s->norintsts |= SDHC_NIS_WBUFRDY;
@@ -529,9 +517,7 @@ static void sdhci_write_block_to_card(SDHCIState *s)
         }
     }
 
-    for (index = 0; index < (s->blksize & BLOCK_SIZE_MASK); index++) {
-        sdbus_write_data(&s->sdbus, s->fifo_buffer[index]);
-    }
+    sdbus_write_data(&s->sdbus, s->fifo_buffer, s->blksize & BLOCK_SIZE_MASK);
 
     /* Next data can be written through BUFFER DATORT register */
     s->prnsts |= SDHC_SPACE_AVAILABLE;
@@ -593,7 +579,7 @@ static void sdhci_write_dataport(SDHCIState *s, uint32_t value, unsigned size)
 static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
 {
     bool page_aligned = false;
-    unsigned int n, begin;
+    unsigned int begin;
     const uint16_t block_size = s->blksize & BLOCK_SIZE_MASK;
     uint32_t boundary_chk = 1 << (((s->blksize & ~BLOCK_SIZE_MASK) >> 12) + 12);
     uint32_t boundary_count = boundary_chk - (s->sdmasysad % boundary_chk);
@@ -615,9 +601,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
                 SDHC_DAT_LINE_ACTIVE;
         while (s->blkcnt) {
             if (s->data_count == 0) {
-                for (n = 0; n < block_size; n++) {
-                    s->fifo_buffer[n] = sdbus_read_data(&s->sdbus);
-                }
+                sdbus_read_data(&s->sdbus, s->fifo_buffer, block_size);
             }
             begin = s->data_count;
             if (((boundary_count + begin) < block_size) && page_aligned) {
@@ -656,9 +640,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
                             &s->fifo_buffer[begin], s->data_count - begin);
             s->sdmasysad += s->data_count - begin;
             if (s->data_count == block_size) {
-                for (n = 0; n < block_size; n++) {
-                    sdbus_write_data(&s->sdbus, s->fifo_buffer[n]);
-                }
+                sdbus_write_data(&s->sdbus, s->fifo_buffer, block_size);
                 s->data_count = 0;
                 if (s->trnmod & SDHC_TRNS_BLK_CNT_EN) {
                     s->blkcnt--;
@@ -683,19 +665,14 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
 /* single block SDMA transfer */
 static void sdhci_sdma_transfer_single_block(SDHCIState *s)
 {
-    int n;
     uint32_t datacnt = s->blksize & BLOCK_SIZE_MASK;
 
     if (s->trnmod & SDHC_TRNS_READ) {
-        for (n = 0; n < datacnt; n++) {
-            s->fifo_buffer[n] = sdbus_read_data(&s->sdbus);
-        }
+        sdbus_read_data(&s->sdbus, s->fifo_buffer, datacnt);
         dma_memory_write(s->dma_as, s->sdmasysad, s->fifo_buffer, datacnt);
     } else {
         dma_memory_read(s->dma_as, s->sdmasysad, s->fifo_buffer, datacnt);
-        for (n = 0; n < datacnt; n++) {
-            sdbus_write_data(&s->sdbus, s->fifo_buffer[n]);
-        }
+        sdbus_write_data(&s->sdbus, s->fifo_buffer, datacnt);
     }
     s->blkcnt--;
 
@@ -716,8 +693,7 @@ static void get_adma_description(SDHCIState *s, ADMADescr *dscr)
     hwaddr entry_addr = (hwaddr)s->admasysaddr;
     switch (SDHC_DMA_TYPE(s->hostctl1)) {
     case SDHC_CTRL_ADMA2_32:
-        dma_memory_read(s->dma_as, entry_addr, (uint8_t *)&adma2,
-                        sizeof(adma2));
+        dma_memory_read(s->dma_as, entry_addr, &adma2, sizeof(adma2));
         adma2 = le64_to_cpu(adma2);
         /* The spec does not specify endianness of descriptor table.
          * We currently assume that it is LE.
@@ -728,8 +704,7 @@ static void get_adma_description(SDHCIState *s, ADMADescr *dscr)
         dscr->incr = 8;
         break;
     case SDHC_CTRL_ADMA1_32:
-        dma_memory_read(s->dma_as, entry_addr, (uint8_t *)&adma1,
-                        sizeof(adma1));
+        dma_memory_read(s->dma_as, entry_addr, &adma1, sizeof(adma1));
         adma1 = le32_to_cpu(adma1);
         dscr->addr = (hwaddr)(adma1 & 0xFFFFF000);
         dscr->attr = (uint8_t)extract32(adma1, 0, 7);
@@ -741,13 +716,10 @@ static void get_adma_description(SDHCIState *s, ADMADescr *dscr)
         }
         break;
     case SDHC_CTRL_ADMA2_64:
-        dma_memory_read(s->dma_as, entry_addr,
-                        (uint8_t *)(&dscr->attr), 1);
-        dma_memory_read(s->dma_as, entry_addr + 2,
-                        (uint8_t *)(&dscr->length), 2);
+        dma_memory_read(s->dma_as, entry_addr, &dscr->attr, 1);
+        dma_memory_read(s->dma_as, entry_addr + 2, &dscr->length, 2);
         dscr->length = le16_to_cpu(dscr->length);
-        dma_memory_read(s->dma_as, entry_addr + 4,
-                        (uint8_t *)(&dscr->addr), 8);
+        dma_memory_read(s->dma_as, entry_addr + 4, &dscr->addr, 8);
         dscr->addr = le64_to_cpu(dscr->addr);
         dscr->attr &= (uint8_t) ~0xC0;
         dscr->incr = 12;
@@ -759,10 +731,16 @@ static void get_adma_description(SDHCIState *s, ADMADescr *dscr)
 
 static void sdhci_do_adma(SDHCIState *s)
 {
-    unsigned int n, begin, length;
+    unsigned int begin, length;
     const uint16_t block_size = s->blksize & BLOCK_SIZE_MASK;
     ADMADescr dscr = {};
     int i;
+
+    if (s->trnmod & SDHC_TRNS_BLK_CNT_EN && !s->blkcnt) {
+        /* Stop Multiple Transfer */
+        sdhci_end_transfer(s);
+        return;
+    }
 
     for (i = 0; i < SDHC_ADMA_DESCS_PER_DELAY; ++i) {
         s->admaerr &= ~SDHC_ADMAERR_LENGTH_MISMATCH;
@@ -789,13 +767,10 @@ static void sdhci_do_adma(SDHCIState *s)
 
         switch (dscr.attr & SDHC_ADMA_ATTR_ACT_MASK) {
         case SDHC_ADMA_ATTR_ACT_TRAN:  /* data transfer */
-
             if (s->trnmod & SDHC_TRNS_READ) {
                 while (length) {
                     if (s->data_count == 0) {
-                        for (n = 0; n < block_size; n++) {
-                            s->fifo_buffer[n] = sdbus_read_data(&s->sdbus);
-                        }
+                        sdbus_read_data(&s->sdbus, s->fifo_buffer, block_size);
                     }
                     begin = s->data_count;
                     if ((length + begin) < block_size) {
@@ -834,9 +809,7 @@ static void sdhci_do_adma(SDHCIState *s)
                                     s->data_count - begin);
                     dscr.addr += s->data_count - begin;
                     if (s->data_count == block_size) {
-                        for (n = 0; n < block_size; n++) {
-                            sdbus_write_data(&s->sdbus, s->fifo_buffer[n]);
-                        }
+                        sdbus_write_data(&s->sdbus, s->fifo_buffer, block_size);
                         s->data_count = 0;
                         if (s->trnmod & SDHC_TRNS_BLK_CNT_EN) {
                             s->blkcnt--;
@@ -864,7 +837,10 @@ static void sdhci_do_adma(SDHCIState *s)
                 s->norintsts |= SDHC_NIS_DMA;
             }
 
-            sdhci_update_irq(s);
+            if (sdhci_update_irq(s) && !(dscr.attr & SDHC_ADMA_ATTR_END)) {
+                /* IRQ delivered, reschedule current transfer */
+                break;
+            }
         }
 
         /* ADMA transfer terminates if blkcnt == 0 or by END attribute */
@@ -980,10 +956,20 @@ sdhci_buff_access_is_sequential(SDHCIState *s, unsigned byte_num)
     return true;
 }
 
+static void sdhci_resume_pending_transfer(SDHCIState *s)
+{
+    timer_del(s->transfer_timer);
+    sdhci_data_transfer(s);
+}
+
 static uint64_t sdhci_read(void *opaque, hwaddr offset, unsigned size)
 {
     SDHCIState *s = (SDHCIState *)opaque;
     uint32_t ret = 0;
+
+    if (timer_pending(s->transfer_timer)) {
+        sdhci_resume_pending_transfer(s);
+    }
 
     switch (offset & ~0x3) {
     case SDHC_SYSAD:
@@ -1128,6 +1114,10 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
     uint32_t value = val;
     value <<= shift;
 
+    if (timer_pending(s->transfer_timer)) {
+        sdhci_resume_pending_transfer(s);
+    }
+
     switch (offset & ~0x3) {
     case SDHC_SYSAD:
         s->sdmasysad = (s->sdmasysad & mask) | value;
@@ -1144,14 +1134,14 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
         break;
     case SDHC_BLKSIZE:
         if (!TRANSFERRING_DATA(s->prnsts)) {
-            MASKED_WRITE(s->blksize, mask, value);
+            MASKED_WRITE(s->blksize, mask, extract32(value, 0, 12));
             MASKED_WRITE(s->blkcnt, mask >> 16, value >> 16);
         }
 
         /* Limit block size to the maximum buffer size */
         if (extract32(s->blksize, 0, 12) > s->buf_maxsz) {
-            qemu_log_mask(LOG_GUEST_ERROR, "%s: Size 0x%x is larger than " \
-                          "the maximum buffer 0x%x", __func__, s->blksize,
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: Size 0x%x is larger than "
+                          "the maximum buffer 0x%x\n", __func__, s->blksize,
                           s->buf_maxsz);
 
             s->blksize = deposit32(s->blksize, 0, 12, s->buf_maxsz);
@@ -1308,7 +1298,7 @@ static const MemoryRegionOps sdhci_mmio_ops = {
 
 static void sdhci_init_readonly_registers(SDHCIState *s, Error **errp)
 {
-    Error *local_err = NULL;
+    ERRP_GUARD();
 
     switch (s->sd_spec_version) {
     case 2 ... 3:
@@ -1319,25 +1309,15 @@ static void sdhci_init_readonly_registers(SDHCIState *s, Error **errp)
     }
     s->version = (SDHC_HCVER_VENDOR << 8) | (s->sd_spec_version - 1);
 
-    sdhci_check_capareg(s, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    sdhci_check_capareg(s, errp);
+    if (*errp) {
         return;
     }
 }
 
 /* --- qdev common --- */
 
-#define DEFINE_SDHCI_COMMON_PROPERTIES(_state) \
-    DEFINE_PROP_UINT8("sd-spec-version", _state, sd_spec_version, 2), \
-    DEFINE_PROP_UINT8("uhs", _state, uhs_mode, UHS_NOT_SUPPORTED), \
-    \
-    /* Capabilities registers provide information on supported
-     * features of this specific host controller implementation */ \
-    DEFINE_PROP_UINT64("capareg", _state, capareg, SDHC_CAPAB_REG_DEFAULT), \
-    DEFINE_PROP_UINT64("maxcurr", _state, maxcurr, 0)
-
-static void sdhci_initfn(SDHCIState *s)
+void sdhci_initfn(SDHCIState *s)
 {
     qbus_create_inplace(&s->sdbus, sizeof(s->sdbus),
                         TYPE_SDHCI_BUS, DEVICE(s), "sd-bus");
@@ -1348,7 +1328,7 @@ static void sdhci_initfn(SDHCIState *s)
     s->io_ops = &sdhci_mmio_ops;
 }
 
-static void sdhci_uninitfn(SDHCIState *s)
+void sdhci_uninitfn(SDHCIState *s)
 {
     timer_del(s->insert_timer);
     timer_free(s->insert_timer);
@@ -1359,23 +1339,22 @@ static void sdhci_uninitfn(SDHCIState *s)
     s->fifo_buffer = NULL;
 }
 
-static void sdhci_common_realize(SDHCIState *s, Error **errp)
+void sdhci_common_realize(SDHCIState *s, Error **errp)
 {
-    Error *local_err = NULL;
+    ERRP_GUARD();
 
-    sdhci_init_readonly_registers(s, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    sdhci_init_readonly_registers(s, errp);
+    if (*errp) {
         return;
     }
     s->buf_maxsz = sdhci_get_fifolen(s);
     s->fifo_buffer = g_malloc0(s->buf_maxsz);
 
-    memory_region_init_io(&s->iomem, OBJECT(s), &sdhci_mmio_ops, s, "sdhci",
+    memory_region_init_io(&s->iomem, OBJECT(s), s->io_ops, s, "sdhci",
                           SDHC_REGISTERS_MAP_SIZE);
 }
 
-static void sdhci_common_unrealize(SDHCIState *s, Error **errp)
+void sdhci_common_unrealize(SDHCIState *s)
 {
     /* This function is expected to be called only once for each class:
      * - SysBus:    via DeviceClass->unrealize(),
@@ -1445,7 +1424,7 @@ const VMStateDescription sdhci_vmstate = {
     },
 };
 
-static void sdhci_common_class_init(ObjectClass *klass, void *data)
+void sdhci_common_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
@@ -1453,66 +1432,6 @@ static void sdhci_common_class_init(ObjectClass *klass, void *data)
     dc->vmsd = &sdhci_vmstate;
     dc->reset = sdhci_poweron_reset;
 }
-
-/* --- qdev PCI --- */
-
-static Property sdhci_pci_properties[] = {
-    DEFINE_SDHCI_COMMON_PROPERTIES(SDHCIState),
-    DEFINE_PROP_END_OF_LIST(),
-};
-
-static void sdhci_pci_realize(PCIDevice *dev, Error **errp)
-{
-    SDHCIState *s = PCI_SDHCI(dev);
-    Error *local_err = NULL;
-
-    sdhci_initfn(s);
-    sdhci_common_realize(s, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
-        return;
-    }
-
-    dev->config[PCI_CLASS_PROG] = 0x01; /* Standard Host supported DMA */
-    dev->config[PCI_INTERRUPT_PIN] = 0x01; /* interrupt pin A */
-    s->irq = pci_allocate_irq(dev);
-    s->dma_as = pci_get_address_space(dev);
-    pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->iomem);
-}
-
-static void sdhci_pci_exit(PCIDevice *dev)
-{
-    SDHCIState *s = PCI_SDHCI(dev);
-
-    sdhci_common_unrealize(s, &error_abort);
-    sdhci_uninitfn(s);
-}
-
-static void sdhci_pci_class_init(ObjectClass *klass, void *data)
-{
-    DeviceClass *dc = DEVICE_CLASS(klass);
-    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
-
-    k->realize = sdhci_pci_realize;
-    k->exit = sdhci_pci_exit;
-    k->vendor_id = PCI_VENDOR_ID_REDHAT;
-    k->device_id = PCI_DEVICE_ID_REDHAT_SDHCI;
-    k->class_id = PCI_CLASS_SYSTEM_SDHCI;
-    dc->props = sdhci_pci_properties;
-
-    sdhci_common_class_init(klass, data);
-}
-
-static const TypeInfo sdhci_pci_info = {
-    .name = TYPE_PCI_SDHCI,
-    .parent = TYPE_PCI_DEVICE,
-    .instance_size = sizeof(SDHCIState),
-    .class_init = sdhci_pci_class_init,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
-};
 
 /* --- qdev SysBus --- */
 
@@ -1543,15 +1462,14 @@ static void sdhci_sysbus_finalize(Object *obj)
     sdhci_uninitfn(s);
 }
 
-static void sdhci_sysbus_realize(DeviceState *dev, Error ** errp)
+static void sdhci_sysbus_realize(DeviceState *dev, Error **errp)
 {
+    ERRP_GUARD();
     SDHCIState *s = SYSBUS_SDHCI(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
-    Error *local_err = NULL;
 
-    sdhci_common_realize(s, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    sdhci_common_realize(s, errp);
+    if (*errp) {
         return;
     }
 
@@ -1565,17 +1483,14 @@ static void sdhci_sysbus_realize(DeviceState *dev, Error ** errp)
 
     sysbus_init_irq(sbd, &s->irq);
 
-    memory_region_init_io(&s->iomem, OBJECT(s), s->io_ops, s, "sdhci",
-            SDHC_REGISTERS_MAP_SIZE);
-
     sysbus_init_mmio(sbd, &s->iomem);
 }
 
-static void sdhci_sysbus_unrealize(DeviceState *dev, Error **errp)
+static void sdhci_sysbus_unrealize(DeviceState *dev)
 {
     SDHCIState *s = SYSBUS_SDHCI(dev);
 
-    sdhci_common_unrealize(s, &error_abort);
+    sdhci_common_unrealize(s);
 
      if (s->dma_mr) {
         address_space_destroy(s->dma_as);
@@ -1586,7 +1501,7 @@ static void sdhci_sysbus_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->props = sdhci_sysbus_properties;
+    device_class_set_props(dc, sdhci_sysbus_properties);
     dc->realize = sdhci_sysbus_realize;
     dc->unrealize = sdhci_sysbus_unrealize;
 
@@ -1618,6 +1533,8 @@ static const TypeInfo sdhci_bus_info = {
     .instance_size = sizeof(SDBus),
     .class_init = sdhci_bus_class_init,
 };
+
+/* --- qdev i.MX eSDHC --- */
 
 static uint64_t usdhc_read(void *opaque, hwaddr offset, unsigned size)
 {
@@ -1659,11 +1576,13 @@ static uint64_t usdhc_read(void *opaque, hwaddr offset, unsigned size)
         }
         break;
 
+    case ESDHC_VENDOR_SPEC:
+        ret = s->vendor_spec;
+        break;
     case ESDHC_DLL_CTRL:
     case ESDHC_TUNE_CTRL_STATUS:
     case ESDHC_UNDOCUMENTED_REG27:
     case ESDHC_TUNING_CTRL:
-    case ESDHC_VENDOR_SPEC:
     case ESDHC_MIX_CTRL:
     case ESDHC_WTMK_LVL:
         ret = 0;
@@ -1686,7 +1605,21 @@ usdhc_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
     case ESDHC_UNDOCUMENTED_REG27:
     case ESDHC_TUNING_CTRL:
     case ESDHC_WTMK_LVL:
+        break;
+
     case ESDHC_VENDOR_SPEC:
+        s->vendor_spec = value;
+        switch (s->vendor) {
+        case SDHCI_VENDOR_IMX:
+            if (value & ESDHC_IMX_FRC_SDCLK_ON) {
+                s->prnsts &= ~SDHC_IMX_CLOCK_GATE_OFF;
+            } else {
+                s->prnsts |= SDHC_IMX_CLOCK_GATE_OFF;
+            }
+            break;
+        default:
+            break;
+        }
         break;
 
     case SDHC_HOSTCTL:
@@ -1821,7 +1754,6 @@ usdhc_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
     }
 }
 
-
 static const MemoryRegionOps usdhc_mmio_ops = {
     .read = usdhc_read,
     .write = usdhc_write,
@@ -1847,12 +1779,76 @@ static const TypeInfo imx_usdhc_info = {
     .instance_init = imx_usdhc_init,
 };
 
+/* --- qdev Samsung s3c --- */
+
+#define S3C_SDHCI_CONTROL2      0x80
+#define S3C_SDHCI_CONTROL3      0x84
+#define S3C_SDHCI_CONTROL4      0x8c
+
+static uint64_t sdhci_s3c_read(void *opaque, hwaddr offset, unsigned size)
+{
+    uint64_t ret;
+
+    switch (offset) {
+    case S3C_SDHCI_CONTROL2:
+    case S3C_SDHCI_CONTROL3:
+    case S3C_SDHCI_CONTROL4:
+        /* ignore */
+        ret = 0;
+        break;
+    default:
+        ret = sdhci_read(opaque, offset, size);
+        break;
+    }
+
+    return ret;
+}
+
+static void sdhci_s3c_write(void *opaque, hwaddr offset, uint64_t val,
+                            unsigned size)
+{
+    switch (offset) {
+    case S3C_SDHCI_CONTROL2:
+    case S3C_SDHCI_CONTROL3:
+    case S3C_SDHCI_CONTROL4:
+        /* ignore */
+        break;
+    default:
+        sdhci_write(opaque, offset, val, size);
+        break;
+    }
+}
+
+static const MemoryRegionOps sdhci_s3c_mmio_ops = {
+    .read = sdhci_s3c_read,
+    .write = sdhci_s3c_write,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+        .unaligned = false
+    },
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
+static void sdhci_s3c_init(Object *obj)
+{
+    SDHCIState *s = SYSBUS_SDHCI(obj);
+
+    s->io_ops = &sdhci_s3c_mmio_ops;
+}
+
+static const TypeInfo sdhci_s3c_info = {
+    .name = TYPE_S3C_SDHCI  ,
+    .parent = TYPE_SYSBUS_SDHCI,
+    .instance_init = sdhci_s3c_init,
+};
+
 static void sdhci_register_types(void)
 {
-    type_register_static(&sdhci_pci_info);
     type_register_static(&sdhci_sysbus_info);
     type_register_static(&sdhci_bus_info);
     type_register_static(&imx_usdhc_info);
+    type_register_static(&sdhci_s3c_info);
 }
 
 type_init(sdhci_register_types)

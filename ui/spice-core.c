@@ -18,11 +18,12 @@
 #include "qemu/osdep.h"
 #include <spice.h>
 
-#include <netdb.h>
 #include "sysemu/sysemu.h"
-
+#include "sysemu/runstate.h"
 #include "ui/qemu-spice.h"
 #include "qemu/error-report.h"
+#include "qemu/main-loop.h"
+#include "qemu/module.h"
 #include "qemu/thread.h"
 #include "qemu/timer.h"
 #include "qemu/queue.h"
@@ -34,7 +35,7 @@
 #include "qemu/notify.h"
 #include "qemu/option.h"
 #include "migration/misc.h"
-#include "hw/hw.h"
+#include "hw/pci/pci_bus.h"
 #include "ui/spice-display.h"
 
 /* core bits */
@@ -47,7 +48,6 @@ static time_t auth_expires = TIME_MAX;
 static int spice_migration_completed;
 static int spice_display_is_running;
 static int spice_have_target_host;
-int using_spice = 0;
 
 static QemuThread me;
 
@@ -398,6 +398,7 @@ static SpiceChannelList *qmp_query_spice_channels(void)
 static QemuOptsList qemu_spice_opts = {
     .name = "spice",
     .head = QTAILQ_HEAD_INITIALIZER(qemu_spice_opts.head),
+    .merge_lists = true,
     .desc = {
         {
             .name = "port",
@@ -501,7 +502,7 @@ static QemuOptsList qemu_spice_opts = {
     },
 };
 
-SpiceInfo *qmp_query_spice(Error **errp)
+static SpiceInfo *qmp_query_spice_real(Error **errp)
 {
     QemuOpts *opts = QTAILQ_FIRST(&qemu_spice_opts.head);
     int port, tls_port;
@@ -627,12 +628,12 @@ static void vm_change_state_handler(void *opaque, int running,
 {
     if (running) {
         qemu_spice_display_start();
-    } else {
+    } else if (state != RUN_STATE_PAUSED) {
         qemu_spice_display_stop();
     }
 }
 
-void qemu_spice_init(void)
+static void qemu_spice_init(void)
 {
     QemuOpts *opts = QTAILQ_FIRST(&qemu_spice_opts.head);
     const char *password, *str, *x509_dir, *addr,
@@ -726,7 +727,7 @@ void qemu_spice_init(void)
                              tls_ciphers);
     }
     if (password) {
-        qemu_spice_set_passwd(password, false, false);
+        qemu_spice.set_passwd(password, false, false);
     }
     if (qemu_opt_get_bool(opts, "sasl", 0)) {
         if (spice_server_set_sasl(spice_server, 1) == -1) {
@@ -745,13 +746,7 @@ void qemu_spice_init(void)
     }
 
     if (qemu_opt_get_bool(opts, "disable-agent-file-xfer", 0)) {
-#if SPICE_SERVER_VERSION >= 0x000c04
         spice_server_set_agent_file_xfer(spice_server, false);
-#else
-        error_report("this qemu build does not support the "
-                     "\"disable-agent-file-xfer\" option");
-        exit(1);
-#endif
     }
 
     compression = SPICE_IMAGE_COMPRESS_AUTO_GLZ;
@@ -790,7 +785,7 @@ void qemu_spice_init(void)
 
     qemu_opt_foreach(opts, add_channel, &tls_port, &error_fatal);
 
-    spice_server_set_name(spice_server, qemu_name);
+    spice_server_set_name(spice_server, qemu_name ?: "QEMU " QEMU_VERSION);
     spice_server_set_uuid(spice_server, (unsigned char *)&qemu_uuid);
 
     seamless_migration = qemu_opt_get_bool(opts, "seamless-migration", 0);
@@ -805,10 +800,9 @@ void qemu_spice_init(void)
     migration_state.notify = migration_state_notifier;
     add_migration_state_change_notifier(&migration_state);
     spice_migrate.base.sif = &migrate_interface.base;
-    qemu_spice_add_interface(&spice_migrate.base);
+    qemu_spice.add_interface(&spice_migrate.base);
 
     qemu_spice_input_init();
-    qemu_spice_audio_init();
 
     qemu_add_vm_change_state_handler(vm_change_state_handler, NULL);
     qemu_spice_display_stop();
@@ -816,10 +810,6 @@ void qemu_spice_init(void)
     g_free(x509_key_file);
     g_free(x509_cert_file);
     g_free(x509_cacert_file);
-
-#if SPICE_SERVER_VERSION >= 0x000c02
-    qemu_spice_register_ports();
-#endif
 
 #ifdef HAVE_SPICE_GL
     if (qemu_opt_get_bool(opts, "gl", 0)) {
@@ -839,7 +829,7 @@ void qemu_spice_init(void)
 #endif
 }
 
-int qemu_spice_add_interface(SpiceBaseInstance *sin)
+static int qemu_spice_add_interface(SpiceBaseInstance *sin)
 {
     if (!spice_server) {
         if (QTAILQ_FIRST(&qemu_spice_opts.head) != NULL) {
@@ -872,6 +862,56 @@ bool qemu_spice_have_display_interface(QemuConsole *con)
     return false;
 }
 
+/*
+ * Recursively (in reverse order) appends addresses of PCI devices as it moves
+ * up in the PCI hierarchy.
+ *
+ * @returns true on success, false when the buffer wasn't large enough
+ */
+static bool append_pci_address(char *buf, size_t buf_size, const PCIDevice *pci)
+{
+    PCIBus *bus = pci_get_bus(pci);
+    /*
+     * equivalent to if (!pci_bus_is_root(bus)), but the function is not built
+     * with PCI_CONFIG=n, avoid using an #ifdef by checking directly
+     */
+    if (bus->parent_dev != NULL) {
+        append_pci_address(buf, buf_size, bus->parent_dev);
+    }
+
+    size_t len = strlen(buf);
+    ssize_t written = snprintf(buf + len, buf_size - len, "/%02x.%x",
+        PCI_SLOT(pci->devfn), PCI_FUNC(pci->devfn));
+
+    return written > 0 && written < buf_size - len;
+}
+
+bool qemu_spice_fill_device_address(QemuConsole *con,
+                                    char *device_address,
+                                    size_t size)
+{
+    DeviceState *dev = DEVICE(object_property_get_link(OBJECT(con),
+                                                       "device",
+                                                       &error_abort));
+    PCIDevice *pci = (PCIDevice *) object_dynamic_cast(OBJECT(dev),
+                                                       TYPE_PCI_DEVICE);
+
+    if (pci == NULL) {
+        warn_report("Setting device address of a display device to SPICE: "
+                    "Not a PCI device.");
+        return false;
+    }
+
+    strncpy(device_address, "pci/0000", size);
+    if (!append_pci_address(device_address, size, pci)) {
+        warn_report("Setting device address of a display device to SPICE: "
+            "Too many PCI devices in the chain.");
+        return false;
+    }
+
+    return true;
+}
+
 int qemu_spice_add_display_interface(QXLInstance *qxlin, QemuConsole *con)
 {
     if (g_slist_find(spice_consoles, con)) {
@@ -901,8 +941,8 @@ static int qemu_spice_set_ticket(bool fail_if_conn, bool disconnect_if_conn)
                                    fail_if_conn, disconnect_if_conn);
 }
 
-int qemu_spice_set_passwd(const char *passwd,
-                          bool fail_if_conn, bool disconnect_if_conn)
+static int qemu_spice_set_passwd(const char *passwd,
+                                 bool fail_if_conn, bool disconnect_if_conn)
 {
     if (strcmp(auth, "spice") != 0) {
         return -1;
@@ -913,13 +953,13 @@ int qemu_spice_set_passwd(const char *passwd,
     return qemu_spice_set_ticket(fail_if_conn, disconnect_if_conn);
 }
 
-int qemu_spice_set_pw_expire(time_t expires)
+static int qemu_spice_set_pw_expire(time_t expires)
 {
     auth_expires = expires;
     return qemu_spice_set_ticket(false, false);
 }
 
-int qemu_spice_display_add_client(int csock, int skipauth, int tls)
+static int qemu_spice_display_add_client(int csock, int skipauth, int tls)
 {
     if (tls) {
         return spice_server_add_ssl_client(spice_server, csock, skipauth);
@@ -930,12 +970,20 @@ int qemu_spice_display_add_client(int csock, int skipauth, int tls)
 
 void qemu_spice_display_start(void)
 {
+    if (spice_display_is_running) {
+        return;
+    }
+
     spice_display_is_running = true;
     spice_server_vm_start(spice_server);
 }
 
 void qemu_spice_display_stop(void)
 {
+    if (!spice_display_is_running) {
+        return;
+    }
+
     spice_server_vm_stop(spice_server);
     spice_display_is_running = false;
 }
@@ -945,8 +993,20 @@ int qemu_spice_display_is_running(SimpleSpiceDisplay *ssd)
     return spice_display_is_running;
 }
 
+static struct QemuSpiceOps real_spice_ops = {
+    .init         = qemu_spice_init,
+    .display_init = qemu_spice_display_init,
+    .migrate_info = qemu_spice_migrate_info,
+    .set_passwd   = qemu_spice_set_passwd,
+    .set_pw_expire = qemu_spice_set_pw_expire,
+    .display_add_client = qemu_spice_display_add_client,
+    .add_interface = qemu_spice_add_interface,
+    .qmp_query = qmp_query_spice_real,
+};
+
 static void spice_register_config(void)
 {
+    qemu_spice = real_spice_ops;
     qemu_add_opts(&qemu_spice_opts);
 }
 opts_init(spice_register_config);

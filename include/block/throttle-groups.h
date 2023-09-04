@@ -27,6 +27,7 @@
 
 #include "qemu/throttle.h"
 #include "block/block_int.h"
+#include "qom/object.h"
 
 /* The ThrottleGroupMember structure indicates membership in a ThrottleGroup
  * and holds related data.
@@ -43,6 +44,11 @@ typedef struct ThrottleGroupMember {
      */
     unsigned int io_limits_disabled;
 
+    /* Number of pending throttle_group_restart_queue_entry() coroutines.
+     * Accessed with atomic operations.
+     */
+    unsigned int restart_pending;
+
     /* The following fields are protected by the ThrottleGroup lock.
      * See the ThrottleGroup documentation for details.
      * throttle_state tells us if I/O limits are configured. */
@@ -54,7 +60,7 @@ typedef struct ThrottleGroupMember {
 } ThrottleGroupMember;
 
 #define TYPE_THROTTLE_GROUP "throttle-group"
-#define THROTTLE_GROUP(obj) OBJECT_CHECK(ThrottleGroup, (obj), TYPE_THROTTLE_GROUP)
+OBJECT_DECLARE_SIMPLE_TYPE(ThrottleGroup, THROTTLE_GROUP)
 
 const char *throttle_group_get_name(ThrottleGroupMember *tgm);
 

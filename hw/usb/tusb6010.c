@@ -18,19 +18,22 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
+
 #include "qemu/osdep.h"
-#include "qemu-common.h"
+#include "qemu/module.h"
 #include "qemu/timer.h"
 #include "hw/usb.h"
+#include "hw/usb/hcd-musb.h"
 #include "hw/arm/omap.h"
+#include "hw/hw.h"
 #include "hw/irq.h"
-#include "hw/devices.h"
 #include "hw/sysbus.h"
+#include "qom/object.h"
 
 #define TYPE_TUSB6010 "tusb6010"
-#define TUSB(obj) OBJECT_CHECK(TUSBState, (obj), TYPE_TUSB6010)
+OBJECT_DECLARE_SIMPLE_TYPE(TUSBState, TUSB6010)
 
-typedef struct TUSBState {
+struct TUSBState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem[2];
@@ -66,7 +69,7 @@ typedef struct TUSBState {
     uint32_t pullup[2];
     uint32_t control_config;
     uint32_t otg_timer_val;
-} TUSBState;
+};
 
 #define TUSB_DEVCLOCK			60000000	/* 60 MHz */
 
@@ -774,7 +777,7 @@ static void tusb6010_irq(void *opaque, int source, int level)
 
 static void tusb6010_reset(DeviceState *dev)
 {
-    TUSBState *s = TUSB(dev);
+    TUSBState *s = TUSB6010(dev);
     int i;
 
     s->test_reset = TUSB_PROD_TEST_RESET_VAL;
@@ -808,10 +811,10 @@ static void tusb6010_reset(DeviceState *dev)
     musb_reset(s->musb);
 }
 
-static int tusb6010_init(SysBusDevice *sbd)
+static void tusb6010_realize(DeviceState *dev, Error **errp)
 {
-    DeviceState *dev = DEVICE(sbd);
-    TUSBState *s = TUSB(dev);
+    TUSBState *s = TUSB6010(dev);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     s->otg_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tusb_otg_tick, s);
     s->pwr_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tusb_power_tick, s);
@@ -822,15 +825,13 @@ static int tusb6010_init(SysBusDevice *sbd)
     sysbus_init_irq(sbd, &s->irq);
     qdev_init_gpio_in(dev, tusb6010_irq, musb_irq_max + 1);
     s->musb = musb_init(dev, 1);
-    return 0;
 }
 
 static void tusb6010_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
-    k->init = tusb6010_init;
+    dc->realize = tusb6010_realize;
     dc->reset = tusb6010_reset;
 }
 

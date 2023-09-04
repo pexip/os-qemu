@@ -24,6 +24,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "authz/base.h"
 #include "vnc.h"
 #include "trace.h"
 
@@ -110,7 +111,8 @@ size_t vnc_client_write_sasl(VncState *vs)
             g_source_remove(vs->ioc_tag);
         }
         vs->ioc_tag = qio_channel_add_watch(
-            vs->ioc, G_IO_IN, vnc_client_io, vs, NULL);
+            vs->ioc, G_IO_IN | G_IO_HUP | G_IO_ERR,
+            vnc_client_io, vs, NULL);
     }
 
     return ret;
@@ -146,13 +148,14 @@ size_t vnc_client_read_sasl(VncState *vs)
 static int vnc_auth_sasl_check_access(VncState *vs)
 {
     const void *val;
-    int err;
-    int allow;
+    int rv;
+    Error *err = NULL;
+    bool allow;
 
-    err = sasl_getprop(vs->sasl.conn, SASL_USERNAME, &val);
-    if (err != SASL_OK) {
+    rv = sasl_getprop(vs->sasl.conn, SASL_USERNAME, &val);
+    if (rv != SASL_OK) {
         trace_vnc_auth_fail(vs, vs->auth, "Cannot fetch SASL username",
-                            sasl_errstring(err, NULL, NULL));
+                            sasl_errstring(rv, NULL, NULL));
         return -1;
     }
     if (val == NULL) {
@@ -163,12 +166,19 @@ static int vnc_auth_sasl_check_access(VncState *vs)
     vs->sasl.username = g_strdup((const char*)val);
     trace_vnc_auth_sasl_username(vs, vs->sasl.username);
 
-    if (vs->vd->sasl.acl == NULL) {
+    if (vs->vd->sasl.authzid == NULL) {
         trace_vnc_auth_sasl_acl(vs, 1);
         return 0;
     }
 
-    allow = qemu_acl_party_is_allowed(vs->vd->sasl.acl, vs->sasl.username);
+    allow = qauthz_is_allowed_by_id(vs->vd->sasl.authzid,
+                                    vs->sasl.username, &err);
+    if (err) {
+        trace_vnc_auth_fail(vs, vs->auth, "Error from authz",
+                            error_get_pretty(err));
+        error_free(err);
+        return -1;
+    }
 
     trace_vnc_auth_sasl_acl(vs, allow);
     return allow ? 0 : -1;
@@ -513,6 +523,7 @@ vnc_socket_ip_addr_string(QIOChannelSocket *ioc,
 
     if (addr->type != SOCKET_ADDRESS_TYPE_INET) {
         error_setg(errp, "Not an inet socket type");
+        qapi_free_SocketAddress(addr);
         return NULL;
     }
     ret = g_strdup_printf("%s;%s", addr->u.inet.host, addr->u.inet.port);

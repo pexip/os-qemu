@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
@@ -10,7 +9,7 @@ __copyright__  = "Copyright 2012-2017, Lluís Vilanova <vilanova@ac.upc.edu>"
 __license__    = "GPL version 2 or (at your option) any later version"
 
 __maintainer__ = "Stefan Hajnoczi"
-__email__      = "stefanha@linux.vnet.ibm.com"
+__email__      = "stefanha@redhat.com"
 
 
 import re
@@ -35,7 +34,7 @@ def error(*lines):
 def out(*lines, **kwargs):
     """Write a set of output lines.
 
-    You can use kwargs as a shorthand for mapping variables when formating all
+    You can use kwargs as a shorthand for mapping variables when formatting all
     the strings in lines.
     """
     lines = [ l % kwargs for l in lines ]
@@ -274,6 +273,13 @@ class Event(object):
         props = groups["props"].split()
         fmt = groups["fmt"]
         fmt_trans = groups["fmt_trans"]
+        if fmt.find("%m") != -1 or fmt_trans.find("%m") != -1:
+            raise ValueError("Event format '%m' is forbidden, pass the error "
+                             "as an explicit trace argument")
+        if fmt.endswith(r'\n"'):
+            raise ValueError("Event format must not end with a newline "
+                             "character")
+
         if len(fmt_trans) > 0:
             fmt = [fmt_trans, fmt]
         args = Arguments.build(groups["args"])
@@ -350,6 +356,8 @@ def read_events(fobj, fname):
 
     events = []
     for lineno, line in enumerate(fobj, 1):
+        if line[-1] != '\n':
+            raise ValueError("%s does not end with a new line" % fname)
         if not line.strip():
             continue
         if line.lstrip().startswith('#'):
@@ -447,12 +455,12 @@ def generate(events, group, format, backends,
     import tracetool
 
     format = str(format)
-    if len(format) is 0:
+    if len(format) == 0:
         raise TracetoolError("format not set")
     if not tracetool.format.exists(format):
         raise TracetoolError("unknown format: %s" % format)
 
-    if len(backends) is 0:
+    if len(backends) == 0:
         raise TracetoolError("no backends specified")
     for backend in backends:
         if not tracetool.backend.exists(backend):
