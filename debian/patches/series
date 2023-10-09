@@ -63,3 +63,14 @@ ui-cursor-fix-integer-overflow-in-cursor_alloc-CVE-2021-4206.patch
 display-qxl-render-fix-race-condition-in-qxl_cursor-CVE-2021-4207.patch
 virtiofsd-drop-membership-of-all-supplementary-group-CVE-2022-0358.patch
 vhost-vsock-detach-the-virqueue-element-on-error-CVE-2022-26354.patch
+CVE-2023-0330.patch
+CVE-2023-1544.patch
+CVE-2023-3354.patch
+CVE-2021-3930.patch
+CVE-2023-3180.patch
+CVE-2021-20203.patch
+CVE-2021-3507.patch
+CVE-2020-14394.patch
+CVE-2023-3301.patch
+CVE-2022-0216.patch
+CVE-2021-20196.patch

@@ -1,3 +1,26 @@
+qemu (1:5.2+dfsg-11+deb11u3pexip1) pexip; urgency=medium
+
+  * New upstream release
+    With security fixes that don't affect Infinity
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Mon, 09 Oct 2023 15:16:00 +0100
+
+qemu (1:5.2+dfsg-11+deb11u3) bullseye; urgency=medium
+
+  * CVE-2021-20196 (Closes: #984453)
+  * CVE-2023-0330 (Closes: #1029155)
+  * CVE-2023-1544 (Closes: #1034179)
+  * CVE-2023-3354
+  * CVE-2021-3930
+  * CVE-2023-3180
+  * CVE-2021-20203 (Closes: #984452)
+  * CVE-2021-3507 (Closes: #987410)
+  * CVE-2020-14394 (Closes: #979677)
+  * CVE-2023-3301
+  * CVE-2022-0216 (Closes: #1014590)
+
+ -- Moritz Mühlenhoff <jmm@debian.org>  Mon, 04 Sep 2023 16:11:35 +0200
+
 qemu (1:5.2+dfsg-11+deb11u2pexip4) pexip-bullseye; urgency=medium
 
   * Bullseye rebuild for ARM64 inclusion
