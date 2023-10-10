@@ -420,7 +420,7 @@ b/skiboot/skiboot.lid:
 	  CROSS_COMPILE=${PPC64_CROSSPFX} V=${V}
 install-skiboot: b/skiboot/skiboot.lid
 	install -m 0644 -t "${sysdatadir}" $<
-sysdata-components += skiboot
+# sysdata-components += skiboot
 
 ### x86 optionrom
 build-x86-optionrom: b/optionrom/built

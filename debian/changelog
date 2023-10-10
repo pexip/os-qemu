@@ -1,3 +1,10 @@
+qemu (1:5.2+dfsg-11+deb11u3pexip2) pexip; urgency=medium
+
+  * Disable skiboot build
+    Depends on deprecated openssl APIs that we don't enable
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Tue, 10 Oct 2023 17:10:32 +0100
+
 qemu (1:5.2+dfsg-11+deb11u3pexip1) pexip; urgency=medium
 
   * New upstream release
