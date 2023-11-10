@@ -140,7 +140,7 @@ static void emulated_apdu_from_guest(CCIDCardState *base,
     const uint8_t *apdu, uint32_t len)
 {
     EmulatedState *card = EMULATED_CCID_CARD(base);
-    EmulEvent *event = (EmulEvent *)g_malloc(sizeof(EmulEvent) + len);
+    EmulEvent *event = g_malloc(sizeof(EmulEvent) + len);
 
     assert(event);
     event->p.data.type = EMUL_GUEST_APDU;
@@ -301,7 +301,7 @@ static void *event_thread(void *arg)
             } else {
                 if (event->reader != card->reader) {
                     fprintf(stderr,
-                        "ERROR: wrong reader: quiting event_thread\n");
+                        "ERROR: wrong reader: quitting event_thread\n");
                     break;
                 }
             }
@@ -612,6 +612,8 @@ static const TypeInfo emulated_card_info = {
     .instance_size = sizeof(EmulatedState),
     .class_init    = emulated_class_initfn,
 };
+module_obj(TYPE_EMULATED_CCID);
+module_kconfig(USB);
 
 static void ccid_card_emulated_register_types(void)
 {

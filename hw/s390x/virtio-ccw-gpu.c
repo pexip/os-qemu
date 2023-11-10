@@ -14,6 +14,15 @@
 #include "qapi/error.h"
 #include "qemu/module.h"
 #include "virtio-ccw.h"
+#include "hw/virtio/virtio-gpu.h"
+
+#define TYPE_VIRTIO_GPU_CCW "virtio-gpu-ccw"
+OBJECT_DECLARE_SIMPLE_TYPE(VirtIOGPUCcw, VIRTIO_GPU_CCW)
+
+struct VirtIOGPUCcw {
+    VirtioCcwDevice parent_obj;
+    VirtIOGPU vdev;
+};
 
 static void virtio_ccw_gpu_realize(VirtioCcwDevice *ccw_dev, Error **errp)
 {
@@ -59,10 +68,16 @@ static const TypeInfo virtio_ccw_gpu = {
     .instance_init = virtio_ccw_gpu_instance_init,
     .class_init    = virtio_ccw_gpu_class_init,
 };
+module_obj(TYPE_VIRTIO_GPU_CCW);
+module_kconfig(VIRTIO_CCW);
 
 static void virtio_ccw_gpu_register(void)
 {
-    type_register_static(&virtio_ccw_gpu);
+    if (have_virtio_ccw) {
+        type_register_static(&virtio_ccw_gpu);
+    }
 }
 
 type_init(virtio_ccw_gpu_register)
+
+module_arch("s390x");

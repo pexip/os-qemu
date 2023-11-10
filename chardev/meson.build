@@ -12,11 +12,11 @@ chardev_ss.add(files(
   'char-udp.c',
   'char.c',
 ))
-chardev_ss.add(when: 'CONFIG_POSIX', if_true: files(
+chardev_ss.add(when: 'CONFIG_POSIX', if_true: [files(
   'char-fd.c',
   'char-parallel.c',
   'char-pty.c',
-))
+), util])
 chardev_ss.add(when: 'CONFIG_WIN32', if_true: files(
   'char-console.c',
   'char-win-stdio.c',
@@ -25,17 +25,17 @@ chardev_ss.add(when: 'CONFIG_WIN32', if_true: files(
 
 chardev_ss = chardev_ss.apply(config_host, strict: false)
 
-softmmu_ss.add(files('chardev-sysemu.c', 'msmouse.c', 'wctablet.c', 'testdev.c'))
+softmmu_ss.add(files('msmouse.c', 'wctablet.c', 'testdev.c'))
 
 chardev_modules = {}
 
-if config_host.has_key('CONFIG_BRLAPI')
+if brlapi.found()
   module_ss = ss.source_set()
   module_ss.add(when: [brlapi], if_true: [files('baum.c'), pixman])
   chardev_modules += { 'baum': module_ss }
 endif
 
-if config_host.has_key('CONFIG_SPICE')
+if spice.found()
   module_ss = ss.source_set()
   module_ss.add(when: [spice], if_true: files('spice.c'))
   chardev_modules += { 'spice': module_ss }

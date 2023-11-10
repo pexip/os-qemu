@@ -19,14 +19,17 @@
 #include "chardev/char-fe.h"
 #include "exec/ioport.h"
 #include "exec/memory.h"
+#include "hw/qdev-core.h"
 #include "hw/irq.h"
-#include "sysemu/accel.h"
+#include "qemu/accel.h"
 #include "sysemu/cpu-timers.h"
 #include "qemu/config-file.h"
 #include "qemu/option.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "qemu/cutils.h"
+#include "qapi/qmp/qerror.h"
+#include "qom/object_interfaces.h"
 #include CONFIG_DEVICES
 #ifdef CONFIG_PSERIES
 #include "hw/ppc/spapr_rtas.h"
@@ -34,19 +37,33 @@
 
 #define MAX_IRQ 256
 
+#define TYPE_QTEST "qtest"
+
+OBJECT_DECLARE_SIMPLE_TYPE(QTest, QTEST)
+
+struct QTest {
+    Object parent;
+
+    bool has_machine_link;
+    char *chr_name;
+    Chardev *chr;
+    CharBackend qtest_chr;
+    char *log;
+};
+
 bool qtest_allowed;
 
 static DeviceState *irq_intercept_dev;
 static FILE *qtest_log_fp;
-static CharBackend qtest_chr;
+static QTest *qtest;
 static GString *inbuf;
 static int irq_levels[MAX_IRQ];
-static qemu_timeval start_time;
+static GTimer *timer;
 static bool qtest_opened;
 static void (*qtest_server_send)(void*, const char*);
 static void *qtest_server_send_opaque;
 
-#define FMT_timeval "%ld.%06ld"
+#define FMT_timeval "%.06f"
 
 /**
  * DOC: QTest Protocol
@@ -247,31 +264,16 @@ static int hex2nib(char ch)
     }
 }
 
-static void qtest_get_time(qemu_timeval *tv)
-{
-    qemu_gettimeofday(tv);
-    tv->tv_sec -= start_time.tv_sec;
-    tv->tv_usec -= start_time.tv_usec;
-    if (tv->tv_usec < 0) {
-        tv->tv_usec += 1000000;
-        tv->tv_sec -= 1;
-    }
-}
-
 static void qtest_send_prefix(CharBackend *chr)
 {
-    qemu_timeval tv;
-
     if (!qtest_log_fp || !qtest_opened) {
         return;
     }
 
-    qtest_get_time(&tv);
-    fprintf(qtest_log_fp, "[S +" FMT_timeval "] ",
-            (long) tv.tv_sec, (long) tv.tv_usec);
+    fprintf(qtest_log_fp, "[S +" FMT_timeval "] ", g_timer_elapsed(timer, NULL));
 }
 
-static void GCC_FMT_ATTR(1, 2) qtest_log_send(const char *fmt, ...)
+static void G_GNUC_PRINTF(1, 2) qtest_log_send(const char *fmt, ...)
 {
     va_list ap;
 
@@ -301,7 +303,7 @@ static void qtest_send(CharBackend *chr, const char *str)
     qtest_server_send(qtest_server_send_opaque, str);
 }
 
-static void GCC_FMT_ATTR(2, 3) qtest_sendf(CharBackend *chr,
+static void G_GNUC_PRINTF(2, 3) qtest_sendf(CharBackend *chr,
                                            const char *fmt, ...)
 {
     va_list ap;
@@ -320,7 +322,7 @@ static void qtest_irq_handler(void *opaque, int n, int level)
     qemu_set_irq(old_irq, level);
 
     if (irq_levels[n] != level) {
-        CharBackend *chr = &qtest_chr;
+        CharBackend *chr = &qtest->qtest_chr;
         irq_levels[n] = level;
         qtest_send_prefix(chr);
         qtest_sendf(chr, "IRQ %s %d\n",
@@ -369,12 +371,9 @@ static void qtest_process_command(CharBackend *chr, gchar **words)
     command = words[0];
 
     if (qtest_log_fp) {
-        qemu_timeval tv;
         int i;
 
-        qtest_get_time(&tv);
-        fprintf(qtest_log_fp, "[R +" FMT_timeval "]",
-                (long) tv.tv_sec, (long) tv.tv_usec);
+        fprintf(qtest_log_fp, "[R +" FMT_timeval "]", g_timer_elapsed(timer, NULL));
         for (i = 0; words[i]; i++) {
             fprintf(qtest_log_fp, " %s", words[i]);
         }
@@ -715,7 +714,7 @@ static void qtest_process_command(CharBackend *chr, gchar **words)
         qtest_send(chr, "OK\n");
     } else if (strcmp(words[0], "endianness") == 0) {
         qtest_send_prefix(chr);
-#if defined(TARGET_WORDS_BIGENDIAN)
+#if TARGET_BIG_ENDIAN
         qtest_sendf(chr, "OK big\n");
 #else
         qtest_sendf(chr, "OK little\n");
@@ -754,12 +753,18 @@ static void qtest_process_command(CharBackend *chr, gchar **words)
         qtest_sendf(chr, "OK %"PRIi64"\n",
                     (int64_t)qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
     } else if (strcmp(words[0], "module_load") == 0) {
+        Error *local_err = NULL;
+        int rv;
         g_assert(words[1] && words[2]);
 
         qtest_send_prefix(chr);
-        if (module_load_one(words[1], words[2], false)) {
+        rv = module_load(words[1], words[2], &local_err);
+        if (rv > 0) {
             qtest_sendf(chr, "OK\n");
         } else {
+            if (rv < 0) {
+                error_report_err(local_err);
+            }
             qtest_sendf(chr, "FAIL\n");
         }
     } else if (qtest_enabled() && strcmp(words[0], "clock_set") == 0) {
@@ -829,37 +834,57 @@ static void qtest_event(void *opaque, QEMUChrEvent event)
         for (i = 0; i < ARRAY_SIZE(irq_levels); i++) {
             irq_levels[i] = 0;
         }
-        qemu_gettimeofday(&start_time);
+
+        g_clear_pointer(&timer, g_timer_destroy);
+        timer = g_timer_new();
         qtest_opened = true;
         if (qtest_log_fp) {
-            fprintf(qtest_log_fp, "[I " FMT_timeval "] OPENED\n",
-                    (long) start_time.tv_sec, (long) start_time.tv_usec);
+            fprintf(qtest_log_fp, "[I " FMT_timeval "] OPENED\n", g_timer_elapsed(timer, NULL));
         }
         break;
     case CHR_EVENT_CLOSED:
         qtest_opened = false;
         if (qtest_log_fp) {
-            qemu_timeval tv;
-            qtest_get_time(&tv);
-            fprintf(qtest_log_fp, "[I +" FMT_timeval "] CLOSED\n",
-                    (long) tv.tv_sec, (long) tv.tv_usec);
+            fprintf(qtest_log_fp, "[I +" FMT_timeval "] CLOSED\n", g_timer_elapsed(timer, NULL));
         }
+        g_clear_pointer(&timer, g_timer_destroy);
         break;
     default:
         break;
     }
 }
+
 void qtest_server_init(const char *qtest_chrdev, const char *qtest_log, Error **errp)
 {
+    ERRP_GUARD();
     Chardev *chr;
+    Object *qtest;
 
     chr = qemu_chr_new("qtest", qtest_chrdev, NULL);
-
     if (chr == NULL) {
         error_setg(errp, "Failed to initialize device for qtest: \"%s\"",
                    qtest_chrdev);
         return;
     }
+
+    qtest = object_new(TYPE_QTEST);
+    object_property_set_str(qtest, "chardev", "qtest", &error_abort);
+    if (qtest_log) {
+        object_property_set_str(qtest, "log", qtest_log, &error_abort);
+    }
+    object_property_add_child(qdev_get_machine(), "qtest", qtest);
+    user_creatable_complete(USER_CREATABLE(qtest), errp);
+    if (*errp) {
+        object_unparent(qtest);
+    }
+    object_unref(OBJECT(chr));
+    object_unref(qtest);
+}
+
+static bool qtest_server_start(QTest *q, Error **errp)
+{
+    Chardev *chr = q->chr;
+    const char *qtest_log = q->log;
 
     if (qtest_log) {
         if (strcmp(qtest_log, "none") != 0) {
@@ -869,16 +894,20 @@ void qtest_server_init(const char *qtest_chrdev, const char *qtest_log, Error **
         qtest_log_fp = stderr;
     }
 
-    qemu_chr_fe_init(&qtest_chr, chr, errp);
-    qemu_chr_fe_set_handlers(&qtest_chr, qtest_can_read, qtest_read,
-                             qtest_event, NULL, &qtest_chr, NULL, true);
-    qemu_chr_fe_set_echo(&qtest_chr, true);
+    if (!qemu_chr_fe_init(&q->qtest_chr, chr, errp)) {
+        return false;
+    }
+    qemu_chr_fe_set_handlers(&q->qtest_chr, qtest_can_read, qtest_read,
+                             qtest_event, NULL, &q->qtest_chr, NULL, true);
+    qemu_chr_fe_set_echo(&q->qtest_chr, true);
 
     inbuf = g_string_new("");
 
     if (!qtest_server_send) {
-        qtest_server_set_send_handler(qtest_server_char_be_send, &qtest_chr);
+        qtest_server_set_send_handler(qtest_server_char_be_send, &q->qtest_chr);
     }
+    qtest = q;
+    return true;
 }
 
 void qtest_server_set_send_handler(void (*send)(void*, const char*),
@@ -890,7 +919,7 @@ void qtest_server_set_send_handler(void (*send)(void*, const char*),
 
 bool qtest_driver(void)
 {
-    return qtest_chr.chr != NULL;
+    return qtest && qtest->qtest_chr.chr != NULL;
 }
 
 void qtest_server_inproc_recv(void *dummy, const char *buf)
@@ -905,3 +934,129 @@ void qtest_server_inproc_recv(void *dummy, const char *buf)
         g_string_truncate(gstr, 0);
     }
 }
+
+static void qtest_complete(UserCreatable *uc, Error **errp)
+{
+    QTest *q = QTEST(uc);
+    if (qtest) {
+        error_setg(errp, "Only one instance of qtest can be created");
+        return;
+    }
+    if (!q->chr_name) {
+        error_setg(errp, "No backend specified");
+        return;
+    }
+
+    if (OBJECT(uc)->parent != qdev_get_machine()) {
+        q->has_machine_link = true;
+        object_property_add_const_link(qdev_get_machine(), "qtest", OBJECT(uc));
+    } else {
+        /* -qtest was used.  */
+    }
+
+    qtest_server_start(q, errp);
+}
+
+static void qtest_unparent(Object *obj)
+{
+    QTest *q = QTEST(obj);
+
+    if (qtest == q) {
+        qemu_chr_fe_disconnect(&q->qtest_chr);
+        assert(!qtest_opened);
+        qemu_chr_fe_deinit(&q->qtest_chr, false);
+        if (qtest_log_fp) {
+            fclose(qtest_log_fp);
+            qtest_log_fp = NULL;
+        }
+        qtest = NULL;
+    }
+
+    if (q->has_machine_link) {
+        object_property_del(qdev_get_machine(), "qtest");
+        q->has_machine_link = false;
+    }
+}
+
+static void qtest_set_log(Object *obj, const char *value, Error **errp)
+{
+    QTest *q = QTEST(obj);
+
+    if (qtest == q) {
+        error_setg(errp, "Property 'log' can not be set now");
+    } else {
+        g_free(q->log);
+        q->log = g_strdup(value);
+    }
+}
+
+static char *qtest_get_log(Object *obj, Error **errp)
+{
+    QTest *q = QTEST(obj);
+
+    return g_strdup(q->log);
+}
+
+static void qtest_set_chardev(Object *obj, const char *value, Error **errp)
+{
+    QTest *q = QTEST(obj);
+    Chardev *chr;
+
+    if (qtest == q) {
+        error_setg(errp, "Property 'chardev' can not be set now");
+        return;
+    }
+
+    chr = qemu_chr_find(value);
+    if (!chr) {
+        error_setg(errp, "Cannot find character device '%s'", value);
+        return;
+    }
+
+    g_free(q->chr_name);
+    q->chr_name = g_strdup(value);
+
+    if (q->chr) {
+        object_unref(q->chr);
+    }
+    q->chr = chr;
+    object_ref(chr);
+}
+
+static char *qtest_get_chardev(Object *obj, Error **errp)
+{
+    QTest *q = QTEST(obj);
+
+    return g_strdup(q->chr_name);
+}
+
+static void qtest_class_init(ObjectClass *oc, void *data)
+{
+    UserCreatableClass *ucc = USER_CREATABLE_CLASS(oc);
+
+    oc->unparent = qtest_unparent;
+    ucc->complete = qtest_complete;
+
+    object_class_property_add_str(oc, "chardev",
+                                  qtest_get_chardev, qtest_set_chardev);
+    object_class_property_add_str(oc, "log",
+                                  qtest_get_log, qtest_set_log);
+}
+
+static const TypeInfo qtest_info = {
+    .name = TYPE_QTEST,
+    .parent = TYPE_OBJECT,
+    .class_init = qtest_class_init,
+    .instance_size = sizeof(QTest),
+    .interfaces = (InterfaceInfo[]) {
+        { TYPE_USER_CREATABLE },
+        { }
+    }
+};
+
+static void register_types(void)
+{
+    type_register_static(&qtest_info);
+}
+
+type_init(register_types);

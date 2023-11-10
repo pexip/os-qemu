@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2016-2020 Red Hat, Inc.
+ *  Copyright (C) 2016-2022 Red Hat, Inc.
  *  Copyright (C) 2005  Anthony Liguori <anthony@codemonkey.ws>
  *
  *  Network Block Device
@@ -344,8 +344,9 @@ void nbd_client_new(QIOChannelSocket *sioc,
 void nbd_client_get(NBDClient *client);
 void nbd_client_put(NBDClient *client);
 
-void nbd_server_is_qemu_nbd(bool value);
+void nbd_server_is_qemu_nbd(int max_connections);
 bool nbd_server_is_running(void);
+int nbd_server_max_connections(void);
 void nbd_server_start(SocketAddress *addr, const char *tls_creds,
                       const char *tls_authz, uint32_t max_connections,
                       Error **errp);
@@ -364,7 +365,7 @@ static inline int nbd_read(QIOChannel *ioc, void *buffer, size_t size,
         if (desc) {
             error_prepend(errp, "Failed to read %s: ", desc);
         }
-        return -1;
+        return ret;
     }
 
     return 0;
@@ -375,8 +376,9 @@ static inline int nbd_read##bits(QIOChannel *ioc,                       \
                                  uint##bits##_t *val,                   \
                                  const char *desc, Error **errp)        \
 {                                                                       \
-    if (nbd_read(ioc, val, sizeof(*val), desc, errp) < 0) {             \
-        return -1;                                                      \
+    int ret = nbd_read(ioc, val, sizeof(*val), desc, errp);             \
+    if (ret < 0) {                                                      \
+        return ret;                                                     \
     }                                                                   \
     *val = be##bits##_to_cpu(*val);                                     \
     return 0;                                                           \
@@ -404,5 +406,24 @@ const char *nbd_rep_lookup(uint32_t rep);
 const char *nbd_info_lookup(uint16_t info);
 const char *nbd_cmd_lookup(uint16_t info);
 const char *nbd_err_lookup(int err);
+
+/* nbd/client-connection.c */
+typedef struct NBDClientConnection NBDClientConnection;
+
+void nbd_client_connection_enable_retry(NBDClientConnection *conn);
+
+NBDClientConnection *nbd_client_connection_new(const SocketAddress *saddr,
+                                               bool do_negotiation,
+                                               const char *export_name,
+                                               const char *x_dirty_bitmap,
+                                               QCryptoTLSCreds *tlscreds,
+                                               const char *tlshostname);
+void nbd_client_connection_release(NBDClientConnection *conn);
+
+QIOChannel *coroutine_fn
+nbd_co_establish_connection(NBDClientConnection *conn, NBDExportInfo *info,
+                            bool blocking, Error **errp);
+
+void nbd_co_establish_connection_cancel(NBDClientConnection *conn);
 
 #endif

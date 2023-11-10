@@ -8,7 +8,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
@@ -21,14 +20,17 @@
 #include "hw/i2c/i2c.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "hw/ssi/ssi.h"
 #include "hw/sd/sd.h"
 #include "chardev/char-fe.h"
 #include "sysemu/blockdev.h"
 #include "sysemu/qtest.h"
+#include "sysemu/rtc.h"
 #include "qemu/cutils.h"
 #include "qemu/log.h"
 #include "qom/object.h"
+#include "target/arm/cpregs.h"
 
 static struct {
     hwaddr io_base;
@@ -382,7 +384,6 @@ static const ARMCPRegInfo pxa_cp_reginfo[] = {
     { .name = "PWRMODE", .cp = 14, .crn = 7, .crm = 0, .opc1 = 0, .opc2 = 0,
       .access = PL1_RW, .type = ARM_CP_IO,
       .readfn = arm_cp_read_zero, .writefn = pxa2xx_pwrmode_write },
-    REGINFO_SENTINEL
 };
 
 static void pxa2xx_setup_cp14(PXA2xxState *s)
@@ -1304,6 +1305,8 @@ static int pxa2xx_i2c_event(I2CSlave *i2c, enum i2c_event event)
     case I2C_NACK:
         s->status |= 1 << 1;				/* set ACKNAK */
         break;
+    default:
+        return -1;
     }
     pxa2xx_i2c_update(s);
 
@@ -1436,7 +1439,7 @@ static void pxa2xx_i2c_write(void *opaque, hwaddr addr,
         break;
 
     case ISAR:
-        i2c_set_slave_address(I2C_SLAVE(s->slave), value & 0x7f);
+        i2c_slave_set_address(I2C_SLAVE(s->slave), value & 0x7f);
         break;
 
     case IDBR:

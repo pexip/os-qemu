@@ -49,11 +49,7 @@ migration_tls_get_creds(MigrationState *s,
                    s->parameters.tls_creds);
         return NULL;
     }
-    if (ret->endpoint != endpoint) {
-        error_setg(errp,
-                   "Expected TLS credentials for a %s endpoint",
-                   endpoint == QCRYPTO_TLS_CREDS_ENDPOINT_CLIENT ?
-                   "client" : "server");
+    if (!qcrypto_tls_creds_check_endpoint(ret, endpoint, errp)) {
         return NULL;
     }
 
@@ -141,10 +137,6 @@ QIOChannelTLS *migration_tls_client_create(MigrationState *s,
     if (s->parameters.tls_hostname && *s->parameters.tls_hostname) {
         hostname = s->parameters.tls_hostname;
     }
-    if (!hostname) {
-        error_setg(errp, "No hostname available for TLS");
-        return NULL;
-    }
 
     tioc = qio_channel_tls_new_client(
         ioc, creds, hostname, errp);
@@ -173,4 +165,13 @@ void migration_tls_channel_connect(MigrationState *s,
                               s,
                               NULL,
                               NULL);
+}
+
+bool migrate_channel_requires_tls_upgrade(QIOChannel *ioc)
+{
+    if (!migrate_use_tls()) {
+        return false;
+    }
+
+    return !object_dynamic_cast(OBJECT(ioc), TYPE_QIO_CHANNEL_TLS);
 }

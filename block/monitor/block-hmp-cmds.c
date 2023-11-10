@@ -101,7 +101,7 @@ void hmp_drive_add(Monitor *mon, const QDict *qdict)
         return;
     }
 
-    opts = drive_def(optstr);
+    opts = qemu_opts_parse_noisily(qemu_find_opts("drive"), optstr, false);
     if (!opts)
         return;
 
@@ -251,10 +251,10 @@ void hmp_drive_mirror(Monitor *mon, const QDict *qdict)
 
     if (!filename) {
         error_setg(&err, QERR_MISSING_PARAMETER, "target");
-        hmp_handle_error(mon, err);
-        return;
+        goto end;
     }
     qmp_drive_mirror(&mirror, &err);
+end:
     hmp_handle_error(mon, err);
 }
 
@@ -281,11 +281,11 @@ void hmp_drive_backup(Monitor *mon, const QDict *qdict)
 
     if (!filename) {
         error_setg(&err, QERR_MISSING_PARAMETER, "target");
-        hmp_handle_error(mon, err);
-        return;
+        goto end;
     }
 
     qmp_drive_backup(&backup, &err);
+end:
     hmp_handle_error(mon, err);
 }
 
@@ -356,8 +356,7 @@ void hmp_snapshot_blkdev(Monitor *mon, const QDict *qdict)
          * will be taken internally. Today it's actually required.
          */
         error_setg(&err, QERR_MISSING_PARAMETER, "snapshot-file");
-        hmp_handle_error(mon, err);
-        return;
+        goto end;
     }
 
     mode = reuse ? NEW_IMAGE_MODE_EXISTING : NEW_IMAGE_MODE_ABSOLUTE_PATHS;
@@ -365,6 +364,7 @@ void hmp_snapshot_blkdev(Monitor *mon, const QDict *qdict)
                                filename, false, NULL,
                                !!format, format,
                                true, mode, &err);
+end:
     hmp_handle_error(mon, err);
 }
 
@@ -489,7 +489,7 @@ void hmp_nbd_server_stop(Monitor *mon, const QDict *qdict)
     hmp_handle_error(mon, err);
 }
 
-void hmp_block_resize(Monitor *mon, const QDict *qdict)
+void coroutine_fn hmp_block_resize(Monitor *mon, const QDict *qdict)
 {
     const char *device = qdict_get_str(qdict, "device");
     int64_t size = qdict_get_int(qdict, "size");
@@ -507,21 +507,12 @@ void hmp_block_stream(Monitor *mon, const QDict *qdict)
     int64_t speed = qdict_get_try_int(qdict, "speed", 0);
 
     qmp_block_stream(true, device, device, base != NULL, base, false, NULL,
-                     false, NULL, qdict_haskey(qdict, "speed"), speed, true,
-                     BLOCKDEV_ON_ERROR_REPORT, false, false, false, false,
-                     &error);
+                     false, NULL, false, NULL,
+                     qdict_haskey(qdict, "speed"), speed, true,
+                     BLOCKDEV_ON_ERROR_REPORT, false, NULL, false, false, false,
+                     false, &error);
 
     hmp_handle_error(mon, error);
-}
-
-void hmp_block_passwd(Monitor *mon, const QDict *qdict)
-{
-    const char *device = qdict_get_str(qdict, "device");
-    const char *password = qdict_get_str(qdict, "password");
-    Error *err = NULL;
-
-    qmp_block_passwd(true, device, false, NULL, password, &err);
-    hmp_handle_error(mon, err);
 }
 
 void hmp_block_set_io_throttle(Monitor *mon, const QDict *qdict)
@@ -566,8 +557,10 @@ void hmp_eject(Monitor *mon, const QDict *qdict)
 
 void hmp_qemu_io(Monitor *mon, const QDict *qdict)
 {
-    BlockBackend *blk;
+    BlockBackend *blk = NULL;
+    BlockDriverState *bs = NULL;
     BlockBackend *local_blk = NULL;
+    AioContext *ctx = NULL;
     bool qdev = qdict_get_try_bool(qdict, "qdev", false);
     const char *device = qdict_get_str(qdict, "device");
     const char *command = qdict_get_str(qdict, "command");
@@ -582,17 +575,21 @@ void hmp_qemu_io(Monitor *mon, const QDict *qdict)
     } else {
         blk = blk_by_name(device);
         if (!blk) {
-            BlockDriverState *bs = bdrv_lookup_bs(NULL, device, &err);
-            if (bs) {
-                blk = local_blk = blk_new(bdrv_get_aio_context(bs),
-                                          0, BLK_PERM_ALL);
-                ret = blk_insert_bs(blk, bs, &err);
-                if (ret < 0) {
-                    goto fail;
-                }
-            } else {
+            bs = bdrv_lookup_bs(NULL, device, &err);
+            if (!bs) {
                 goto fail;
             }
+        }
+    }
+
+    ctx = blk ? blk_get_aio_context(blk) : bdrv_get_aio_context(bs);
+    aio_context_acquire(ctx);
+
+    if (bs) {
+        blk = local_blk = blk_new(bdrv_get_aio_context(bs), 0, BLK_PERM_ALL);
+        ret = blk_insert_bs(blk, bs, &err);
+        if (ret < 0) {
+            goto fail;
         }
     }
 
@@ -625,6 +622,11 @@ void hmp_qemu_io(Monitor *mon, const QDict *qdict)
 
 fail:
     blk_unref(local_blk);
+
+    if (ctx) {
+        aio_context_release(ctx);
+    }
+
     hmp_handle_error(mon, err);
 }
 
@@ -636,16 +638,16 @@ static void print_block_info(Monitor *mon, BlockInfo *info,
     assert(!info || !info->has_inserted || info->inserted == inserted);
 
     if (info && *info->device) {
-        monitor_printf(mon, "%s", info->device);
+        monitor_puts(mon, info->device);
         if (inserted && inserted->has_node_name) {
             monitor_printf(mon, " (%s)", inserted->node_name);
         }
     } else {
         assert(info || inserted);
-        monitor_printf(mon, "%s",
-                       inserted && inserted->has_node_name ? inserted->node_name
-                       : info && info->has_qdev ? info->qdev
-                       : "<anonymous>");
+        monitor_puts(mon,
+                     inserted && inserted->has_node_name ? inserted->node_name
+                     : info && info->has_qdev ? info->qdev
+                     : "<anonymous>");
     }
 
     if (inserted) {
@@ -899,10 +901,11 @@ void hmp_info_snapshots(Monitor *mon, const QDict *qdict)
 
     ImageEntry *image_entry, *next_ie;
     SnapshotEntry *snapshot_entry;
+    Error *err = NULL;
 
-    bs = bdrv_all_find_vmstate_bs();
+    bs = bdrv_all_find_vmstate_bs(NULL, false, NULL, &err);
     if (!bs) {
-        monitor_printf(mon, "No available block device supports snapshots\n");
+        error_report_err(err);
         return;
     }
     aio_context = bdrv_get_aio_context(bs);
@@ -952,7 +955,7 @@ void hmp_info_snapshots(Monitor *mon, const QDict *qdict)
     total = 0;
     for (i = 0; i < nb_sns; i++) {
         SnapshotEntry *next_sn;
-        if (bdrv_all_find_snapshot(sn_tab[i].name, &bs1) == 0) {
+        if (bdrv_all_has_snapshot(sn_tab[i].name, false, NULL, NULL) == 1) {
             global_snapshots[total] = i;
             total++;
             QTAILQ_FOREACH(image_entry, &image_list, next) {

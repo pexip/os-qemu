@@ -24,8 +24,9 @@
 #include "exec/cpu_ldst.h"
 #include "fpu/softfloat.h"
 
-static inline void QEMU_NORETURN raise_exception(CPURXState *env, int index,
-                                                 uintptr_t retaddr);
+static inline G_NORETURN
+void raise_exception(CPURXState *env, int index,
+                     uintptr_t retaddr);
 
 static void _set_psw(CPURXState *env, uint32_t psw, uint32_t rte)
 {
@@ -201,14 +202,14 @@ void helper_scmpu(CPURXState *env)
     if (env->regs[3] == 0) {
         return;
     }
-    while (env->regs[3] != 0) {
+    do {
         tmp0 = cpu_ldub_data_ra(env, env->regs[1]++, GETPC());
         tmp1 = cpu_ldub_data_ra(env, env->regs[2]++, GETPC());
         env->regs[3]--;
         if (tmp0 != tmp1 || tmp0 == '\0') {
             break;
         }
-    }
+    } while (env->regs[3] != 0);
     env->psw_z = tmp0 - tmp1;
     env->psw_c = (tmp0 >= tmp1);
 }
@@ -285,16 +286,16 @@ void helper_suntil(CPURXState *env, uint32_t sz)
     uint32_t tmp;
     tcg_debug_assert(sz < 3);
     if (env->regs[3] == 0) {
-        return ;
+        return;
     }
-    while (env->regs[3] != 0) {
+    do {
         tmp = cpu_ldufn[sz](env, env->regs[1], GETPC());
         env->regs[1] += 1 << sz;
         env->regs[3]--;
         if (tmp == env->regs[2]) {
             break;
         }
-    }
+    } while (env->regs[3] != 0);
     env->psw_z = tmp - env->regs[2];
     env->psw_c = (tmp <= env->regs[2]);
 }
@@ -304,16 +305,16 @@ void helper_swhile(CPURXState *env, uint32_t sz)
     uint32_t tmp;
     tcg_debug_assert(sz < 3);
     if (env->regs[3] == 0) {
-        return ;
+        return;
     }
-    while (env->regs[3] != 0) {
+    do {
         tmp = cpu_ldufn[sz](env, env->regs[1], GETPC());
         env->regs[1] += 1 << sz;
         env->regs[3]--;
         if (tmp != env->regs[2]) {
             break;
         }
-    }
+    } while (env->regs[3] != 0);
     env->psw_z = env->regs[3];
     env->psw_c = (tmp <= env->regs[2]);
 }
@@ -418,8 +419,9 @@ uint32_t helper_divu(CPURXState *env, uint32_t num, uint32_t den)
 }
 
 /* exception */
-static inline void QEMU_NORETURN raise_exception(CPURXState *env, int index,
-                                                 uintptr_t retaddr)
+static inline G_NORETURN
+void raise_exception(CPURXState *env, int index,
+                     uintptr_t retaddr)
 {
     CPUState *cs = env_cpu(env);
 
@@ -427,44 +429,37 @@ static inline void QEMU_NORETURN raise_exception(CPURXState *env, int index,
     cpu_loop_exit_restore(cs, retaddr);
 }
 
-void QEMU_NORETURN helper_raise_privilege_violation(CPURXState *env)
+G_NORETURN void helper_raise_privilege_violation(CPURXState *env)
 {
     raise_exception(env, 20, GETPC());
 }
 
-void QEMU_NORETURN helper_raise_access_fault(CPURXState *env)
+G_NORETURN void helper_raise_access_fault(CPURXState *env)
 {
     raise_exception(env, 21, GETPC());
 }
 
-void QEMU_NORETURN helper_raise_illegal_instruction(CPURXState *env)
+G_NORETURN void helper_raise_illegal_instruction(CPURXState *env)
 {
     raise_exception(env, 23, GETPC());
 }
 
-void QEMU_NORETURN helper_wait(CPURXState *env)
+G_NORETURN void helper_wait(CPURXState *env)
 {
     CPUState *cs = env_cpu(env);
 
     cs->halted = 1;
     env->in_sleep = 1;
+    env->psw_i = 1;
     raise_exception(env, EXCP_HLT, 0);
 }
 
-void QEMU_NORETURN helper_debug(CPURXState *env)
-{
-    CPUState *cs = env_cpu(env);
-
-    cs->exception_index = EXCP_DEBUG;
-    cpu_loop_exit(cs);
-}
-
-void QEMU_NORETURN helper_rxint(CPURXState *env, uint32_t vec)
+G_NORETURN void helper_rxint(CPURXState *env, uint32_t vec)
 {
     raise_exception(env, 0x100 + vec, 0);
 }
 
-void QEMU_NORETURN helper_rxbrk(CPURXState *env)
+G_NORETURN void helper_rxbrk(CPURXState *env)
 {
     raise_exception(env, 0x100, 0);
 }

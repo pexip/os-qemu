@@ -14,6 +14,7 @@
 #include CONFIG_DEVICES
 #include "exec/memop.h"
 #include "qemu/units.h"
+#include "qemu/log.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
@@ -21,7 +22,6 @@
 #include "qapi/error.h"
 #include "qapi/visitor.h"
 #include <sys/ioctl.h>
-#include "hw/hw.h"
 #include "hw/nvram/fw_cfg.h"
 #include "hw/qdev-properties.h"
 #include "pci.h"
@@ -43,19 +43,19 @@
 static const struct {
     uint32_t vendor;
     uint32_t device;
-} romblacklist[] = {
+} rom_denylist[] = {
     { 0x14e4, 0x168e }, /* Broadcom BCM 57810 */
 };
 
-bool vfio_blacklist_opt_rom(VFIOPCIDevice *vdev)
+bool vfio_opt_rom_in_denylist(VFIOPCIDevice *vdev)
 {
     int i;
 
-    for (i = 0 ; i < ARRAY_SIZE(romblacklist); i++) {
-        if (vfio_pci_is(vdev, romblacklist[i].vendor, romblacklist[i].device)) {
-            trace_vfio_quirk_rom_blacklisted(vdev->vbasedev.name,
-                                             romblacklist[i].vendor,
-                                             romblacklist[i].device);
+    for (i = 0 ; i < ARRAY_SIZE(rom_denylist); i++) {
+        if (vfio_pci_is(vdev, rom_denylist[i].vendor, rom_denylist[i].device)) {
+            trace_vfio_quirk_rom_in_denylist(vdev->vbasedev.name,
+                                             rom_denylist[i].vendor,
+                                             rom_denylist[i].device);
             return true;
         }
     }
@@ -264,8 +264,15 @@ static uint64_t vfio_ati_3c3_quirk_read(void *opaque,
     return data;
 }
 
+static void vfio_ati_3c3_quirk_write(void *opaque, hwaddr addr,
+                                        uint64_t data, unsigned size)
+{
+    qemu_log_mask(LOG_GUEST_ERROR, "%s: invalid access\n", __func__);
+}
+
 static const MemoryRegionOps vfio_ati_3c3_quirk = {
     .read = vfio_ati_3c3_quirk_read,
+    .write = vfio_ati_3c3_quirk_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
@@ -1349,7 +1356,7 @@ static bool vfio_radeon_smc_is_running(VFIOPCIDevice *vdev)
 /*
  * The scope of a config reset is controlled by a mode bit in the misc register
  * and a fuse, exposed as a bit in another register.  The fuse is the default
- * (0 = GFX, 1 = whole GPU), the misc bit is a toggle, with the forumula
+ * (0 = GFX, 1 = whole GPU), the misc bit is a toggle, with the formula
  * scope = !(misc ^ fuse), where the resulting scope is defined the same as
  * the fuse.  A truth table therefore tells us that if misc == fuse, we need
  * to flip the value of the bit in the misc register.
@@ -1488,9 +1495,8 @@ static void get_nv_gpudirect_clique_id(Object *obj, Visitor *v,
                                        const char *name, void *opaque,
                                        Error **errp)
 {
-    DeviceState *dev = DEVICE(obj);
     Property *prop = opaque;
-    uint8_t *ptr = qdev_get_prop_ptr(dev, prop);
+    uint8_t *ptr = object_field_prop_ptr(obj, prop);
 
     visit_type_uint8(v, name, ptr, errp);
 }
@@ -1499,14 +1505,8 @@ static void set_nv_gpudirect_clique_id(Object *obj, Visitor *v,
                                        const char *name, void *opaque,
                                        Error **errp)
 {
-    DeviceState *dev = DEVICE(obj);
     Property *prop = opaque;
-    uint8_t value, *ptr = qdev_get_prop_ptr(dev, prop);
-
-    if (dev->realized) {
-        qdev_prop_set_after_realize(dev, name, errp);
-        return;
-    }
+    uint8_t value, *ptr = object_field_prop_ptr(obj, prop);
 
     if (!visit_type_uint8(v, name, &value, errp)) {
         return;
@@ -1565,22 +1565,6 @@ static int vfio_add_nv_gpudirect_cap(VFIOPCIDevice *vdev, Error **errp)
     return 0;
 }
 
-static void vfio_pci_nvlink2_get_tgt(Object *obj, Visitor *v,
-                                     const char *name,
-                                     void *opaque, Error **errp)
-{
-    uint64_t tgt = (uintptr_t) opaque;
-    visit_type_uint64(v, name, &tgt, errp);
-}
-
-static void vfio_pci_nvlink2_get_link_speed(Object *obj, Visitor *v,
-                                                 const char *name,
-                                                 void *opaque, Error **errp)
-{
-    uint32_t link_speed = (uint32_t)(uintptr_t) opaque;
-    visit_type_uint32(v, name, &link_speed, errp);
-}
-
 int vfio_pci_nvidia_v100_ram_init(VFIOPCIDevice *vdev, Error **errp)
 {
     int ret;
@@ -1618,9 +1602,9 @@ int vfio_pci_nvidia_v100_ram_init(VFIOPCIDevice *vdev, Error **errp)
                                nv2reg->size, p);
     QLIST_INSERT_HEAD(&vdev->bars[0].quirks, quirk, next);
 
-    object_property_add(OBJECT(vdev), "nvlink2-tgt", "uint64",
-                        vfio_pci_nvlink2_get_tgt, NULL, NULL,
-                        (void *) (uintptr_t) cap->tgt);
+    object_property_add_uint64_ptr(OBJECT(vdev), "nvlink2-tgt",
+                                   (uint64_t *) &cap->tgt,
+                                   OBJ_PROP_FLAG_READ);
     trace_vfio_pci_nvidia_gpu_setup_quirk(vdev->vbasedev.name, cap->tgt,
                                           nv2reg->size);
 free_exit:
@@ -1679,15 +1663,15 @@ int vfio_pci_nvlink2_init(VFIOPCIDevice *vdev, Error **errp)
         QLIST_INSERT_HEAD(&vdev->bars[0].quirks, quirk, next);
     }
 
-    object_property_add(OBJECT(vdev), "nvlink2-tgt", "uint64",
-                        vfio_pci_nvlink2_get_tgt, NULL, NULL,
-                        (void *) (uintptr_t) captgt->tgt);
+    object_property_add_uint64_ptr(OBJECT(vdev), "nvlink2-tgt",
+                                   (uint64_t *) &captgt->tgt,
+                                   OBJ_PROP_FLAG_READ);
     trace_vfio_pci_nvlink2_setup_quirk_ssatgt(vdev->vbasedev.name, captgt->tgt,
                                               atsdreg->size);
 
-    object_property_add(OBJECT(vdev), "nvlink2-link-speed", "uint32",
-                        vfio_pci_nvlink2_get_link_speed, NULL, NULL,
-                        (void *) (uintptr_t) capspeed->link_speed);
+    object_property_add_uint32_ptr(OBJECT(vdev), "nvlink2-link-speed",
+                                   &capspeed->link_speed,
+                                   OBJ_PROP_FLAG_READ);
     trace_vfio_pci_nvlink2_setup_quirk_lnkspd(vdev->vbasedev.name,
                                               capspeed->link_speed);
 free_exit:

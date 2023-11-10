@@ -39,6 +39,8 @@ struct PCIEPort {
 
 void pcie_port_init_reg(PCIDevice *d);
 
+PCIDevice *pcie_find_port_by_pn(PCIBus *bus, uint8_t pn);
+
 #define TYPE_PCIE_SLOT "pcie-slot"
 OBJECT_DECLARE_SIMPLE_TYPE(PCIESlot, PCIE_SLOT)
 
@@ -57,8 +59,11 @@ struct PCIESlot {
     /* Disable ACS (really for a pcie_root_port) */
     bool        disable_acs;
 
-    /* Indicates whether hot-plug is enabled on the slot */
+    /* Indicates whether any type of hot-plug is allowed on the slot */
     bool        hotplug;
+
+    bool        native_hotplug;
+
     QLIST_ENTRY(PCIESlot) next;
 };
 
