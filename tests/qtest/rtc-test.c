@@ -111,7 +111,7 @@ static void cmos_get_date_time(struct tm *date)
     date->tm_mday = mday;
     date->tm_mon = mon - 1;
     date->tm_year = base_year + year - 1900;
-#ifndef __sun__
+#if !defined(__sun__) && !defined(_WIN32)
     date->tm_gmtoff = 0;
 #endif
 
@@ -686,7 +686,7 @@ static void periodic_timer(void)
 
 int main(int argc, char **argv)
 {
-    QTestState *s = NULL;
+    QTestState *s;
     int ret;
 
     g_test_init(&argc, &argv, NULL);
@@ -712,9 +712,7 @@ int main(int argc, char **argv)
 
     ret = g_test_run();
 
-    if (s) {
-        qtest_quit(s);
-    }
+    qtest_quit(s);
 
     return ret;
 }

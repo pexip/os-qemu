@@ -87,6 +87,14 @@ specific type:
    #define MY_DEVICE(obj) \
       OBJECT_CHECK(MyDevice, obj, TYPE_MY_DEVICE)
 
+In case the ObjectClass implementation can be built as module a
+module_obj() line must be added to make sure qemu loads the module
+when the object is needed.
+
+.. code-block:: c
+
+   module_obj(TYPE_MY_DEVICE);
+
 Class Initialization
 ====================
 
@@ -284,8 +292,7 @@ in the header file:
 .. code-block:: c
    :caption: Declaring a simple type
 
-   OBJECT_DECLARE_SIMPLE_TYPE(MyDevice, my_device,
-                              MY_DEVICE, DEVICE)
+   OBJECT_DECLARE_SIMPLE_TYPE(MyDevice, MY_DEVICE)
 
 This is equivalent to the following:
 
@@ -364,8 +371,8 @@ This accepts an array of interface type names.
                                       { TYPE_USER_CREATABLE },
                                       { NULL })
 
-If the type is not intended to be instantiated, then then
-the OBJECT_DEFINE_ABSTRACT_TYPE() macro can be used instead:
+If the type is not intended to be instantiated, then the
+OBJECT_DEFINE_ABSTRACT_TYPE() macro can be used instead:
 
 .. code-block:: c
    :caption: Defining a simple abstract type

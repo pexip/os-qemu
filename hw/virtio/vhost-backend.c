@@ -24,13 +24,15 @@ static int vhost_kernel_call(struct vhost_dev *dev, unsigned long int request,
                              void *arg)
 {
     int fd = (uintptr_t) dev->opaque;
+    int ret;
 
     assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_KERNEL);
 
-    return ioctl(fd, request, arg);
+    ret = ioctl(fd, request, arg);
+    return ret < 0 ? -errno : ret;
 }
 
-static int vhost_kernel_init(struct vhost_dev *dev, void *opaque)
+static int vhost_kernel_init(struct vhost_dev *dev, void *opaque, Error **errp)
 {
     assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_KERNEL);
 
@@ -45,7 +47,7 @@ static int vhost_kernel_cleanup(struct vhost_dev *dev)
 
     assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_KERNEL);
 
-    return close(fd);
+    return close(fd) < 0 ? -errno : 0;
 }
 
 static int vhost_kernel_memslots_limit(struct vhost_dev *dev)
@@ -56,7 +58,7 @@ static int vhost_kernel_memslots_limit(struct vhost_dev *dev)
     if (g_file_get_contents("/sys/module/vhost/parameters/max_mem_regions",
                             &s, NULL, NULL)) {
         uint64_t val = g_ascii_strtoull(s, NULL, 10);
-        if (!((val == G_MAXUINT64 || !val) && errno)) {
+        if (val < INT_MAX && val > 0) {
             g_free(s);
             return val;
         }
@@ -144,6 +146,12 @@ static int vhost_kernel_set_vring_call(struct vhost_dev *dev,
     return vhost_kernel_call(dev, VHOST_SET_VRING_CALL, file);
 }
 
+static int vhost_kernel_set_vring_err(struct vhost_dev *dev,
+                                      struct vhost_vring_file *file)
+{
+    return vhost_kernel_call(dev, VHOST_SET_VRING_ERR, file);
+}
+
 static int vhost_kernel_set_vring_busyloop_timeout(struct vhost_dev *dev,
                                                    struct vhost_vring_state *s)
 {
@@ -201,7 +209,6 @@ static int vhost_kernel_get_vq_index(struct vhost_dev *dev, int idx)
     return idx - dev->vq_index;
 }
 
-#ifdef CONFIG_VHOST_VSOCK
 static int vhost_kernel_vsock_set_guest_cid(struct vhost_dev *dev,
                                             uint64_t guest_cid)
 {
@@ -212,7 +219,6 @@ static int vhost_kernel_vsock_set_running(struct vhost_dev *dev, int start)
 {
     return vhost_kernel_call(dev, VHOST_VSOCK_SET_RUNNING, &start);
 }
-#endif /* CONFIG_VHOST_VSOCK */
 
 static void vhost_kernel_iotlb_read(void *opaque)
 {
@@ -291,7 +297,7 @@ static void vhost_kernel_set_iotlb_callback(struct vhost_dev *dev,
         qemu_set_fd_handler((uintptr_t)dev->opaque, NULL, NULL, NULL);
 }
 
-static const VhostOps kernel_ops = {
+const VhostOps kernel_ops = {
         .backend_type = VHOST_BACKEND_TYPE_KERNEL,
         .vhost_backend_init = vhost_kernel_init,
         .vhost_backend_cleanup = vhost_kernel_cleanup,
@@ -309,6 +315,7 @@ static const VhostOps kernel_ops = {
         .vhost_get_vring_base = vhost_kernel_get_vring_base,
         .vhost_set_vring_kick = vhost_kernel_set_vring_kick,
         .vhost_set_vring_call = vhost_kernel_set_vring_call,
+        .vhost_set_vring_err = vhost_kernel_set_vring_err,
         .vhost_set_vring_busyloop_timeout =
                                 vhost_kernel_set_vring_busyloop_timeout,
         .vhost_set_features = vhost_kernel_set_features,
@@ -317,42 +324,12 @@ static const VhostOps kernel_ops = {
         .vhost_set_owner = vhost_kernel_set_owner,
         .vhost_reset_device = vhost_kernel_reset_device,
         .vhost_get_vq_index = vhost_kernel_get_vq_index,
-#ifdef CONFIG_VHOST_VSOCK
         .vhost_vsock_set_guest_cid = vhost_kernel_vsock_set_guest_cid,
         .vhost_vsock_set_running = vhost_kernel_vsock_set_running,
-#endif /* CONFIG_VHOST_VSOCK */
         .vhost_set_iotlb_callback = vhost_kernel_set_iotlb_callback,
         .vhost_send_device_iotlb_msg = vhost_kernel_send_device_iotlb_msg,
 };
 #endif
-
-int vhost_set_backend_type(struct vhost_dev *dev, VhostBackendType backend_type)
-{
-    int r = 0;
-
-    switch (backend_type) {
-#ifdef CONFIG_VHOST_KERNEL
-    case VHOST_BACKEND_TYPE_KERNEL:
-        dev->vhost_ops = &kernel_ops;
-        break;
-#endif
-#ifdef CONFIG_VHOST_USER
-    case VHOST_BACKEND_TYPE_USER:
-        dev->vhost_ops = &user_ops;
-        break;
-#endif
-#ifdef CONFIG_VHOST_VDPA
-    case VHOST_BACKEND_TYPE_VDPA:
-        dev->vhost_ops = &vdpa_ops;
-        break;
-#endif
-    default:
-        error_report("Unknown vhost backend type");
-        r = -1;
-    }
-
-    return r;
-}
 
 int vhost_backend_update_device_iotlb(struct vhost_dev *dev,
                                              uint64_t iova, uint64_t uaddr,
@@ -405,6 +382,11 @@ int vhost_backend_handle_iotlb_msg(struct vhost_dev *dev,
                                           struct vhost_iotlb_msg *imsg)
 {
     int ret = 0;
+
+    if (unlikely(!dev->vdev)) {
+        error_report("Unexpected IOTLB message when virtio device is stopped");
+        return -EINVAL;
+    }
 
     switch (imsg->type) {
     case VHOST_IOTLB_MISS:

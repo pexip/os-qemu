@@ -15,6 +15,8 @@
 #include "qapi/qapi-types-tpm.h"
 #include "qom/object.h"
 
+#ifdef CONFIG_TPM
+
 int tpm_config_parse(QemuOptsList *opts_list, const char *optarg);
 int tpm_init(void);
 void tpm_cleanup(void);
@@ -72,5 +74,18 @@ static inline TPMVersion tpm_get_version(TPMIf *ti)
 
     return TPM_IF_GET_CLASS(ti)->get_version(ti);
 }
+
+#else /* CONFIG_TPM */
+
+#define tpm_init()  (0)
+#define tpm_cleanup()
+
+/* needed for an alignment check in non-tpm code */
+static inline Object *TPM_IS_CRB(Object *obj)
+{
+     return NULL;
+}
+
+#endif /* CONFIG_TPM */
 
 #endif /* QEMU_TPM_H */

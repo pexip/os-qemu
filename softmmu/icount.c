@@ -23,7 +23,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/cutils.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
@@ -176,9 +175,6 @@ static void icount_adjust(void)
     int64_t cur_icount;
     int64_t delta;
 
-    /* Protected by TimersState mutex.  */
-    static int64_t last_delta;
-
     /* If the VM is not running, then do nothing.  */
     if (!runstate_is_running()) {
         return;
@@ -193,20 +189,20 @@ static void icount_adjust(void)
     delta = cur_icount - cur_time;
     /* FIXME: This is a very crude algorithm, somewhat prone to oscillation.  */
     if (delta > 0
-        && last_delta + ICOUNT_WOBBLE < delta * 2
+        && timers_state.last_delta + ICOUNT_WOBBLE < delta * 2
         && timers_state.icount_time_shift > 0) {
         /* The guest is getting too far ahead.  Slow time down.  */
         qatomic_set(&timers_state.icount_time_shift,
                     timers_state.icount_time_shift - 1);
     }
     if (delta < 0
-        && last_delta - ICOUNT_WOBBLE > delta * 2
+        && timers_state.last_delta - ICOUNT_WOBBLE > delta * 2
         && timers_state.icount_time_shift < MAX_ICOUNT_SHIFT) {
         /* The guest is getting too far behind.  Speed time up.  */
         qatomic_set(&timers_state.icount_time_shift,
                     timers_state.icount_time_shift + 1);
     }
-    last_delta = delta;
+    timers_state.last_delta = delta;
     qatomic_set_i64(&timers_state.qemu_icount_bias,
                     cur_icount - (timers_state.qemu_icount
                                   << timers_state.icount_time_shift));
@@ -326,7 +322,7 @@ void icount_start_warp_timer(void)
              * to vCPU was processed in advance and vCPU went to sleep.
              * Therefore we have to wake it up for doing someting.
              */
-            if (replay_has_checkpoint()) {
+            if (replay_has_event()) {
                 qemu_clock_notify(QEMU_CLOCK_VIRTUAL);
             }
             return;
@@ -396,7 +392,7 @@ void icount_start_warp_timer(void)
 
 void icount_account_warp_timer(void)
 {
-    if (!icount_enabled() || !icount_sleep) {
+    if (!icount_sleep) {
         return;
     }
 
@@ -407,6 +403,8 @@ void icount_account_warp_timer(void)
     if (!runstate_is_running()) {
         return;
     }
+
+    replay_async_events();
 
     /* warp clock deterministically in record/replay mode */
     if (!replay_checkpoint(CHECKPOINT_CLOCK_WARP_ACCOUNT)) {
@@ -489,4 +487,12 @@ void icount_configure(QemuOpts *opts, Error **errp)
     timer_mod(timers_state.icount_vm_timer,
                    qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                    NANOSECONDS_PER_SECOND / 10);
+}
+
+void icount_notify_exit(void)
+{
+    if (icount_enabled() && current_cpu) {
+        qemu_cpu_kick(current_cpu);
+        qemu_clock_notify(QEMU_CLOCK_VIRTUAL);
+    }
 }

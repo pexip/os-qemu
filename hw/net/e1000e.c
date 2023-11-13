@@ -35,6 +35,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/units.h"
+#include "net/eth.h"
 #include "net/net.h"
 #include "net/tap.h"
 #include "qemu/module.h"
@@ -79,7 +80,7 @@ struct E1000EState {
     bool disable_vnet;
 
     E1000ECore core;
-
+    bool init_vet;
 };
 
 #define E1000E_MMIO_IDX     0
@@ -275,25 +276,18 @@ e1000e_unuse_msix_vectors(E1000EState *s, int num_vectors)
     }
 }
 
-static bool
+static void
 e1000e_use_msix_vectors(E1000EState *s, int num_vectors)
 {
     int i;
     for (i = 0; i < num_vectors; i++) {
-        int res = msix_vector_use(PCI_DEVICE(s), i);
-        if (res < 0) {
-            trace_e1000e_msix_use_vector_fail(i, res);
-            e1000e_unuse_msix_vectors(s, i);
-            return false;
-        }
+        msix_vector_use(PCI_DEVICE(s), i);
     }
-    return true;
 }
 
 static void
 e1000e_init_msix(E1000EState *s)
 {
-    PCIDevice *d = PCI_DEVICE(s);
     int res = msix_init(PCI_DEVICE(s), E1000E_MSIX_VEC_NUM,
                         &s->msix,
                         E1000E_MSIX_IDX, E1000E_MSIX_TABLE,
@@ -304,9 +298,7 @@ e1000e_init_msix(E1000EState *s)
     if (res < 0) {
         trace_e1000e_msix_init_fail(res);
     } else {
-        if (!e1000e_use_msix_vectors(s, E1000E_MSIX_VEC_NUM)) {
-            msix_uninit(d, &s->msix, &s->msix);
-        }
+        e1000e_use_msix_vectors(s, E1000E_MSIX_VEC_NUM);
     }
 }
 
@@ -527,6 +519,10 @@ static void e1000e_qdev_reset(DeviceState *dev)
     trace_e1000e_cb_qdev_reset();
 
     e1000e_core_reset(&s->core);
+
+    if (s->init_vet) {
+        s->core.mac[VET] = ETH_P_VLAN;
+    }
 }
 
 static int e1000e_pre_save(void *opaque)
@@ -666,6 +662,7 @@ static Property e1000e_properties[] = {
                         e1000e_prop_subsys_ven, uint16_t),
     DEFINE_PROP_SIGNED("subsys", E1000EState, subsys, 0,
                         e1000e_prop_subsys, uint16_t),
+    DEFINE_PROP_BOOL("init-vet", E1000EState, init_vet, true),
     DEFINE_PROP_END_OF_LIST(),
 };
 

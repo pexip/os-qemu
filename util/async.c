@@ -32,6 +32,8 @@
 #include "qemu/rcu_queue.h"
 #include "block/raw-aio.h"
 #include "qemu/coroutine_int.h"
+#include "qemu/coroutine-tls.h"
+#include "sysemu/cpu-timers.h"
 #include "trace.h"
 
 /***********************************************************/
@@ -57,6 +59,7 @@ enum {
 
 struct QEMUBH {
     AioContext *ctx;
+    const char *name;
     QEMUBHFunc *cb;
     void *opaque;
     QSLIST_ENTRY(QEMUBH) next;
@@ -82,6 +85,13 @@ static void aio_bh_enqueue(QEMUBH *bh, unsigned new_flags)
     }
 
     aio_notify(ctx);
+    /*
+     * Workaround for record/replay.
+     * vCPU execution should be suspended when new BH is set.
+     * This is needed to avoid guest timeouts caused
+     * by the long cycles of the execution.
+     */
+    icount_notify_exit();
 }
 
 /* Only called from aio_bh_poll() and aio_ctx_finalize() */
@@ -107,7 +117,8 @@ static QEMUBH *aio_bh_dequeue(BHList *head, unsigned *flags)
     return bh;
 }
 
-void aio_bh_schedule_oneshot(AioContext *ctx, QEMUBHFunc *cb, void *opaque)
+void aio_bh_schedule_oneshot_full(AioContext *ctx, QEMUBHFunc *cb,
+                                  void *opaque, const char *name)
 {
     QEMUBH *bh;
     bh = g_new(QEMUBH, 1);
@@ -115,11 +126,13 @@ void aio_bh_schedule_oneshot(AioContext *ctx, QEMUBHFunc *cb, void *opaque)
         .ctx = ctx,
         .cb = cb,
         .opaque = opaque,
+        .name = name,
     };
     aio_bh_enqueue(bh, BH_SCHEDULED | BH_ONESHOT);
 }
 
-QEMUBH *aio_bh_new(AioContext *ctx, QEMUBHFunc *cb, void *opaque)
+QEMUBH *aio_bh_new_full(AioContext *ctx, QEMUBHFunc *cb, void *opaque,
+                        const char *name)
 {
     QEMUBH *bh;
     bh = g_new(QEMUBH, 1);
@@ -127,6 +140,7 @@ QEMUBH *aio_bh_new(AioContext *ctx, QEMUBHFunc *cb, void *opaque)
         .ctx = ctx,
         .cb = cb,
         .opaque = opaque,
+        .name = name,
     };
     return bh;
 }
@@ -339,13 +353,25 @@ aio_ctx_finalize(GSource     *source)
     assert(QSIMPLEQ_EMPTY(&ctx->bh_slice_list));
 
     while ((bh = aio_bh_dequeue(&ctx->bh_list, &flags))) {
-        /* qemu_bh_delete() must have been called on BHs in this AioContext */
-        assert(flags & BH_DELETED);
+        /*
+         * qemu_bh_delete() must have been called on BHs in this AioContext. In
+         * many cases memory leaks, hangs, or inconsistent state occur when a
+         * BH is leaked because something still expects it to run.
+         *
+         * If you hit this, fix the lifecycle of the BH so that
+         * qemu_bh_delete() and any associated cleanup is called before the
+         * AioContext is finalized.
+         */
+        if (unlikely(!(flags & BH_DELETED))) {
+            fprintf(stderr, "%s: BH '%s' leaked, aborting...\n",
+                    __func__, bh->name);
+            abort();
+        }
 
         g_free(bh);
     }
 
-    aio_set_event_notifier(ctx, &ctx->notifier, false, NULL, NULL);
+    aio_set_event_notifier(ctx, &ctx->notifier, false, NULL, NULL, NULL);
     event_notifier_cleanup(&ctx->notifier);
     qemu_rec_mutex_destroy(&ctx->lock);
     qemu_lockcnt_destroy(&ctx->list_lock);
@@ -468,6 +494,11 @@ static bool aio_context_notifier_poll(void *opaque)
     return qatomic_read(&ctx->notified);
 }
 
+static void aio_context_notifier_poll_ready(EventNotifier *e)
+{
+    /* Do nothing, we just wanted to kick the event loop */
+}
+
 static void co_schedule_bh_cb(void *opaque)
 {
     AioContext *ctx = opaque;
@@ -519,7 +550,8 @@ AioContext *aio_context_new(Error **errp)
     aio_set_event_notifier(ctx, &ctx->notifier,
                            false,
                            aio_context_notifier_cb,
-                           aio_context_notifier_poll);
+                           aio_context_notifier_poll,
+                           aio_context_notifier_poll_ready);
 #ifdef CONFIG_LINUX_AIO
     ctx->linux_aio = NULL;
 #endif
@@ -536,6 +568,11 @@ AioContext *aio_context_new(Error **errp)
     ctx->poll_max_ns = 0;
     ctx->poll_grow = 0;
     ctx->poll_shrink = 0;
+
+    ctx->aio_max_batch = 0;
+
+    ctx->thread_pool_min = 0;
+    ctx->thread_pool_max = THREAD_POOL_MAX_THREADS_DEFAULT;
 
     return ctx;
 fail:
@@ -648,4 +685,42 @@ void aio_context_acquire(AioContext *ctx)
 void aio_context_release(AioContext *ctx)
 {
     qemu_rec_mutex_unlock(&ctx->lock);
+}
+
+QEMU_DEFINE_STATIC_CO_TLS(AioContext *, my_aiocontext)
+
+AioContext *qemu_get_current_aio_context(void)
+{
+    AioContext *ctx = get_my_aiocontext();
+    if (ctx) {
+        return ctx;
+    }
+    if (qemu_mutex_iothread_locked()) {
+        /* Possibly in a vCPU thread.  */
+        return qemu_get_aio_context();
+    }
+    return NULL;
+}
+
+void qemu_set_current_aio_context(AioContext *ctx)
+{
+    assert(!get_my_aiocontext());
+    set_my_aiocontext(ctx);
+}
+
+void aio_context_set_thread_pool_params(AioContext *ctx, int64_t min,
+                                        int64_t max, Error **errp)
+{
+
+    if (min > max || !max || min > INT_MAX || max > INT_MAX) {
+        error_setg(errp, "bad thread-pool-min/thread-pool-max values");
+        return;
+    }
+
+    ctx->thread_pool_min = min;
+    ctx->thread_pool_max = max;
+
+    if (ctx->thread_pool) {
+        thread_pool_update_params(ctx->thread_pool, ctx);
+    }
 }

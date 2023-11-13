@@ -18,9 +18,6 @@ import socket
 import logging
 import time
 import datetime
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'python'))
-from qemu.accel import kvm_available
-from qemu.machine import QEMUMachine
 import subprocess
 import hashlib
 import argparse
@@ -30,6 +27,9 @@ import shutil
 import multiprocessing
 import traceback
 import shlex
+
+from qemu.machine import QEMUMachine
+from qemu.utils import get_info_usernet_hostfwd_port, kvm_available
 
 SSH_KEY_FILE = os.path.join(os.path.dirname(__file__),
                "..", "keys", "id_rsa")
@@ -96,8 +96,14 @@ class BaseVM(object):
         self._genisoimage = args.genisoimage
         self._build_path = args.build_path
         self._efi_aarch64 = args.efi_aarch64
+        self._source_path = args.source_path
         # Allow input config to override defaults.
         self._config = DEFAULT_CONFIG.copy()
+
+        # 1GB per core, minimum of 4. This is only a default.
+        mem = max(4, args.jobs)
+        self._config['memory'] = f"{mem}G"
+
         if config != None:
             self._config.update(config)
         self.validate_ssh_keys()
@@ -227,7 +233,8 @@ class BaseVM(object):
                    "-o", "UserKnownHostsFile=" + os.devnull,
                    "-o",
                    "ConnectTimeout={}".format(self._config["ssh_timeout"]),
-                   "-p", self.ssh_port, "-i", self._ssh_tmp_key_file]
+                   "-p", str(self.ssh_port), "-i", self._ssh_tmp_key_file,
+                   "-o", "IdentitiesOnly=yes"]
         # If not in debug mode, set ssh to quiet mode to
         # avoid printing the results of commands.
         if not self.debug:
@@ -305,12 +312,8 @@ class BaseVM(object):
         # Init console so we can start consuming the chars.
         self.console_init()
         usernet_info = guest.qmp("human-monitor-command",
-                                 command_line="info usernet")
-        self.ssh_port = None
-        for l in usernet_info["return"].splitlines():
-            fields = l.split()
-            if "TCP[HOST_FORWARD]" in fields and "22" in fields:
-                self.ssh_port = l.split()[3]
+                                 command_line="info usernet").get("return")
+        self.ssh_port = get_info_usernet_hostfwd_port(usernet_info)
         if not self.ssh_port:
             raise Exception("Cannot find ssh port from 'info usernet':\n%s" % \
                             usernet_info)
@@ -595,6 +598,9 @@ def parse_args(vmcls):
     parser.add_argument("--build-path", default=None,
                         help="Path of build directory, "\
                         "for using build tree QEMU binary. ")
+    parser.add_argument("--source-path", default=None,
+                        help="Path of source directory, "\
+                        "for finding additional files. ")
     parser.add_argument("--interactive", "-I", action="store_true",
                         help="Interactively run command")
     parser.add_argument("--snapshot", "-s", action="store_true",

@@ -1,4 +1,5 @@
 #include "qemu/osdep.h"
+
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/sem.h>
@@ -6,25 +7,31 @@
 #include <sys/select.h>
 #include <sys/mount.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <netinet/udp.h>
 #include <linux/if_packet.h>
+#include <linux/in6.h>
 #include <linux/netlink.h>
 #include <sched.h>
 #include "qemu.h"
+#include "user-internals.h"
+#include "strace.h"
+#include "signal-common.h"
+#include "target_mman.h"
 
 struct syscallname {
     int nr;
     const char *name;
     const char *format;
-    void (*call)(void *, const struct syscallname *,
+    void (*call)(CPUArchState *, const struct syscallname *,
                  abi_long, abi_long, abi_long,
                  abi_long, abi_long, abi_long);
-    void (*result)(void *, const struct syscallname *, abi_long,
+    void (*result)(CPUArchState *, const struct syscallname *, abi_long,
                    abi_long, abi_long, abi_long,
                    abi_long, abi_long, abi_long);
 };
 
-#ifdef __GNUC__
 /*
  * It is possible that target doesn't have syscall that uses
  * following flags but we don't want the compiler to warn
@@ -32,9 +39,6 @@ struct syscallname {
  * functions.  It is ok to keep them while not used.
  */
 #define UNUSED __attribute__ ((unused))
-#else
-#define UNUSED
-#endif
 
 /*
  * Structure used to translate flag values into strings.  This is
@@ -79,6 +83,7 @@ UNUSED static void print_buf(abi_long addr, abi_long len, int last);
 UNUSED static void print_raw_param(const char *, abi_long, int);
 UNUSED static void print_timeval(abi_ulong, int);
 UNUSED static void print_timespec(abi_ulong, int);
+UNUSED static void print_timespec64(abi_ulong, int);
 UNUSED static void print_timezone(abi_ulong, int);
 UNUSED static void print_itimerval(abi_ulong, int);
 UNUSED static void print_number(abi_long, int);
@@ -139,30 +144,21 @@ if( cmd == val ) { \
     qemu_log("%d", cmd);
 }
 
+static const char * const target_signal_name[] = {
+#define MAKE_SIG_ENTRY(sig)     [TARGET_##sig] = #sig,
+        MAKE_SIGNAL_LIST
+#undef MAKE_SIG_ENTRY
+};
+
 static void
 print_signal(abi_ulong arg, int last)
 {
     const char *signal_name = NULL;
-    switch(arg) {
-    case TARGET_SIGHUP: signal_name = "SIGHUP"; break;
-    case TARGET_SIGINT: signal_name = "SIGINT"; break;
-    case TARGET_SIGQUIT: signal_name = "SIGQUIT"; break;
-    case TARGET_SIGILL: signal_name = "SIGILL"; break;
-    case TARGET_SIGABRT: signal_name = "SIGABRT"; break;
-    case TARGET_SIGFPE: signal_name = "SIGFPE"; break;
-    case TARGET_SIGKILL: signal_name = "SIGKILL"; break;
-    case TARGET_SIGSEGV: signal_name = "SIGSEGV"; break;
-    case TARGET_SIGPIPE: signal_name = "SIGPIPE"; break;
-    case TARGET_SIGALRM: signal_name = "SIGALRM"; break;
-    case TARGET_SIGTERM: signal_name = "SIGTERM"; break;
-    case TARGET_SIGUSR1: signal_name = "SIGUSR1"; break;
-    case TARGET_SIGUSR2: signal_name = "SIGUSR2"; break;
-    case TARGET_SIGCHLD: signal_name = "SIGCHLD"; break;
-    case TARGET_SIGCONT: signal_name = "SIGCONT"; break;
-    case TARGET_SIGSTOP: signal_name = "SIGSTOP"; break;
-    case TARGET_SIGTTIN: signal_name = "SIGTTIN"; break;
-    case TARGET_SIGTTOU: signal_name = "SIGTTOU"; break;
+
+    if (arg < ARRAY_SIZE(target_signal_name)) {
+        signal_name = target_signal_name[arg];
     }
+
     if (signal_name == NULL) {
         print_raw_param("%ld", arg, last);
         return;
@@ -591,7 +587,7 @@ print_fdset(int n, abi_ulong target_fds_addr)
 /* select */
 #ifdef TARGET_NR__newselect
 static void
-print_newselect(void *cpu_env, const struct syscallname *name,
+print_newselect(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg1, abi_long arg2, abi_long arg3,
                 abi_long arg4, abi_long arg5, abi_long arg6)
 {
@@ -609,7 +605,7 @@ print_newselect(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_semctl
 static void
-print_semctl(void *cpu_env, const struct syscallname *name,
+print_semctl(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg1, abi_long arg2, abi_long arg3,
              abi_long arg4, abi_long arg5, abi_long arg6)
 {
@@ -621,7 +617,7 @@ print_semctl(void *cpu_env, const struct syscallname *name,
 #endif
 
 static void
-print_execve(void *cpu_env, const struct syscallname *name,
+print_execve(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg1, abi_long arg2, abi_long arg3,
              abi_long arg4, abi_long arg5, abi_long arg6)
 {
@@ -654,7 +650,7 @@ print_execve(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_ipc
 static void
-print_ipc(void *cpu_env, const struct syscallname *name,
+print_ipc(CPUArchState *cpu_env, const struct syscallname *name,
           abi_long arg1, abi_long arg2, abi_long arg3,
           abi_long arg4, abi_long arg5, abi_long arg6)
 {
@@ -687,7 +683,7 @@ print_syscall_err(abi_long ret)
     const char *errstr;
 
     qemu_log(" = ");
-    if (ret < 0) {
+    if (is_error(ret)) {
         errstr = target_strerror(-ret);
         if (errstr) {
             qemu_log("-1 errno=%d (%s)", (int)-ret, errstr);
@@ -698,7 +694,7 @@ print_syscall_err(abi_long ret)
 }
 
 static void
-print_syscall_ret_addr(void *cpu_env, const struct syscallname *name,
+print_syscall_ret_addr(CPUArchState *cpu_env, const struct syscallname *name,
                        abi_long ret, abi_long arg0, abi_long arg1,
                        abi_long arg2, abi_long arg3, abi_long arg4,
                        abi_long arg5)
@@ -719,7 +715,7 @@ print_syscall_ret_raw(struct syscallname *name, abi_long ret)
 
 #ifdef TARGET_NR__newselect
 static void
-print_syscall_ret_newselect(void *cpu_env, const struct syscallname *name,
+print_syscall_ret_newselect(CPUArchState *cpu_env, const struct syscallname *name,
                             abi_long ret, abi_long arg0, abi_long arg1,
                             abi_long arg2, abi_long arg3, abi_long arg4,
                             abi_long arg5)
@@ -749,7 +745,7 @@ print_syscall_ret_newselect(void *cpu_env, const struct syscallname *name,
 #define TARGET_TIME_ERROR    5   /* clock not synchronized */
 #ifdef TARGET_NR_adjtimex
 static void
-print_syscall_ret_adjtimex(void *cpu_env, const struct syscallname *name,
+print_syscall_ret_adjtimex(CPUArchState *cpu_env, const struct syscallname *name,
                            abi_long ret, abi_long arg0, abi_long arg1,
                            abi_long arg2, abi_long arg3, abi_long arg4,
                            abi_long arg5)
@@ -784,7 +780,7 @@ print_syscall_ret_adjtimex(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_clock_gettime) || defined(TARGET_NR_clock_getres)
 static void
-print_syscall_ret_clock_gettime(void *cpu_env, const struct syscallname *name,
+print_syscall_ret_clock_gettime(CPUArchState *cpu_env, const struct syscallname *name,
                                 abi_long ret, abi_long arg0, abi_long arg1,
                                 abi_long arg2, abi_long arg3, abi_long arg4,
                                 abi_long arg5)
@@ -801,9 +797,27 @@ print_syscall_ret_clock_gettime(void *cpu_env, const struct syscallname *name,
 #define print_syscall_ret_clock_getres     print_syscall_ret_clock_gettime
 #endif
 
+#if defined(TARGET_NR_clock_gettime64)
+static void
+print_syscall_ret_clock_gettime64(CPUArchState *cpu_env, const struct syscallname *name,
+                                abi_long ret, abi_long arg0, abi_long arg1,
+                                abi_long arg2, abi_long arg3, abi_long arg4,
+                                abi_long arg5)
+{
+    if (!print_syscall_err(ret)) {
+        qemu_log(TARGET_ABI_FMT_ld, ret);
+        qemu_log(" (");
+        print_timespec64(arg1, 1);
+        qemu_log(")");
+    }
+
+    qemu_log("\n");
+}
+#endif
+
 #ifdef TARGET_NR_gettimeofday
 static void
-print_syscall_ret_gettimeofday(void *cpu_env, const struct syscallname *name,
+print_syscall_ret_gettimeofday(CPUArchState *cpu_env, const struct syscallname *name,
                                abi_long ret, abi_long arg0, abi_long arg1,
                                abi_long arg2, abi_long arg3, abi_long arg4,
                                abi_long arg5)
@@ -822,7 +836,7 @@ print_syscall_ret_gettimeofday(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_getitimer
 static void
-print_syscall_ret_getitimer(void *cpu_env, const struct syscallname *name,
+print_syscall_ret_getitimer(CPUArchState *cpu_env, const struct syscallname *name,
                             abi_long ret, abi_long arg0, abi_long arg1,
                             abi_long arg2, abi_long arg3, abi_long arg4,
                             abi_long arg5)
@@ -841,7 +855,7 @@ print_syscall_ret_getitimer(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_getitimer
 static void
-print_syscall_ret_setitimer(void *cpu_env, const struct syscallname *name,
+print_syscall_ret_setitimer(CPUArchState *cpu_env, const struct syscallname *name,
                             abi_long ret, abi_long arg0, abi_long arg1,
                             abi_long arg2, abi_long arg3, abi_long arg4,
                             abi_long arg5)
@@ -860,7 +874,7 @@ print_syscall_ret_setitimer(void *cpu_env, const struct syscallname *name,
 #if defined(TARGET_NR_listxattr) || defined(TARGET_NR_llistxattr) \
  || defined(TARGGET_NR_flistxattr)
 static void
-print_syscall_ret_listxattr(void *cpu_env, const struct syscallname *name,
+print_syscall_ret_listxattr(CPUArchState *cpu_env, const struct syscallname *name,
                             abi_long ret, abi_long arg0, abi_long arg1,
                             abi_long arg2, abi_long arg3, abi_long arg4,
                             abi_long arg5)
@@ -892,7 +906,7 @@ print_syscall_ret_listxattr(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_ioctl
 static void
-print_syscall_ret_ioctl(void *cpu_env, const struct syscallname *name,
+print_syscall_ret_ioctl(CPUArchState *cpu_env, const struct syscallname *name,
                         abi_long ret, abi_long arg0, abi_long arg1,
                         abi_long arg2, abi_long arg3, abi_long arg4,
                         abi_long arg5)
@@ -1109,6 +1123,12 @@ UNUSED static struct flags clone_flags[] = {
 #endif
 #if defined(CLONE_NEWNET)
     FLAG_GENERIC(CLONE_NEWNET),
+#endif
+#if defined(CLONE_NEWCGROUP)
+    FLAG_GENERIC(CLONE_NEWCGROUP),
+#endif
+#if defined(CLONE_NEWTIME)
+    FLAG_GENERIC(CLONE_NEWTIME),
 #endif
 #if defined(CLONE_IO)
     FLAG_GENERIC(CLONE_IO),
@@ -1486,6 +1506,11 @@ print_file_mode(abi_long mode, int last)
     const char *sep = "";
     const struct flags *m;
 
+    if (mode == 0) {
+        qemu_log("000%s", get_comma(last));
+        return;
+    }
+
     for (m = &mode_flags[0]; m->f_string != NULL; m++) {
         if ((m->f_value & mode) == m->f_value) {
             qemu_log("%s%s", m->f_string, sep);
@@ -1653,6 +1678,27 @@ print_timespec(abi_ulong ts_addr, int last)
 }
 
 static void
+print_timespec64(abi_ulong ts_addr, int last)
+{
+    if (ts_addr) {
+        struct target__kernel_timespec *ts;
+
+        ts = lock_user(VERIFY_READ, ts_addr, sizeof(*ts), 1);
+        if (!ts) {
+            print_pointer(ts_addr, last);
+            return;
+        }
+        qemu_log("{tv_sec = %lld"
+                 ",tv_nsec = %lld}%s",
+                 (long long)tswap64(ts->tv_sec), (long long)tswap64(ts->tv_nsec),
+                 get_comma(last));
+        unlock_user(ts, ts_addr, 0);
+    } else {
+        qemu_log("NULL%s", get_comma(last));
+    }
+}
+
+static void
 print_timezone(abi_ulong tz_addr, int last)
 {
     if (tz_addr) {
@@ -1752,7 +1798,7 @@ print_termios(void *arg)
 
 #ifdef TARGET_NR_accept
 static void
-print_accept(void *cpu_env, const struct syscallname *name,
+print_accept(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1766,7 +1812,7 @@ print_accept(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_access
 static void
-print_access(void *cpu_env, const struct syscallname *name,
+print_access(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1779,7 +1825,7 @@ print_access(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_acct
 static void
-print_acct(void *cpu_env, const struct syscallname *name,
+print_acct(CPUArchState *cpu_env, const struct syscallname *name,
            abi_long arg0, abi_long arg1, abi_long arg2,
            abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1791,7 +1837,7 @@ print_acct(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_brk
 static void
-print_brk(void *cpu_env, const struct syscallname *name,
+print_brk(CPUArchState *cpu_env, const struct syscallname *name,
           abi_long arg0, abi_long arg1, abi_long arg2,
           abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1803,7 +1849,7 @@ print_brk(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_chdir
 static void
-print_chdir(void *cpu_env, const struct syscallname *name,
+print_chdir(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1815,7 +1861,7 @@ print_chdir(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_chroot
 static void
-print_chroot(void *cpu_env, const struct syscallname *name,
+print_chroot(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1827,7 +1873,7 @@ print_chroot(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_chmod
 static void
-print_chmod(void *cpu_env, const struct syscallname *name,
+print_chmod(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1840,7 +1886,7 @@ print_chmod(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_chown) || defined(TARGET_NR_lchown)
 static void
-print_chown(void *cpu_env, const struct syscallname *name,
+print_chown(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1855,7 +1901,7 @@ print_chown(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_clock_adjtime
 static void
-print_clock_adjtime(void *cpu_env, const struct syscallname *name,
+print_clock_adjtime(CPUArchState *cpu_env, const struct syscallname *name,
                     abi_long arg0, abi_long arg1, abi_long arg2,
                     abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1879,7 +1925,7 @@ static void do_print_clone(unsigned int flags, abi_ulong newsp,
 }
 
 static void
-print_clone(void *cpu_env, const struct syscallname *name,
+print_clone(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg1, abi_long arg2, abi_long arg3,
             abi_long arg4, abi_long arg5, abi_long arg6)
 {
@@ -1899,7 +1945,7 @@ print_clone(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_creat
 static void
-print_creat(void *cpu_env, const struct syscallname *name,
+print_creat(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1912,7 +1958,7 @@ print_creat(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_execv
 static void
-print_execv(void *cpu_env, const struct syscallname *name,
+print_execv(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1923,9 +1969,9 @@ print_execv(void *cpu_env, const struct syscallname *name,
 }
 #endif
 
-#ifdef TARGET_NR_faccessat
+#if defined(TARGET_NR_faccessat) || defined(TARGET_NR_faccessat2)
 static void
-print_faccessat(void *cpu_env, const struct syscallname *name,
+print_faccessat(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1940,7 +1986,7 @@ print_faccessat(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_fallocate
 static void
-print_fallocate(void *cpu_env, const struct syscallname *name,
+print_fallocate(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1960,7 +2006,7 @@ print_fallocate(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_fchmodat
 static void
-print_fchmodat(void *cpu_env, const struct syscallname *name,
+print_fchmodat(CPUArchState *cpu_env, const struct syscallname *name,
                abi_long arg0, abi_long arg1, abi_long arg2,
                abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1975,7 +2021,7 @@ print_fchmodat(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_fchownat
 static void
-print_fchownat(void *cpu_env, const struct syscallname *name,
+print_fchownat(CPUArchState *cpu_env, const struct syscallname *name,
                abi_long arg0, abi_long arg1, abi_long arg2,
                abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -1991,7 +2037,7 @@ print_fchownat(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_fcntl) || defined(TARGET_NR_fcntl64)
 static void
-print_fcntl(void *cpu_env, const struct syscallname *name,
+print_fcntl(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2070,11 +2116,34 @@ print_fcntl(void *cpu_env, const struct syscallname *name,
         break;
     case TARGET_F_SETLEASE:
         qemu_log("F_SETLEASE,");
-        print_raw_param(TARGET_ABI_FMT_ld, arg2, 0);
+        print_raw_param(TARGET_ABI_FMT_ld, arg2, 1);
         break;
     case TARGET_F_GETLEASE:
         qemu_log("F_GETLEASE");
         break;
+#ifdef F_DUPFD_CLOEXEC
+    case TARGET_F_DUPFD_CLOEXEC:
+        qemu_log("F_DUPFD_CLOEXEC,");
+        print_raw_param(TARGET_ABI_FMT_ld, arg2, 1);
+        break;
+#endif
+    case TARGET_F_NOTIFY:
+        qemu_log("F_NOTIFY,");
+        print_raw_param(TARGET_ABI_FMT_ld, arg2, 1);
+        break;
+#ifdef F_GETOWN_EX
+    case TARGET_F_GETOWN_EX:
+        qemu_log("F_GETOWN_EX,");
+        print_pointer(arg2, 1);
+        break;
+#endif
+#ifdef F_SETOWN_EX
+    case TARGET_F_SETOWN_EX:
+        qemu_log("F_SETOWN_EX,");
+        print_pointer(arg2, 1);
+        break;
+#endif
+#ifdef F_SETPIPE_SZ
     case TARGET_F_SETPIPE_SZ:
         qemu_log("F_SETPIPE_SZ,");
         print_raw_param(TARGET_ABI_FMT_ld, arg2, 1);
@@ -2082,14 +2151,16 @@ print_fcntl(void *cpu_env, const struct syscallname *name,
     case TARGET_F_GETPIPE_SZ:
         qemu_log("F_GETPIPE_SZ");
         break;
-    case TARGET_F_DUPFD_CLOEXEC:
-        qemu_log("F_DUPFD_CLOEXEC,");
-        print_raw_param(TARGET_ABI_FMT_ld, arg2, 1);
+#endif
+#ifdef F_ADD_SEALS
+    case TARGET_F_ADD_SEALS:
+        qemu_log("F_ADD_SEALS,");
+        print_raw_param("0x"TARGET_ABI_FMT_lx, arg2, 1);
         break;
-    case TARGET_F_NOTIFY:
-        qemu_log("F_NOTIFY,");
-        print_raw_param(TARGET_ABI_FMT_ld, arg2, 0);
+    case TARGET_F_GET_SEALS:
+        qemu_log("F_GET_SEALS");
         break;
+#endif
     default:
         print_raw_param(TARGET_ABI_FMT_ld, arg1, 0);
         print_pointer(arg2, 1);
@@ -2102,7 +2173,7 @@ print_fcntl(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_fgetxattr
 static void
-print_fgetxattr(void *cpu_env, const struct syscallname *name,
+print_fgetxattr(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2117,7 +2188,7 @@ print_fgetxattr(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_flistxattr
 static void
-print_flistxattr(void *cpu_env, const struct syscallname *name,
+print_flistxattr(CPUArchState *cpu_env, const struct syscallname *name,
                  abi_long arg0, abi_long arg1, abi_long arg2,
                  abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2131,7 +2202,7 @@ print_flistxattr(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_getxattr) || defined(TARGET_NR_lgetxattr)
 static void
-print_getxattr(void *cpu_env, const struct syscallname *name,
+print_getxattr(CPUArchState *cpu_env, const struct syscallname *name,
                abi_long arg0, abi_long arg1, abi_long arg2,
                abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2147,7 +2218,7 @@ print_getxattr(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_listxattr) || defined(TARGET_NR_llistxattr)
 static void
-print_listxattr(void *cpu_env, const struct syscallname *name,
+print_listxattr(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2162,7 +2233,7 @@ print_listxattr(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_fremovexattr)
 static void
-print_fremovexattr(void *cpu_env, const struct syscallname *name,
+print_fremovexattr(CPUArchState *cpu_env, const struct syscallname *name,
                    abi_long arg0, abi_long arg1, abi_long arg2,
                    abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2175,7 +2246,7 @@ print_fremovexattr(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_removexattr) || defined(TARGET_NR_lremovexattr)
 static void
-print_removexattr(void *cpu_env, const struct syscallname *name,
+print_removexattr(CPUArchState *cpu_env, const struct syscallname *name,
                   abi_long arg0, abi_long arg1, abi_long arg2,
                   abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2189,7 +2260,7 @@ print_removexattr(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_futimesat
 static void
-print_futimesat(void *cpu_env, const struct syscallname *name,
+print_futimesat(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2204,7 +2275,7 @@ print_futimesat(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_gettimeofday
 static void
-print_gettimeofday(void *cpu_env, const struct syscallname *name,
+print_gettimeofday(CPUArchState *cpu_env, const struct syscallname *name,
                    abi_long arg0, abi_long arg1, abi_long arg2,
                    abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2217,7 +2288,7 @@ print_gettimeofday(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_settimeofday
 static void
-print_settimeofday(void *cpu_env, const struct syscallname *name,
+print_settimeofday(CPUArchState *cpu_env, const struct syscallname *name,
                    abi_long arg0, abi_long arg1, abi_long arg2,
                    abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2230,7 +2301,7 @@ print_settimeofday(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_clock_gettime) || defined(TARGET_NR_clock_getres)
 static void
-print_clock_gettime(void *cpu_env, const struct syscallname *name,
+print_clock_gettime(CPUArchState *cpu_env, const struct syscallname *name,
                     abi_long arg0, abi_long arg1, abi_long arg2,
                     abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2242,9 +2313,22 @@ print_clock_gettime(void *cpu_env, const struct syscallname *name,
 #define print_clock_getres     print_clock_gettime
 #endif
 
+#if defined(TARGET_NR_clock_gettime64)
+static void
+print_clock_gettime64(CPUArchState *cpu_env, const struct syscallname *name,
+                    abi_long arg0, abi_long arg1, abi_long arg2,
+                    abi_long arg3, abi_long arg4, abi_long arg5)
+{
+    print_syscall_prologue(name);
+    print_enums(clockids, arg0, 0);
+    print_pointer(arg1, 1);
+    print_syscall_epilogue(name);
+}
+#endif
+
 #ifdef TARGET_NR_clock_settime
 static void
-print_clock_settime(void *cpu_env, const struct syscallname *name,
+print_clock_settime(CPUArchState *cpu_env, const struct syscallname *name,
                     abi_long arg0, abi_long arg1, abi_long arg2,
                     abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2257,7 +2341,7 @@ print_clock_settime(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_getitimer
 static void
-print_getitimer(void *cpu_env, const struct syscallname *name,
+print_getitimer(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2270,7 +2354,7 @@ print_getitimer(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_setitimer
 static void
-print_setitimer(void *cpu_env, const struct syscallname *name,
+print_setitimer(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2284,7 +2368,7 @@ print_setitimer(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_link
 static void
-print_link(void *cpu_env, const struct syscallname *name,
+print_link(CPUArchState *cpu_env, const struct syscallname *name,
            abi_long arg0, abi_long arg1, abi_long arg2,
            abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2297,7 +2381,7 @@ print_link(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_linkat
 static void
-print_linkat(void *cpu_env, const struct syscallname *name,
+print_linkat(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2311,9 +2395,9 @@ print_linkat(void *cpu_env, const struct syscallname *name,
 }
 #endif
 
-#ifdef TARGET_NR__llseek
+#if defined(TARGET_NR__llseek) || defined(TARGET_NR_llseek)
 static void
-print__llseek(void *cpu_env, const struct syscallname *name,
+print__llseek(CPUArchState *cpu_env, const struct syscallname *name,
               abi_long arg0, abi_long arg1, abi_long arg2,
               abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2331,11 +2415,12 @@ print__llseek(void *cpu_env, const struct syscallname *name,
     qemu_log("%s", whence);
     print_syscall_epilogue(name);
 }
+#define print_llseek print__llseek
 #endif
 
 #ifdef TARGET_NR_lseek
 static void
-print_lseek(void *cpu_env, const struct syscallname *name,
+print_lseek(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2366,7 +2451,7 @@ print_lseek(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_truncate
 static void
-print_truncate(void *cpu_env, const struct syscallname *name,
+print_truncate(CPUArchState *cpu_env, const struct syscallname *name,
                abi_long arg0, abi_long arg1, abi_long arg2,
                abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2379,7 +2464,7 @@ print_truncate(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_truncate64
 static void
-print_truncate64(void *cpu_env, const struct syscallname *name,
+print_truncate64(CPUArchState *cpu_env, const struct syscallname *name,
                  abi_long arg0, abi_long arg1, abi_long arg2,
                  abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2396,7 +2481,7 @@ print_truncate64(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_ftruncate64
 static void
-print_ftruncate64(void *cpu_env, const struct syscallname *name,
+print_ftruncate64(CPUArchState *cpu_env, const struct syscallname *name,
                   abi_long arg0, abi_long arg1, abi_long arg2,
                   abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2413,7 +2498,7 @@ print_ftruncate64(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_mlockall
 static void
-print_mlockall(void *cpu_env, const struct syscallname *name,
+print_mlockall(CPUArchState *cpu_env, const struct syscallname *name,
                abi_long arg0, abi_long arg1, abi_long arg2,
                abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2425,7 +2510,7 @@ print_mlockall(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_socket)
 static void
-print_socket(void *cpu_env, const struct syscallname *name,
+print_socket(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2623,6 +2708,11 @@ static void do_print_sockopt(const char *name, abi_long arg1)
         print_raw_param(TARGET_ABI_FMT_ld, optname, 0);
         print_pointer(optval, 0);
         break;
+    case SOL_UDP:
+        qemu_log("SOL_UDP,");
+        print_raw_param(TARGET_ABI_FMT_ld, optname, 0);
+        print_pointer(optval, 0);
+        break;
     case SOL_IP:
         qemu_log("SOL_IP,");
         print_raw_param(TARGET_ABI_FMT_ld, optname, 0);
@@ -2734,6 +2824,113 @@ print_optint:
             break;
         }
         break;
+    case SOL_IPV6:
+        qemu_log("SOL_IPV6,");
+        switch (optname) {
+        case IPV6_MTU_DISCOVER:
+            qemu_log("IPV6_MTU_DISCOVER,");
+            goto print_optint;
+        case IPV6_MTU:
+            qemu_log("IPV6_MTU,");
+            goto print_optint;
+        case IPV6_V6ONLY:
+            qemu_log("IPV6_V6ONLY,");
+            goto print_optint;
+        case IPV6_RECVPKTINFO:
+            qemu_log("IPV6_RECVPKTINFO,");
+            goto print_optint;
+        case IPV6_UNICAST_HOPS:
+            qemu_log("IPV6_UNICAST_HOPS,");
+            goto print_optint;
+        case IPV6_MULTICAST_HOPS:
+            qemu_log("IPV6_MULTICAST_HOPS,");
+            goto print_optint;
+        case IPV6_MULTICAST_LOOP:
+            qemu_log("IPV6_MULTICAST_LOOP,");
+            goto print_optint;
+        case IPV6_RECVERR:
+            qemu_log("IPV6_RECVERR,");
+            goto print_optint;
+        case IPV6_RECVHOPLIMIT:
+            qemu_log("IPV6_RECVHOPLIMIT,");
+            goto print_optint;
+        case IPV6_2292HOPLIMIT:
+            qemu_log("IPV6_2292HOPLIMIT,");
+            goto print_optint;
+        case IPV6_CHECKSUM:
+            qemu_log("IPV6_CHECKSUM,");
+            goto print_optint;
+        case IPV6_ADDRFORM:
+            qemu_log("IPV6_ADDRFORM,");
+            goto print_optint;
+        case IPV6_2292PKTINFO:
+            qemu_log("IPV6_2292PKTINFO,");
+            goto print_optint;
+        case IPV6_RECVTCLASS:
+            qemu_log("IPV6_RECVTCLASS,");
+            goto print_optint;
+        case IPV6_RECVRTHDR:
+            qemu_log("IPV6_RECVRTHDR,");
+            goto print_optint;
+        case IPV6_2292RTHDR:
+            qemu_log("IPV6_2292RTHDR,");
+            goto print_optint;
+        case IPV6_RECVHOPOPTS:
+            qemu_log("IPV6_RECVHOPOPTS,");
+            goto print_optint;
+        case IPV6_2292HOPOPTS:
+            qemu_log("IPV6_2292HOPOPTS,");
+            goto print_optint;
+        case IPV6_RECVDSTOPTS:
+            qemu_log("IPV6_RECVDSTOPTS,");
+            goto print_optint;
+        case IPV6_2292DSTOPTS:
+            qemu_log("IPV6_2292DSTOPTS,");
+            goto print_optint;
+        case IPV6_TCLASS:
+            qemu_log("IPV6_TCLASS,");
+            goto print_optint;
+        case IPV6_ADDR_PREFERENCES:
+            qemu_log("IPV6_ADDR_PREFERENCES,");
+            goto print_optint;
+#ifdef IPV6_RECVPATHMTU
+        case IPV6_RECVPATHMTU:
+            qemu_log("IPV6_RECVPATHMTU,");
+            goto print_optint;
+#endif
+#ifdef IPV6_TRANSPARENT
+        case IPV6_TRANSPARENT:
+            qemu_log("IPV6_TRANSPARENT,");
+            goto print_optint;
+#endif
+#ifdef IPV6_FREEBIND
+        case IPV6_FREEBIND:
+            qemu_log("IPV6_FREEBIND,");
+            goto print_optint;
+#endif
+#ifdef IPV6_RECVORIGDSTADDR
+        case IPV6_RECVORIGDSTADDR:
+            qemu_log("IPV6_RECVORIGDSTADDR,");
+            goto print_optint;
+#endif
+        case IPV6_PKTINFO:
+            qemu_log("IPV6_PKTINFO,");
+            print_pointer(optval, 0);
+            break;
+        case IPV6_ADD_MEMBERSHIP:
+            qemu_log("IPV6_ADD_MEMBERSHIP,");
+            print_pointer(optval, 0);
+            break;
+        case IPV6_DROP_MEMBERSHIP:
+            qemu_log("IPV6_DROP_MEMBERSHIP,");
+            print_pointer(optval, 0);
+            break;
+        default:
+            print_raw_param(TARGET_ABI_FMT_ld, optname, 0);
+            print_pointer(optval, 0);
+            break;
+        }
+        break;
     default:
         print_raw_param(TARGET_ABI_FMT_ld, level, 0);
         print_raw_param(TARGET_ABI_FMT_ld, optname, 0);
@@ -2774,7 +2971,7 @@ static struct {
 };
 
 static void
-print_socketcall(void *cpu_env, const struct syscallname *name,
+print_socketcall(CPUArchState *cpu_env, const struct syscallname *name,
                  abi_long arg0, abi_long arg1, abi_long arg2,
                  abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2795,7 +2992,7 @@ print_socketcall(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_bind)
 static void
-print_bind(void *cpu_env, const struct syscallname *name,
+print_bind(CPUArchState *cpu_env, const struct syscallname *name,
            abi_long arg0, abi_long arg1, abi_long arg2,
            abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2809,7 +3006,7 @@ print_bind(void *cpu_env, const struct syscallname *name,
 #if defined(TARGET_NR_stat) || defined(TARGET_NR_stat64) || \
     defined(TARGET_NR_lstat) || defined(TARGET_NR_lstat64)
 static void
-print_stat(void *cpu_env, const struct syscallname *name,
+print_stat(CPUArchState *cpu_env, const struct syscallname *name,
            abi_long arg0, abi_long arg1, abi_long arg2,
            abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2823,9 +3020,49 @@ print_stat(void *cpu_env, const struct syscallname *name,
 #define print_lstat64   print_stat
 #endif
 
+#if defined(TARGET_NR_madvise)
+static struct enums madvise_advice[] = {
+    ENUM_TARGET(MADV_NORMAL),
+    ENUM_TARGET(MADV_RANDOM),
+    ENUM_TARGET(MADV_SEQUENTIAL),
+    ENUM_TARGET(MADV_WILLNEED),
+    ENUM_TARGET(MADV_DONTNEED),
+    ENUM_TARGET(MADV_FREE),
+    ENUM_TARGET(MADV_REMOVE),
+    ENUM_TARGET(MADV_DONTFORK),
+    ENUM_TARGET(MADV_DOFORK),
+    ENUM_TARGET(MADV_MERGEABLE),
+    ENUM_TARGET(MADV_UNMERGEABLE),
+    ENUM_TARGET(MADV_HUGEPAGE),
+    ENUM_TARGET(MADV_NOHUGEPAGE),
+    ENUM_TARGET(MADV_DONTDUMP),
+    ENUM_TARGET(MADV_DODUMP),
+    ENUM_TARGET(MADV_WIPEONFORK),
+    ENUM_TARGET(MADV_KEEPONFORK),
+    ENUM_TARGET(MADV_COLD),
+    ENUM_TARGET(MADV_PAGEOUT),
+    ENUM_TARGET(MADV_POPULATE_READ),
+    ENUM_TARGET(MADV_POPULATE_WRITE),
+    ENUM_TARGET(MADV_DONTNEED_LOCKED),
+    ENUM_END,
+};
+
+static void
+print_madvise(CPUArchState *cpu_env, const struct syscallname *name,
+              abi_long arg0, abi_long arg1, abi_long arg2,
+              abi_long arg3, abi_long arg4, abi_long arg5)
+{
+    print_syscall_prologue(name);
+    print_pointer(arg0, 0);
+    print_raw_param("%d", arg1, 0);
+    print_enums(madvise_advice, arg2, 1);
+    print_syscall_epilogue(name);
+}
+#endif
+
 #if defined(TARGET_NR_fstat) || defined(TARGET_NR_fstat64)
 static void
-print_fstat(void *cpu_env, const struct syscallname *name,
+print_fstat(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2839,7 +3076,7 @@ print_fstat(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_mkdir
 static void
-print_mkdir(void *cpu_env, const struct syscallname *name,
+print_mkdir(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2852,7 +3089,7 @@ print_mkdir(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_mkdirat
 static void
-print_mkdirat(void *cpu_env, const struct syscallname *name,
+print_mkdirat(CPUArchState *cpu_env, const struct syscallname *name,
               abi_long arg0, abi_long arg1, abi_long arg2,
               abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2866,7 +3103,7 @@ print_mkdirat(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_rmdir
 static void
-print_rmdir(void *cpu_env, const struct syscallname *name,
+print_rmdir(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2878,7 +3115,7 @@ print_rmdir(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_rt_sigaction
 static void
-print_rt_sigaction(void *cpu_env, const struct syscallname *name,
+print_rt_sigaction(CPUArchState *cpu_env, const struct syscallname *name,
                    abi_long arg0, abi_long arg1, abi_long arg2,
                    abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2892,7 +3129,7 @@ print_rt_sigaction(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_rt_sigprocmask
 static void
-print_rt_sigprocmask(void *cpu_env, const struct syscallname *name,
+print_rt_sigprocmask(CPUArchState *cpu_env, const struct syscallname *name,
                      abi_long arg0, abi_long arg1, abi_long arg2,
                      abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2912,7 +3149,7 @@ print_rt_sigprocmask(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_rt_sigqueueinfo
 static void
-print_rt_sigqueueinfo(void *cpu_env, const struct syscallname *name,
+print_rt_sigqueueinfo(CPUArchState *cpu_env, const struct syscallname *name,
                       abi_long arg0, abi_long arg1, abi_long arg2,
                       abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -2937,7 +3174,7 @@ print_rt_sigqueueinfo(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_rt_tgsigqueueinfo
 static void
-print_rt_tgsigqueueinfo(void *cpu_env, const struct syscallname *name,
+print_rt_tgsigqueueinfo(CPUArchState *cpu_env, const struct syscallname *name,
                         abi_long arg0, abi_long arg1, abi_long arg2,
                         abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3021,7 +3258,7 @@ print_syslog_action(abi_ulong arg, int last)
 }
 
 static void
-print_syslog(void *cpu_env, const struct syscallname *name,
+print_syslog(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3035,7 +3272,7 @@ print_syslog(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_mknod
 static void
-print_mknod(void *cpu_env, const struct syscallname *name,
+print_mknod(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3054,7 +3291,7 @@ print_mknod(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_mknodat
 static void
-print_mknodat(void *cpu_env, const struct syscallname *name,
+print_mknodat(CPUArchState *cpu_env, const struct syscallname *name,
               abi_long arg0, abi_long arg1, abi_long arg2,
               abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3074,7 +3311,7 @@ print_mknodat(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_mq_open
 static void
-print_mq_open(void *cpu_env, const struct syscallname *name,
+print_mq_open(CPUArchState *cpu_env, const struct syscallname *name,
               abi_long arg0, abi_long arg1, abi_long arg2,
               abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3093,7 +3330,7 @@ print_mq_open(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_open
 static void
-print_open(void *cpu_env, const struct syscallname *name,
+print_open(CPUArchState *cpu_env, const struct syscallname *name,
            abi_long arg0, abi_long arg1, abi_long arg2,
            abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3110,7 +3347,7 @@ print_open(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_openat
 static void
-print_openat(void *cpu_env, const struct syscallname *name,
+print_openat(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3126,9 +3363,37 @@ print_openat(void *cpu_env, const struct syscallname *name,
 }
 #endif
 
+#ifdef TARGET_NR_pidfd_send_signal
+static void
+print_pidfd_send_signal(CPUArchState *cpu_env, const struct syscallname *name,
+                abi_long arg0, abi_long arg1, abi_long arg2,
+                abi_long arg3, abi_long arg4, abi_long arg5)
+{
+    void *p;
+    target_siginfo_t uinfo;
+
+    print_syscall_prologue(name);
+    print_raw_param("%d", arg0, 0);
+    print_signal(arg1, 0);
+
+    p = lock_user(VERIFY_READ, arg2, sizeof(target_siginfo_t), 1);
+    if (p) {
+        get_target_siginfo(&uinfo, p);
+        print_siginfo(&uinfo);
+
+        unlock_user(p, arg2, 0);
+    } else {
+        print_pointer(arg2, 0);
+    }
+
+    print_raw_param("%u", arg3, 1);
+    print_syscall_epilogue(name);
+}
+#endif
+
 #ifdef TARGET_NR_mq_unlink
 static void
-print_mq_unlink(void *cpu_env, const struct syscallname *name,
+print_mq_unlink(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3140,7 +3405,7 @@ print_mq_unlink(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_fstatat64) || defined(TARGET_NR_newfstatat)
 static void
-print_fstatat64(void *cpu_env, const struct syscallname *name,
+print_fstatat64(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3156,7 +3421,7 @@ print_fstatat64(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_readlink
 static void
-print_readlink(void *cpu_env, const struct syscallname *name,
+print_readlink(CPUArchState *cpu_env, const struct syscallname *name,
                abi_long arg0, abi_long arg1, abi_long arg2,
                abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3170,7 +3435,7 @@ print_readlink(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_readlinkat
 static void
-print_readlinkat(void *cpu_env, const struct syscallname *name,
+print_readlinkat(CPUArchState *cpu_env, const struct syscallname *name,
                  abi_long arg0, abi_long arg1, abi_long arg2,
                  abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3185,7 +3450,7 @@ print_readlinkat(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_rename
 static void
-print_rename(void *cpu_env, const struct syscallname *name,
+print_rename(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3198,7 +3463,7 @@ print_rename(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_renameat
 static void
-print_renameat(void *cpu_env, const struct syscallname *name,
+print_renameat(CPUArchState *cpu_env, const struct syscallname *name,
                abi_long arg0, abi_long arg1, abi_long arg2,
                abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3213,7 +3478,7 @@ print_renameat(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_statfs
 static void
-print_statfs(void *cpu_env, const struct syscallname *name,
+print_statfs(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3226,7 +3491,7 @@ print_statfs(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_statfs64
 static void
-print_statfs64(void *cpu_env, const struct syscallname *name,
+print_statfs64(CPUArchState *cpu_env, const struct syscallname *name,
                abi_long arg0, abi_long arg1, abi_long arg2,
                abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3239,7 +3504,7 @@ print_statfs64(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_symlink
 static void
-print_symlink(void *cpu_env, const struct syscallname *name,
+print_symlink(CPUArchState *cpu_env, const struct syscallname *name,
               abi_long arg0, abi_long arg1, abi_long arg2,
               abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3252,7 +3517,7 @@ print_symlink(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_symlinkat
 static void
-print_symlinkat(void *cpu_env, const struct syscallname *name,
+print_symlinkat(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3266,7 +3531,7 @@ print_symlinkat(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_mount
 static void
-print_mount(void *cpu_env, const struct syscallname *name,
+print_mount(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3282,7 +3547,7 @@ print_mount(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_umount
 static void
-print_umount(void *cpu_env, const struct syscallname *name,
+print_umount(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3294,7 +3559,7 @@ print_umount(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_umount2
 static void
-print_umount2(void *cpu_env, const struct syscallname *name,
+print_umount2(CPUArchState *cpu_env, const struct syscallname *name,
               abi_long arg0, abi_long arg1, abi_long arg2,
               abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3307,7 +3572,7 @@ print_umount2(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_unlink
 static void
-print_unlink(void *cpu_env, const struct syscallname *name,
+print_unlink(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3319,7 +3584,7 @@ print_unlink(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_unlinkat
 static void
-print_unlinkat(void *cpu_env, const struct syscallname *name,
+print_unlinkat(CPUArchState *cpu_env, const struct syscallname *name,
                abi_long arg0, abi_long arg1, abi_long arg2,
                abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3331,9 +3596,36 @@ print_unlinkat(void *cpu_env, const struct syscallname *name,
 }
 #endif
 
+#ifdef TARGET_NR_unshare
+static void
+print_unshare(CPUArchState *cpu_env, const struct syscallname *name,
+              abi_long arg0, abi_long arg1, abi_long arg2,
+              abi_long arg3, abi_long arg4, abi_long arg5)
+{
+    print_syscall_prologue(name);
+    print_flags(clone_flags, arg0, 1);
+    print_syscall_epilogue(name);
+}
+#endif
+
+#ifdef TARGET_NR_clock_nanosleep
+static void
+print_clock_nanosleep(CPUArchState *cpu_env, const struct syscallname *name,
+                abi_long arg0, abi_long arg1, abi_long arg2,
+                abi_long arg3, abi_long arg4, abi_long arg5)
+{
+    print_syscall_prologue(name);
+    print_enums(clockids, arg0, 0);
+    print_raw_param("%d", arg1, 0);
+    print_timespec(arg2, 0);
+    print_timespec(arg3, 1);
+    print_syscall_epilogue(name);
+}
+#endif
+
 #ifdef TARGET_NR_utime
 static void
-print_utime(void *cpu_env, const struct syscallname *name,
+print_utime(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3346,7 +3638,7 @@ print_utime(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_utimes
 static void
-print_utimes(void *cpu_env, const struct syscallname *name,
+print_utimes(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3359,7 +3651,7 @@ print_utimes(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_utimensat
 static void
-print_utimensat(void *cpu_env, const struct syscallname *name,
+print_utimensat(CPUArchState *cpu_env, const struct syscallname *name,
                 abi_long arg0, abi_long arg1, abi_long arg2,
                 abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3374,7 +3666,7 @@ print_utimensat(void *cpu_env, const struct syscallname *name,
 
 #if defined(TARGET_NR_mmap) || defined(TARGET_NR_mmap2)
 static void
-print_mmap(void *cpu_env, const struct syscallname *name,
+print_mmap(CPUArchState *cpu_env, const struct syscallname *name,
            abi_long arg0, abi_long arg1, abi_long arg2,
            abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3392,7 +3684,7 @@ print_mmap(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_mprotect
 static void
-print_mprotect(void *cpu_env, const struct syscallname *name,
+print_mprotect(CPUArchState *cpu_env, const struct syscallname *name,
                abi_long arg0, abi_long arg1, abi_long arg2,
                abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3406,7 +3698,7 @@ print_mprotect(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_munmap
 static void
-print_munmap(void *cpu_env, const struct syscallname *name,
+print_munmap(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3418,56 +3710,61 @@ print_munmap(void *cpu_env, const struct syscallname *name,
 #endif
 
 #ifdef TARGET_NR_futex
-static void print_futex_op(abi_long tflag, int last)
+static void print_futex_op(int cmd, int last)
 {
-#define print_op(val) \
-if( cmd == val ) { \
-    qemu_log(#val); \
-    return; \
-}
+    static const char * const futex_names[] = {
+#define NAME(X)  [X] = #X
+        NAME(FUTEX_WAIT),
+        NAME(FUTEX_WAKE),
+        NAME(FUTEX_FD),
+        NAME(FUTEX_REQUEUE),
+        NAME(FUTEX_CMP_REQUEUE),
+        NAME(FUTEX_WAKE_OP),
+        NAME(FUTEX_LOCK_PI),
+        NAME(FUTEX_UNLOCK_PI),
+        NAME(FUTEX_TRYLOCK_PI),
+        NAME(FUTEX_WAIT_BITSET),
+        NAME(FUTEX_WAKE_BITSET),
+        NAME(FUTEX_WAIT_REQUEUE_PI),
+        NAME(FUTEX_CMP_REQUEUE_PI),
+        NAME(FUTEX_LOCK_PI2),
+#undef NAME
+    };
 
-    int cmd = (int)tflag;
-#ifdef FUTEX_PRIVATE_FLAG
-    if (cmd & FUTEX_PRIVATE_FLAG) {
-        qemu_log("FUTEX_PRIVATE_FLAG|");
-        cmd &= ~FUTEX_PRIVATE_FLAG;
+    unsigned base_cmd = cmd & FUTEX_CMD_MASK;
+
+    if (base_cmd < ARRAY_SIZE(futex_names)) {
+        qemu_log("%s%s%s",
+                 (cmd & FUTEX_PRIVATE_FLAG ? "FUTEX_PRIVATE_FLAG|" : ""),
+                 (cmd & FUTEX_CLOCK_REALTIME ? "FUTEX_CLOCK_REALTIME|" : ""),
+                 futex_names[base_cmd]);
+    } else {
+        qemu_log("0x%x", cmd);
     }
-#endif
-#ifdef FUTEX_CLOCK_REALTIME
-    if (cmd & FUTEX_CLOCK_REALTIME) {
-        qemu_log("FUTEX_CLOCK_REALTIME|");
-        cmd &= ~FUTEX_CLOCK_REALTIME;
-    }
-#endif
-    print_op(FUTEX_WAIT)
-    print_op(FUTEX_WAKE)
-    print_op(FUTEX_FD)
-    print_op(FUTEX_REQUEUE)
-    print_op(FUTEX_CMP_REQUEUE)
-    print_op(FUTEX_WAKE_OP)
-    print_op(FUTEX_LOCK_PI)
-    print_op(FUTEX_UNLOCK_PI)
-    print_op(FUTEX_TRYLOCK_PI)
-#ifdef FUTEX_WAIT_BITSET
-    print_op(FUTEX_WAIT_BITSET)
-#endif
-#ifdef FUTEX_WAKE_BITSET
-    print_op(FUTEX_WAKE_BITSET)
-#endif
-    /* unknown values */
-    qemu_log("%d", cmd);
 }
 
 static void
-print_futex(void *cpu_env, const struct syscallname *name,
+print_futex(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
+    abi_long op = arg1 & FUTEX_CMD_MASK;
     print_syscall_prologue(name);
     print_pointer(arg0, 0);
     print_futex_op(arg1, 0);
     print_raw_param(",%d", arg2, 0);
-    print_pointer(arg3, 0); /* struct timespec */
+    switch (op) {
+        case FUTEX_WAIT:
+        case FUTEX_WAIT_BITSET:
+        case FUTEX_LOCK_PI:
+        case FUTEX_LOCK_PI2:
+        case FUTEX_WAIT_REQUEUE_PI:
+            print_timespec(arg3, 0);
+            break;
+        default:
+            print_pointer(arg3, 0);
+            break;
+    }
     print_pointer(arg4, 0);
     print_raw_param("%d", arg4, 1);
     print_syscall_epilogue(name);
@@ -3476,7 +3773,7 @@ print_futex(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_kill
 static void
-print_kill(void *cpu_env, const struct syscallname *name,
+print_kill(CPUArchState *cpu_env, const struct syscallname *name,
            abi_long arg0, abi_long arg1, abi_long arg2,
            abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3489,7 +3786,7 @@ print_kill(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_tkill
 static void
-print_tkill(void *cpu_env, const struct syscallname *name,
+print_tkill(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3502,7 +3799,7 @@ print_tkill(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_tgkill
 static void
-print_tgkill(void *cpu_env, const struct syscallname *name,
+print_tgkill(CPUArchState *cpu_env, const struct syscallname *name,
              abi_long arg0, abi_long arg1, abi_long arg2,
              abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3516,7 +3813,7 @@ print_tgkill(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_statx
 static void
-print_statx(void *cpu_env, const struct syscallname *name,
+print_statx(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3532,7 +3829,7 @@ print_statx(void *cpu_env, const struct syscallname *name,
 
 #ifdef TARGET_NR_ioctl
 static void
-print_ioctl(void *cpu_env, const struct syscallname *name,
+print_ioctl(CPUArchState *cpu_env, const struct syscallname *name,
             abi_long arg0, abi_long arg1, abi_long arg2,
             abi_long arg3, abi_long arg4, abi_long arg5)
 {
@@ -3617,55 +3914,74 @@ static int nsyscalls = ARRAY_SIZE(scnames);
  * The public interface to this module.
  */
 void
-print_syscall(void *cpu_env, int num,
+print_syscall(CPUArchState *cpu_env, int num,
               abi_long arg1, abi_long arg2, abi_long arg3,
               abi_long arg4, abi_long arg5, abi_long arg6)
 {
     int i;
-    const char *format="%s(" TARGET_ABI_FMT_ld "," TARGET_ABI_FMT_ld "," TARGET_ABI_FMT_ld "," TARGET_ABI_FMT_ld "," TARGET_ABI_FMT_ld "," TARGET_ABI_FMT_ld ")";
+    FILE *f;
+    const char *format = "%s(" TARGET_ABI_FMT_ld "," TARGET_ABI_FMT_ld ","
+                               TARGET_ABI_FMT_ld "," TARGET_ABI_FMT_ld ","
+                               TARGET_ABI_FMT_ld "," TARGET_ABI_FMT_ld ")";
 
-    qemu_log("%d ", getpid());
+    f = qemu_log_trylock();
+    if (!f) {
+        return;
+    }
+    fprintf(f, "%d ", getpid());
 
-    for(i=0;i<nsyscalls;i++)
-        if( scnames[i].nr == num ) {
-            if( scnames[i].call != NULL ) {
-                scnames[i].call(
-                    cpu_env, &scnames[i], arg1, arg2, arg3, arg4, arg5, arg6);
+    for (i = 0; i < nsyscalls; i++) {
+        if (scnames[i].nr == num) {
+            if (scnames[i].call != NULL) {
+                scnames[i].call(cpu_env, &scnames[i], arg1, arg2, arg3,
+                                arg4, arg5, arg6);
             } else {
                 /* XXX: this format system is broken because it uses
                    host types and host pointers for strings */
-                if( scnames[i].format != NULL )
+                if (scnames[i].format != NULL) {
                     format = scnames[i].format;
-                qemu_log(format,
-                         scnames[i].name, arg1, arg2, arg3, arg4, arg5, arg6);
+                }
+                fprintf(f, format, scnames[i].name, arg1, arg2,
+                        arg3, arg4, arg5, arg6);
             }
+            qemu_log_unlock(f);
             return;
         }
-    qemu_log("Unknown syscall %d\n", num);
+    }
+    fprintf(f, "Unknown syscall %d\n", num);
+    qemu_log_unlock(f);
 }
 
 
 void
-print_syscall_ret(void *cpu_env, int num, abi_long ret,
+print_syscall_ret(CPUArchState *cpu_env, int num, abi_long ret,
                   abi_long arg1, abi_long arg2, abi_long arg3,
                   abi_long arg4, abi_long arg5, abi_long arg6)
 {
     int i;
+    FILE *f;
 
-    for(i=0;i<nsyscalls;i++)
-        if( scnames[i].nr == num ) {
-            if( scnames[i].result != NULL ) {
+    f = qemu_log_trylock();
+    if (!f) {
+        return;
+    }
+
+    for (i = 0; i < nsyscalls; i++) {
+        if (scnames[i].nr == num) {
+            if (scnames[i].result != NULL) {
                 scnames[i].result(cpu_env, &scnames[i], ret,
                                   arg1, arg2, arg3,
                                   arg4, arg5, arg6);
             } else {
                 if (!print_syscall_err(ret)) {
-                    qemu_log(TARGET_ABI_FMT_ld, ret);
+                    fprintf(f, TARGET_ABI_FMT_ld, ret);
                 }
-                qemu_log("\n");
+                fprintf(f, "\n");
             }
             break;
         }
+    }
+    qemu_log_unlock(f);
 }
 
 void print_taken_signal(int target_signum, const target_siginfo_t *tinfo)
@@ -3673,9 +3989,17 @@ void print_taken_signal(int target_signum, const target_siginfo_t *tinfo)
     /* Print the strace output for a signal being taken:
      * --- SIGSEGV {si_signo=SIGSEGV, si_code=SI_KERNEL, si_addr=0} ---
      */
-    qemu_log("--- ");
+    FILE *f;
+
+    f = qemu_log_trylock();
+    if (!f) {
+        return;
+    }
+
+    fprintf(f, "--- ");
     print_signal(target_signum, 1);
-    qemu_log(" ");
+    fprintf(f, " ");
     print_siginfo(tinfo);
-    qemu_log(" ---\n");
+    fprintf(f, " ---\n");
+    qemu_log_unlock(f);
 }

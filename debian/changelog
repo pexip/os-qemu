@@ -1,3 +1,818 @@
+qemu (1:7.2+dfsg-7+deb12u2) bookworm; urgency=medium
+
+  * d/rules: add the forgotten --enable-virtfs for the xen build.
+    This makes 9pfs virtual filesystem available for xen hvm domUs.
+    This adds no new runtime dependencies.  Closes: #1049925.
+  * update to upstream 7.2.5 stable/bugfix release, v7.2.5.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.5 :
+   - hw/ide/piix: properly initialize the BMIBA register
+   - ui/vnc-clipboard: fix infinite loop in inflate_buffer (CVE-2023-3255)
+   - qemu-nbd: pass structure into nbd_client_thread instead of plain char*
+   - qemu-nbd: fix regression with qemu-nbd --fork run over ssh
+   - qemu-nbd: regression with arguments passing into nbd_client_thread()
+   - target/s390x: Make CKSM raise an exception if R2 is odd
+   - target/s390x: Fix CLM with M3=0
+   - target/s390x: Fix CONVERT TO LOGICAL/FIXED with out-of-range inputs
+   - target/s390x: Fix ICM with M3=0
+   - target/s390x: Make MC raise specification exception when class >= 16
+   - target/s390x: Fix assertion failure in VFMIN/VFMAX with type 13
+   - target/loongarch: Fix the CSRRD CPUID instruction on big endian hosts
+   - virtio-pci: add handling of PCI ATS and Device-TLB enable/disable
+   - vhost: register and change IOMMU flag depending on Device-TLB state
+   - virtio-net: pass Device-TLB enable/disable events to vhost
+   - hw/arm/smmu: Handle big-endian hosts correctly
+   - target/arm: Avoid writing to constant TCGv in trans_CSEL()
+   - target/ppc: Disable goto_tb with architectural singlestep
+   - linux-user/armeb: Fix __kernel_cmpxchg() for armeb
+   - qga/win32: Use rundll for VSS installation
+   - thread-pool: signal "request_cond" while locked
+   - xen-block: Avoid leaks on new error path
+   - io: remove io watch if TLS channel is closed during handshake
+   - target/nios2: Pass semihosting arg to exit
+   - target/nios2: Fix semihost lseek offset computation
+   - target/m68k: Fix semihost lseek offset computation
+   - hw/virtio-iommu: Fix potential OOB access in virtio_iommu_handle_command()
+   - virtio-crypto: verify src&dst buffer length for sym request
+   - target/hppa: Move iaoq registers and thus reduce generated code size
+   - pci: do not respond config requests after PCI device eject
+   - hw/i386/intel_iommu: Fix trivial endianness problems
+   - hw/i386/intel_iommu: Fix endianness problems related to VTD_IR_TableEntry
+   - hw/i386/intel_iommu: Fix struct VTDInvDescIEC on big endian hosts
+   - hw/i386/intel_iommu: Fix index calculation in vtd_interrupt_remap_msi()
+   - hw/i386/x86-iommu: Fix endianness issue in x86_iommu_irq_to_msi_message()
+   - include/hw/i386/x86-iommu: Fix struct X86IOMMU_MSIMessage for big endian hosts
+   - vfio/pci: Disable INTx in vfio_realize error path
+   - vdpa: Fix possible use-after-free for VirtQueueElement
+   - vdpa: Return -EIO if device ack is VIRTIO_NET_ERR in _load_mac()
+   - vdpa: Return -EIO if device ack is VIRTIO_NET_ERR in _load_mq()
+   - target/ppc: Implement ASDR register for ISA v3.0 for HPT
+   - target/ppc: Fix pending HDEC when entering PM state
+   - target/ppc: Fix VRMA page size for ISA v3.0
+   - target/i386: Check CR0.TS before enter_mmx
+   - Update version for 7.2.5 release
+    Closes: CVE-2023-3255, CVE-2023-3354, CVE-2023-3180
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 17 Aug 2023 12:33:57 +0300
+
+qemu (1:7.2+dfsg-7+deb12u1) bookworm; urgency=medium
+
+  * d/rules: add the forgotten --enable-libusb for the xen build.
+    This makes usb devices available for xen hvm domUs again,
+    as it has always been before. Closes: #1037341
+  * update to upstream 7.2.3 stable/bugfix release, v7.2.3.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.3 :
+   - vnc: avoid underflow when accessing user-provided address
+   - target/i386: Change wrong XFRM value in SGX CPUID leaf
+     (was in debian already)
+   - acpi: pcihp: allow repeating hot-unplug requests
+   - qemu-options: finesse the recommendations around -blockdev
+   - docs/about/deprecated.rst: Add "since 7.1" tag to dtb-kaslr-seed
+     deprecation
+   - target/arm: Initialize debug capabilities only once
+   - hw/net/msf2-emac: Don't modify descriptor in-place in emac_store_desc()
+   - hw/arm/boot: Make write_bootloader() public as arm_write_bootloader()
+   - hw/arm/aspeed: Use arm_write_bootloader() to write the bootloader
+   - hw/arm/raspi: Use arm_write_bootloader() to write boot code
+   - hw/intc/allwinner-a10-pic: Don't use set_bit()/clear_bit()
+   - target/arm: Define and use new load_cpu_field_low32()
+   - hw/sd/allwinner-sdhost: Correctly byteswap descriptor fields
+   - hw/net/allwinner-sun8i-emac: Correctly byteswap descriptor fields
+   - softfloat: Fix the incorrect computation in float32_exp2
+   - meson: leave unnecessary modules out of the build
+   - block: Fix use after free in blockdev_mark_auto_del()
+   - target/riscv: Fix itrigger when icount is used
+   - accel/tcg: Fix atomic_mmu_lookup for reads
+   - ui: Fix pixel colour channel order for PNG screenshots
+   - async: Suppress GCC13 false positive in aio_bh_poll()
+   - tcg: ppc64: Fix mask generation for vextractdm
+   - hw/virtio/vhost-user: avoid using uninitialized errp
+   - virtio: fix reachable assertion due to stale value of cached region size
+   - block/monitor: Fix crash when executing HMP commit
+   - target/s390x: Fix EXECUTE of relative branches
+   - s390x/tcg: Fix LDER instruction format
+   - 9pfs/xen: Fix segfault on shutdown
+   - xen/pt: reserve PCI slot 2 for Intel igd-passthru
+   - Revert "vhost-user: Monitor slave channel in vhost_user_read()"
+   - Revert "vhost-user: Introduce nested event loop in vhost_user_read()"
+   - target/ppc: Fix helper_pminsn() prototype
+   - tests/docker: bump the xtensa base to debian:11-slim
+   - linux-user: Fix mips fp64 executables loading
+   - linux-user: fix getgroups/setgroups allocations
+     (was in debian already)
+   - migration: Handle block device inactivation failures better
+   - migration: Minor control flow simplification
+   - migration: Attempt disk reactivation in more failure scenarios
+   - target/arm: Fix vd == vm overlap in sve_ldff1_z
+   - scsi-generic: fix buffer overflow on block limits inquiry
+   - target/i386: fix operand size for VCOMI/VUCOMI instructions
+   - target/i386: fix avx2 instructions vzeroall and vpermdq
+   - vhost: fix possible wrap in SVQ descriptor ring
+   - virtio-net: not enable vq reset feature unconditionally
+   - virtio-crypto: fix NULL pointer dereference in virtio_crypto_free_request
+   - e1000: Count CRC in Tx statistics
+   - e1000e: Fix tx/rx counters
+   - rtl8139: fix large_send_mss divide-by-zero
+     (was in debian already)
+   - util/vfio-helpers: Use g_file_read_link()
+   - usb/ohci: Set pad to 0 after frame update
+   - hw/scsi/lsi53c895a: Fix reentrancy issues in the LSI controller
+     (Closes: #1029155, CVE-2023-0330)
+   - machine: do not crash if default RAM backend name has been stolen
+   - Update version for 7.2.3 release
+  * update to upstream 7.2.4 stable/bugfix release, v7.2.4.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.4 :
+   - gitlab-ci: Avoid to re-run "configure" in the device-crash-test jobs
+   - scripts/device-crash-test: Add a parameter to run with TCG only
+   - hw/ppc/prep: Fix wiring of PIC -> CPU interrupt
+   - ui/gtk: fix passing y0_top parameter to scanout
+   - ui/gtk: use widget size for cursor motion event
+   - ui/gtk-egl: fix scaling for cursor position in scanout mode
+   - ui/sdl2: fix surface_gl_update_texture: Assertion 'gls' failed
+   - ui/sdl2: Grab Alt+Tab also in fullscreen mode
+   - ui/sdl2: Grab Alt+F4 also under Windows
+   - ui/sdl2: disable SDL_HINT_GRAB_KEYBOARD on Windows
+   - hw/dma/xilinx_axidma: Check DMASR.HALTED to prevent infinite loop.
+   - hw/arm/xlnx-zynqmp: fix unsigned error when checking the RPUs number
+   - target/arm: Explicitly select short-format FSR for M-profile
+   - target/s390x: Fix LCBB overwriting the top 32 bits
+   - tests/tcg/s390x: Test LCBB
+   - target/s390x: Fix LOCFHR taking the wrong half of R2
+   - tests/tcg/s390x: Test LOCFHR
+   - linux-user/s390x: Fix single-stepping SVC
+   - tests/tcg/s390x: Test single-stepping SVC
+   - s390x/tcg: Fix CPU address returned by STIDP
+   - docs: fix multi-process QEMU documentation
+   - qga: Fix suspend on Linux guests without systemd
+   - 9pfs: prevent opening special files (CVE-2023-2861)
+   - hw/remote: Fix vfu_cfg trace offset format
+   - vnc: move assert in vnc_worker_thread_loop
+   - target/ppc: Fix lqarx to set cpu_reserve
+   - target/ppc: Fix nested-hv HEAI delivery
+   - target/ppc: Fix PMU hflags calculation
+   - hw/riscv: qemu crash when NUMA nodes exceed available CPUs
+   - aspeed/hace: Initialize g_autofree pointer
+   - target/arm: Fix return value from LDSMIN/LDSMAX 8/16 bit atomics
+   - target/arm: Return correct result for LDG when ATA=0
+   - hw/intc/allwinner-a10-pic: Handle IRQ levels other than 0 or 1
+   - hw/timer/nrf51_timer: Don't lose time when timer is queried in tight loop
+   - host-utils: Avoid using __builtin_subcll on buggy versions of Apple Clang
+   - pc-bios/keymaps: Use the official xkb name for Arabic layout,
+     not the legacy synonym
+   - target/hppa: Fix OS reboot issues
+   - target/hppa: Provide qemu version via fw_cfg to firmware
+   - target/hppa: New SeaBIOS-hppa version 7
+     (minus the binary pc-bios/hppa-firmware.img changes)
+   - target/hppa: Update to SeaBIOS-hppa version 8
+     (minus the binary pc-bios/hppa-firmware.img changes)
+   - vhost: release memory_listener object in error path
+   - vdpa: fix not using CVQ buffer in case of error
+   - vhost-vdpa: do not cleanup the vdpa/vhost-net structures if peer nic
+     is present
+   - virtio-gpu: Make non-gl display updates work again when blob=true
+   - icount: don't adjust virtual time backwards after warp
+   - vdpa: mask _F_CTRL_GUEST_OFFLOADS for vhost vdpa devices
+   - target/ppc: Fix decrementer time underflow and infinite timer loop
+   - vfio/pci: Fix a segfault in vfio_realize
+   - vfio/pci: Call vfio_prepare_kvm_msi_virq_batch() in MSI retry path
+   - ui/gtk: set the area of the scanout texture correctly
+   - Update version for 7.2.4 release
+  * remove patches included in v7.2.4:
+   - linux-user-fix-getgroups-setgroups-allocations.patch
+   - rtl8139-fix-large_send_mss-divide-by-zero.patch
+   - target_i386-Change-wrong-XFRM-value.patch
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 11 Jul 2023 23:07:58 +0300
+
+qemu (1:7.2+dfsg-7) unstable; urgency=medium
+
+  * d/control: qemu-system-xen: add ipxe-qemu dependency (#1035676)
+
+    When installing qemu-system-xen on a new system, the boot roms are
+    not installed. Unfortunately this means HVM Xen DomUs can not be used
+    at all, because the boot roms are hard requiriment for qemu since 2014,
+    it fails to start without the boot roms even if (network) booting is
+    not requested.
+
+    Before bookworm, when qemu-system-xen was part of regular
+    qemu-system-x86 package, the dependency on ipxe-qemu was coming from
+    that package. But when splitting qemu-system-xen out of it, we forgot
+    that the boot roms are hard dependency now. This makes qemu-system-xen
+    unusable on a new install until ipxe-qemu is installed too.
+
+    An alternative would be to revert upstream commit 178e785fb
+    (from 2014) to make rom loading failure a non-fatal error.
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sun, 14 May 2023 11:29:12 +0300
+
+qemu (1:7.2+dfsg-6) unstable; urgency=medium
+
+  [ Michael Tokarev ]
+  * sync with upstream v7.2.1 stable release, into d/patches/v7.2.1.diff.
+    All patches from 7.2.1 (besides stuff not relevant for linux, such
+    as mingw compilation fixes) has already been in d/patches/master/,
+    now they're in single upstream patch file
+  * v7.2.2.diff: upstream 7.2.2 stable/bugfix release
+  * hw-pvrdma-protect-against-guest-driver-CVE-2022-1050.patch:
+    remove, included in v7.2.2
+  * d/rules, d/qemu.desktop: provide an icon for gtk display (qemu.display)
+  * d/gbp.conf: set debian branch to debian-bookworm
+  * pick 3 more fixes from qemu-devel@:
+    rtl8139-fix-large_send_mss-divide-by-zero.patch
+    target_i386-Change-wrong-XFRM-value.patch
+    hw_mips_malta-Fix-malta-machine-on-big-endian-hosts.patch
+  * +linux-user-fix-getgroups-setgroups-allocations.patch (Closes: #811087)
+
+  [ Vagrant Cascadian ]
+  * debian/rules: Use 'printf' instead of 'echo' to avoid differences
+    in underlying /bin/sh implementations. Closes: #1034431
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 29 Apr 2023 13:02:55 +0300
+
+qemu (1:7.2+dfsg-5) unstable; urgency=medium
+
+  * d/qemu-guest-agent.udev: fix missing comma
+    (Christian Schneider <debian@c-schneider.net>, Closes: #1031838)
+  * remove qemu-make-debian-root.
+    Ths script debian/qemu-make-debian-root has been broken for ages.
+    In 2023, it creates /etc/fstab with a reference to /dev/hda1, and
+    edits /etc/inittab which does not exist. And no one noticed, - so
+    it's safe to assume it is not used anymore.  Just remove it.
+  * re-pick qemu-stable patches from master (the same patch contents):
+    master/tests-tcg-i386-Introduce-and-use-reg_t-consistently.patch
+    master/target-i386-Fix-BEXTR-instruction.patch
+    master/target-i386-Fix-C-flag-for-BLSI-BLSMSK-BLSR.patch
+    master/target-i386-fix-ADOX-followed-by-ADCX.patch
+  * 20 more changes picked from upstream/master:
+    master/target-i386-Fix-BZHI-instruction.patch
+    master/block-iscsi-fix-double-free-on-BUSY-or-similar-status.patch
+    master/hw-smbios-fix-field-corruption-in-type-4-table.patch
+    master/Revert-x86-do-not-re-randomize-RNG-seed-on-snapshot-.patch
+    master/Revert-x86-re-initialize-RNG-seed-when-selecting-ker.patch
+    master/Revert-x86-reinitialize-RNG-seed-on-system-reboot.patch
+    master/Revert-x86-use-typedef-for-SetupData-struct.patch
+    master/Revert-x86-return-modified-setup_data-only-if-read-a.patch
+    master/Revert-hw-i386-pass-RNG-seed-via-setup_data-entry.patch
+    master/vhost-user-gpio-Configure-vhost_dev-when-connecting.patch
+    master/vhost-user-i2c-Back-up-vqs-before-cleaning-up-vhost_.patch
+    master/vhost-user-rng-Back-up-vqs-before-cleaning-up-vhost_.patch
+    master/virtio-rng-pci-fix-migration-compat-for-vectors.patch
+    master/virtio-rng-pci-fix-transitional-migration-compat-for.patch
+    master/hw-timer-hpet-Fix-expiration-time-overflow.patch
+    master/vdpa-stop-all-svq-on-device-deletion.patch
+    master/vhost-avoid-a-potential-use-of-an-uninitialized-vari.patch
+    master/libvhost-user-check-for-NULL-when-allocating-a-virtq.patch
+    master/chardev-char-socket-set-s-listener-NULL-in-char_sock.patch
+    master/intel-iommu-fail-MAP-notifier-without-caching-mode.patch
+    master/intel-iommu-fail-DEVIOTLB_UNMAP-without-dt-mode.patch
+ 
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sun, 05 Mar 2023 20:09:04 +0300
+
+qemu (1:7.2+dfsg-4) unstable; urgency=medium
+
+  * block-fix-detect-zeroes-with-BDRV_REQ_REGISTERED_BUF.patch:
+    re-pick now from master (the same patch, moved to master/).
+  * revert x86-don-t-let-decompressed-kernel-image-clobber-setu.patch
+    Closes: ##1031682 .
+    This turned out to be wrong move, breaking more stuff than fixing.
+    Upstream is going to revert it too.
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Mon, 20 Feb 2023 21:00:18 +0300
+
+qemu (1:7.2+dfsg-3) unstable; urgency=medium
+
+  [ Paride Legovini ]
+  * Disable LTO on non-amd64 builds (LP: #1921664)
+
+  [ Michael Tokarev ]
+  * target-arm-Fix-physical-address-resolution-for-Stage2.patch:
+    re-fetch now from master branch
+  * 4 more patches picked from master:
+    x86-don-t-let-decompressed-kernel-image-clobber-setu.patch
+    migration-ram-Fix-error-handling-in-ram_write_tracki.patch
+    migration-ram-Fix-populate_read_range.patch
+    qcow2-Fix-theoretical-corruption-in-store_bitmap-err.patch
+  * 5 fixes picked from current pullreqs:
+    block-fix-detect-zeroes-with-BDRV_REQ_REGISTERED_BUF.patch
+    tests_tcg_i386-introduce-and-use-reg_t-consistently.patch
+    target_i386-fix-BEXTR-instruction.patch
+    target_i386-fix-C-flag-for-BLSI-BLSMSK-BLSR.patch
+    target_i386-fix-ADOX-followed-by-ADCX.patch
+  * disable dwz on certain architectures for older dwz
+    (FTBFS on bullseye, #968670)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 10 Feb 2023 14:29:12 +0300
+
+qemu (1:7.2+dfsg-2) unstable; urgency=medium
+
+  * d/rules: add -ffile-prefix-map when building skiboot
+  * d/control: provide qemu-kvm in qemu-system-misc on s390x
+    (Closes: #1029309)
+  * d/control: drop dependency of qemu-guest-agent on lsb-base
+  * Picked patches from qemu master branch tagged for qemu-stable
+    up to commit deabea6e88 (2023-02-02):
+    target-sh4-Mask-restore-of-env-flags-from-tb-flags.patch
+    vhost-fix-vq-dirty-bitmap-syncing-when-vIOMMU-is-ena.patch
+    virtio-mem-Fix-the-bitmap-index-of-the-section-offse.patch
+    virtio-mem-Fix-the-iterator-variable-in-a-vmem-rdl_l.patch
+    target-arm-fix-handling-of-HLT-semihosting-in-system.patch
+    meson-accept-relative-symlinks-in-meson-introspect-i.patch
+    target-riscv-Set-pc_succ_insn-for-rvc-illegal-insn.patch
+    acpi-cpuhp-fix-guest-visible-maximum-access-size-to-.patch
+    hw-nvme-fix-missing-endian-conversions-for-doorbell-.patch
+    hw-nvme-fix-missing-cq-eventidx-update.patch
+    configure-fix-GLIB_VERSION-for-cross-compilation.patch
+    target-arm-Fix-sve_probe_page.patch
+    target-arm-allow-writes-to-SCR_EL3.HXEn-bit-when-FEA.patch
+    target-arm-Fix-in_debug-path-in-S1_ptw_translate.patch
+  * Also: target-arm-Fix-physical-address-resolution-for-Stage.patch
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 02 Feb 2023 21:17:10 +0300
+
+qemu (1:7.2+dfsg-1) unstable; urgency=medium
+
+  * new upstream release
+    Closes: #1025123 CVE-2022-4172
+    (erst: undefined behavior in memcpy in write_erst_record)
+    Closes: #1021981 qemu-user: faccessat2 is not implemented
+    Closes: #1021019 CVE-2022-3165 (VNC: integer underflow in
+    vnc_client_cut_text_ext leads to CPU exhaustion)
+  * remove patches applied upstream
+  * refresh note-missing-module-pkg-name.diff
+  * slirp is always external package now, not a submodule anymore
+  * d/control: require meson >> 0.61.5~ for build
+  * spelling.diff: update with more spelling error
+  * add some lintian-overrides
+  * fix minor spelling errors in patches
+  * d/control: Bump Standards-Version to 4.6.1
+  * debian shell programs use "which" instead of the "command -v",
+    fix that (Closes: #1018254)
+  * Better fix for #1019011 (gcc ICE building palcode-clipper), use -O1
+    instead of -O2 for the failing compile when it actually fails
+    (no need to depend on gcc-11, Closes: #1011003)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 15 Dec 2022 17:17:28 +0300
+
+qemu (1:7.1+dfsg-2) unstable; urgency=medium
+
+  * tulip-restrict-DMA-engine-to-memories-CVE-2022-2962.patch
+    fix possible stack or heap overflow (tulip: DMA reentrancy issue)
+    Closes: #1018055, CVE-2022-2962
+  * hw-pvrdma-protect-against-guest-driver-CVE-2022-1050.patch
+    fix possible use-after-free in paravirtual RDMA device.
+    Closes: #1014589, CVE-2022-1050
+  * mention closing of #979677 (CVE-2020-14394) by 7.1
+  * d/rules: parametrify extra-cflags & extra-ldflags
+  * d/rules: explicitly disable pie on arm64 due to
+    https://sourceware.org/bugzilla/show_bug.cgi?id=29514
+    Fixes FTBFS.
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 13 Sep 2022 20:08:43 +0300
+
+qemu (1:7.1+dfsg-1) unstable; urgency=medium
+
+  * new upstream release (7.1)
+    Closes: #1014958, CVE-2022-35414
+    Closes: #1014590, CVE-2022-0216
+    Closes: #979677, CVE-2020-14394
+    Closes: #987410, CVE-2021-3507
+    Closes: #988333, #1018913
+  * d/copyright:
+   - remove mentions of slirp (packaged separately)
+   - blindly convert to dep-5 (it needs a complete rewrite)
+   - add Files-Excluded from d/get-orig-source.sh
+  * d/gbp.conf: remove filter= (and whole [import-orig])
+  * d/watch: verify upstream tarballs
+  * d/rules: stop faking skiboot version, it is now properly included in
+    roms/skiboot/.version file. Add a dependency on this file too
+  * d/patches:
+   - remove use-fixed-data-path.patch: not needed anymore
+   - linux-user-binfmt-P.diff: refresh
+   - remove patches applied upstream
+  * d/control:
+   - it is --enable-capstone now, not --enable-capstone=system
+   - it is --enable-png now, not --enable-vnc-png
+  * d/rules: fix --enable-vhost-* options
+  * d/rules: remove vnc-png for xen too
+  * openbios-array-bounds-gcc12.patch
+  * opensbi-fix-build-with-binutils-2.38.patch
+  * d/rules: adopt vof build changes
+  * d/qemu-system-data.docs: omit ccid.txt (removed)
+  * temporary workaround for gcc-12 bug #1019011: use gcc-11-alpha-linux-gnu
+    instead of gcc-alpha-linux-gnu (another option is to use -Os)
+  * d/control: temporarily build-depend on libva-dev till #1019485 is fixed
+  * add loongarch64 qemu-user and qemu-user arch
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Mon, 12 Sep 2022 11:50:53 +0300
+
+qemu (1:7.0+dfsg-7) unstable; urgency=medium
+
+  * d/tests/test-qemu-user: rework ls/glob test a bit
+  * d/tests/test-qemu-user: fix ppc64le qemu architecture name
+  * d/binfmt-install: use proper name for binfmt.d (*.conf)
+    Hopefully closes: #1011003
+  * two virtio-scsi bugfixes from upstream:
+    virtio-scsi-fix-ctrl-and-event-handler-functions-in-dataplane.patch
+    virtio-scsi-don-t-waste-CPU-polling-the-event-virtqueue.patch
+  * 3 patches from upstream to fix possible coroutine crashes:
+    coroutine-use-QEMU_DEFINE_STATIC_CO_TLS.patch
+    coroutine-rename-qemu_coroutine_inc-dec_pool_size.patch
+    coroutine-revert-to-constant-batch-size.patch
+  * target-i386-do-not-consult-nonexistent-host-leaves.patch
+  * d/control: stop suggesting sudo for qemu-user-static
+  * Revert "d/rules: do not try to enable tcg-interpreter on unsupported
+    targets, it does not help anymore" - it does help but it needs a bit
+    more work
+  * disable xen support for qemu-system-x86 build and create a wrapper
+    for -i386 to redirect xen-related usage to xen-specific binary
+    with a warning (for bookworm only)
+  * common-user-no-user.patch: fix one of FTBFS on unsupported architectures
+  * d/rules: use regular variable assignment for BUILD_PACKAGES
+  * two trivial patches to fix spelling in roms:
+    openbios-spelling-endianess.patch
+    slof-spelling-seperator.patch
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sun, 15 May 2022 15:49:12 +0300
+
+qemu (1:7.0+dfsg-6) unstable; urgency=medium
+
+  * d/rules: the forgotten --enable-xen-pci-passthrough for the xen build
+  * d/tests/test-qemu-user: rewrite to be more robust and complete and
+    include test for qemu-user-static too.
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Mon, 09 May 2022 01:37:56 +0300
+
+qemu (1:7.0+dfsg-5) unstable; urgency=medium
+
+  * d/tests/test-qemu-user.sh: more arch-specific debugging/updates
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 07 May 2022 12:22:26 +0300
+
+qemu (1:7.0+dfsg-4) unstable; urgency=medium
+
+  * d/tests/: fix failing tests.
+    - test-qemu-user: depend on gcc for dpkg-architecture to work,
+      and print debugging info for future switch to uname -m
+    - test-qemu-img: switch from using file to qemu-img info
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 07 May 2022 11:33:23 +0300
+
+qemu (1:7.0+dfsg-3) unstable; urgency=medium
+
+  [ Michael Tokarev ]
+  * d/binfmt-install: also generate binfmt.d/ entries for systemd
+  * d/control: use systemd as preferred alternative to binfmt-support
+    hopefully Closes: #789011 (Minimal dependencies to register binfmt)
+    Closes: #985889 (make binfmt setup configurable)
+  * d/control: remove Riku Voipio from Uploaders. Thank you Riku!
+  * d/rules: simplify DEB_BUILD_OPTIONS=parallel=N parsing
+
+  [ Guido Günther ]
+  * Add minimal autopkgtest (Closes: #832982)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 07 May 2022 00:03:24 +0300
+
+qemu (1:7.0+dfsg-2) unstable; urgency=medium
+
+  * d/control: add Rules-Requires-Root: no
+  * d/control: switch to debhelper-compat=13
+  * d/control: drop "qemu" empty/dummy pseudopackage
+  * d/control: do not build linux-user* on ia64 and powerpc
+    (not supported by upstream anymore)
+  * d/control: add Breaks for qemu-system-data for other packages from which
+    it borrowed files in the past (Closes: #1008095)
+  * d/rules: switch to the dh sequence (but keep build-{arch,indep}),
+    rearrange some rules.
+    This brings us dh_dwz (very slow) and dh_strip_nondeterminism.
+  * d/rules: do not explicitly turn off slirp & capstone (now properly
+    controlled by --with[out]-default-features option)
+  * d/rules: do not try to enable tcg-interpreter on the unsupported
+    targets, it does not help to build tools anymore
+  * d/rules: do not chown -w d/control, it breaks dpkg-source
+  * d/rules: clean up the clean target
+  * d/not-installed: list many documentation files and qemu-plugin.h
+  * configure-make-fortify_source-yes-by-default.patch: enable
+    fortify-source for minimal builds too
+  * d/changelog: mention #990562 (CVE-2021-3611) closed by 7.0
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 30 Apr 2022 13:38:12 +0300
+
+qemu (1:7.0+dfsg-1) unstable; urgency=medium
+
+  * update to 7.0 release
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 21 Apr 2022 14:19:51 +0300
+
+qemu (1:7.0~rc4+dfsg-1) experimental; urgency=medium
+
+  * New upstream 7.0 (rc)
+    Closes: #990562, CVE-2021-3611
+  * remove patches applied upstream
+  * remove new binary file, pc-bios/edk2-x86_64-microvm.fd.bz2
+  * d/control: remove libxfs-dev build dependency,
+    the ioctl is implemented inline
+  * d/control: stop build-depend-indep on libc6.1-dev-alpha-cross,
+    not needed anymore
+  * d/rules: update skiboot version check (skiboot hasn't canged since 6.1)
+  * build & install vbootrom (npcm7xx_bootrom.bin), and
+    build-depend-indep on gcc-arm-none-eabi
+  * create a new binary package, qemu-system-xen, which provides
+    /usr/libexec/xen-qemu-system-i386 binary for use by xen only.
+    Once xen switches to use this binary instead of usual qemu-system-i386,
+    xen support will be removed from the regular qemu-system-x86 build
+  * use a fast inline version of /usr/share/dpkg/architecture.mk
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sun, 17 Apr 2022 15:08:40 +0300
+
+qemu (1:6.2+dfsg-3) unstable; urgency=medium
+
+  [ Christian Ehrhardt ]
+  * d/rules: ensure xen is built on x86
+  * d/rules: xen libexec dir is no more versioned
+  * d/kvm-spice: fix when acceleration is already defined on the commandline
+
+  [ Michael Tokarev ]
+  * d/control, d/rules: do not compile xen support on i386,
+    since it is amd64-only now (since 4.16)
+  * d/control: add libbpf-dev & --enable-bpf for eBPF support
+    (Closes: #994573)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 25 Feb 2022 12:01:46 +0300
+
+qemu (1:6.2+dfsg-2) unstable; urgency=medium
+
+  * bump meson build-dep to 0.59.3
+  * build & include multiboot_dma.bin (Closes: #1003930)
+  * libxml2 is not needed for parallels.
+    Enable parallels block image format (Closes: #1003162)
+  * acpi-validate-hotplug-selector-on-access-CVE-2021-4158.patch
+    Closes: CVE-2021-4158
+  * acpi-fix-QEMU-crash-when-started-with-SLIC-table.patch
+    (Closes: #1004017)
+  * acpi-fix-OEM_ID-padding.patch
+  * debian/get-orig-source.sh: repack dfsg archive differently
+  * mention closing of a few CVEs by 6.2.0
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 20 Jan 2022 10:52:19 +0300
+
+qemu (1:6.2+dfsg-1) unstable; urgency=medium
+
+  [ Christian Ehrhardt ]
+  * 6.2.0 upstream release
+    Closes: #984452, CVE-2021-20203
+     (integer overflow issue in the vmxnet3 NIC emulator)
+    Closes: #984453, CVE-2021-20196
+     (fdc: check drive block device before usage)
+    Closes: #984451, CVE-2021-20255
+     (infinite recursion / DMA reentrancy in eepro100 i8255x device emulator)
+  * d/get-orig-source.sh: remove pc-bios/multiboot_dma.bin in dfsg-clean
+  * Drop patches upstream in v6.2.0
+  * d/p/spelling.diff: update for v6.2.0 (partially accepted)
+  * d/rules: use new --disable-install-blobs build arg
+  * Revert "make fuse debian-only, since libfuse3 in ubuntu is in universe",
+    it is now in main (LP: #1934510)
+  * d/rules: bump skiboot version for qemu v6.2.0
+  * d/p/ignore-roms-dependency-in-qtest.patch: fix meson issue
+    due to dfsg removal of blobs
+  * d/rules: drop --disable-fdt on microvm builds
+    (now strictly required on any x86 build)
+  * d/rules: select default PARISC config for hppa-firmware
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sun, 09 Jan 2022 12:52:10 +0300
+
+qemu (1:6.1+dfsg-8) unstable; urgency=medium
+
+  * fix keymaps definitions placement in last upload
+    (Closes: #997925, #997926)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 27 Oct 2021 13:27:09 +0300
+
+qemu (1:6.1+dfsg-7) unstable; urgency=medium
+
+  * qemu-system-data: do not install qemu.desktop (Closes: #995628)
+  * remove qemu-user-static.README.Debian (#995633)
+  * d/rules: update configure rules for different qemu builds
+  * qemu-system-x86-xen: install only -i386 link to xen path, not -x86_64
+  * promote qemu-system-x86-xen package on ubuntu to be like qemu-system-x86
+    since it uses the same modules actually
+  * enable zstd compression support (Build-Depends)
+  * qemu-system-data: install usr/share/icons/hicolor/32x32/apps/qemu.bmp
+    for the sdl ui
+  * d/control: fix wrong relation (< vs <<)
+  * d/control: use :native version of python3-sphynx (Closes: #995622)
+  * do not make qemu-system-gui Multi-Arch:same due to vhost-user-gpu
+  * quieten gcc11 warnings/errors so roms will compile (Closes: #997082)
+  * move d/qemu-system-data.install to d/rules
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 26 Oct 2021 10:35:02 +0300
+
+qemu (1:6.1+dfsg-6) unstable; urgency=medium
+
+  * virtio-net-fix-use-after-unmap-free-for-sg-CVE-2021-3748.patch
+    Closes: #993401, CVE-2021-3748: use-after-free in virtio_net_receive_rcu
+  * ati_2d-fix-buffer-overflow-in-ati_2d_blt-CVE-2021-3638.patch
+    Closes: #992726, CVE-2021-3638:
+     inconsistent check in ati_2d_blt() may lead to out-of-bounds write
+  * refresh uas-add-stream-number-sanity-checks-CVE-2021-3713{.diff=>.patch}
+    from upstream
+  * hmp-unbreak-change-vnc.patch from upstream
+    to fix 'change vnc passwd' command
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 29 Sep 2021 13:41:47 +0300
+
+qemu (1:6.1+dfsg-5) unstable; urgency=medium
+
+  * updated debian/patches/linux-user-binfmt-P.diff
+    to work with in-kernel code
+    Closes: #993658
+  * d/rules: do not mark configure target as .PHONY
+    since it is a real file
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Mon, 06 Sep 2021 01:20:59 +0300
+
+qemu (1:6.1+dfsg-4) unstable; urgency=medium
+
+  * qemu-sockets-fix-unix-socket-path-copy-again.patch
+    replacing socket-unix-maxlen.patch
+    Closes: #993145
+  * enable more devices for the microvm build:
+     virtio-gpu & vhost-user-gpu
+     virtio-input-host & vhost_user_input
+  * move vhost-user-gpu files from qemu-system-common to qemu-system-gui
+    this elminates X11 dependencies from non-gui qemu-system install
+  * build and install vof.bin firmware
+  * rearrange d/rules a bit to make different qemu builds
+    to be consistent with sysdata-components
+  * move ppc dtb firmware files from qemu-system-ppc to qemu-system-data
+  * device-tree-compiler is now needed in build-indep-depends,
+    not in build-depends
+  * d/rules: use CROSSPFX variables
+  * ubuntu only:
+   - Revert commit from the previous release which restores
+     relation between qemu-system-xen and qemu-system-gui
+     since -xen is not compatible with -gui modules
+   - qemu-system-xen does not suggest qemu-block-extra (incompatible too)
+   - qemu-system-s390x recommends qemu-block-extra not suggests it
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 31 Aug 2021 22:27:25 +0300
+
+qemu (1:6.1+dfsg-3) unstable; urgency=medium
+
+  * fix brown-paper bag in last upload (--enable-libudev)
+  * ubuntu only: restore relations (depends/recommends)
+    between qemu-system-gui and qemu-system-xen since -xen
+    replaces full qemu-system-x86 and acts the same way
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 31 Aug 2021 02:50:52 +0300
+
+qemu (1:6.1+dfsg-2) unstable; urgency=medium
+
+  * rearrange d/rules to be able to configure/build/install
+    various different kinds of qemu builds (main/microvm/xen/static)
+    separately, by splitting targets of d/rules into subtargets
+  * enable many virtio devices for microvm build (Closes: #992029)
+  * disable libudev and fuse for microvm build
+  * rearrange options for microvm build in d/rules
+  * tidy newly added assert in unix-domain socket handling code
+    to account for extra \0 terminator for socket pathname,
+    socket-unix-maxlen.patch (Closes: #993145)
+  * upstream qemu added ignoring of *.patch to .gitignore,
+    unignore them in d/.gitignore
+  * re-add 4 patches which were lost from git
+    during preparation for 6.1
+    (not affecting the source package)
+  * uas-add-stream-number-sanity-checks-CVE-2021-3713.diff
+    Closes: #992727, CVE-2021-3713
+  * Mention (some) bugs closed by 6.1 upstream
+  * Mention closing of #947349
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 31 Aug 2021 02:01:51 +0300
+
+qemu (1:6.1+dfsg-1) unstable; urgency=medium
+
+  * new upstream release (6.1.0)
+    Closes: CVE-2021-3607 (pvrdma: ensure correct input on ring init)
+    Closes: CVE-2021-3608 (pvrdma: unmap initialized dma address)
+    Closes: #989042, CVE-2021-3544 (vhost-user-gpu resource leaks)
+    Closes: #989042, CVE-2021-3545 (vhost-user-gpu memory disclosure)
+    Closes: #989042, CVE-2021-3546 (vhost-user-gpu OOBwr virgl_cmd_get_capset)
+    Closes: #991911, CVE-2021-3682 (pvrdma: possible mremap overflow)
+  * refresh patches, remove patches which were applied upstream
+  * remove newly appeared pc-bios/vof.bin in dfsg-clean
+  * add python3-sphinx-rtd-theme to build-depends
+  * removed qemu-system-moxie arch
+  * actually build many qemu modules as modules, and install
+    them in qemu-system-common.
+  * make strong versioned dependency between various qemu-system-*
+    packages, so that modules works correctly.
+  * drop very old versions from Build-Depends, Depends and Recommends
+    for packages which long has much more recent versions in debian
+  * up qemu-block-extra dependecy level from Suggests to Recommends
+  * d/control: stop suggesting sgabios by qemu-system-x86
+  * (experimental for now, needs more work) print name of the package
+    name for a module which can't be loaded, to give a clue what other
+    package one may need to install for the requested functionality
+  * fix some spelling mistakes in visible messages (spelling.diff)
+  * enable jack audio backend (in qemu-system-gui) (Closes: #984726)
+  * other small/internal changes in packaging:
+    - removed --disable-sheepdog which were dropped upstream
+    - install gui modules in d/rules not in d/q-s-gui.install
+      to be able to use wildcard in d/q-s-common.install
+    - recommend qemu-block-extra, not suggest it and not depend on it (ubuntu)
+      for qemu-system-* and qemu-utils
+    - reformat qemu "deps" for qemu-system-gui, stop listing -xen there
+      (it can not satisfy -gui),  qemu-system-s390x is :ubuntu:-only
+    - d/control: stop recommending -gui for xen package
+      (it is of no use for xen)
+    - d/control: reformat Depends for qemu-block-extra, do not include -xen
+      version there, mark -x390x as ubuntu-only,
+      and allow qemu-utils to satisfy the dependency
+    - do not install docs which does not exist anymore
+    - stop omiting Changelog from dh_installchangelog: the file is long gone
+    - d/rules: explicitly state version of skiboot as it is stored
+      in a git tag only, or else skiboot does not build (hack)
+    - put (new in 6.1, new in debian) hw-display-virtio-gpu-gl.so
+      to qemu-system-gui as it pulls in X11
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 25 Aug 2021 15:59:26 +0300
+
+qemu (1:6.0+dfsg-4) unstable; urgency=medium
+
+  * d/rules: fix last ubuntu merge, xen is x86-only, not all-debian
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 17 Aug 2021 19:04:30 +0300
+
+qemu (1:6.0+dfsg-3) unstable; urgency=medium
+
+  [ Michael Tokarev ]
+  * enable /run/qemu mount on ubuntu only
+  * usbredir-fix-free-call-CVE-2021-3682.patchi
+    Closes: #991911, CVE-2021-3682
+
+  [ Christian Ehrhardt ]
+  * ubuntu-only changes:
+   - d/control-in: Make Ubuntu qemu-utils depend on qemu-block-extra
+   - d/control-in: Make Ubuntu qemu-system-common depend on qemu-block-extra
+   - d/control*, d/rules: disable xen by default, but provide universe package
+     qemu-system-x86-xen as alternative
+  * d/p/target-s390x-Fix-translation-exception-on-illegal-in.patch:
+    avoid segfaults by uretprobes (LP 1929926)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 17 Aug 2021 17:49:10 +0300
+
+qemu (1:6.0+dfsg-2exp) experimental; urgency=medium
+
+  [ Christian Ehrhardt ]
+  * qemu 6.0 broke libvirt <7.2, add a Breaks
+    to avoid partial upgrade issues (LP: #1932264)
+  * enable SDL as secondary UI backend (LP: #1256185) (Closes: #947349)
+  * clear all (current and former) modules on purge
+  * only save modules if /run/qemu isn't noexec
+  * provide run-qemu.mount in qemu-block-extra
+    (disabled in debian for now)
+  * Disable capstone disassembler library support in ubuntu (universe)
+
+  [ Michael Tokarev ]
+  * qemu does not ship Changelog file anymore
+  * drop version from libfuse-dev build-depends (noticed by Ville Skyttä)
+  * a few patches from upstream stable:
+   - target-ppc-fix-load-endianness-for-lxvwsx-lxvdsx.patch
+     fix various crashes in ppc system emulation.
+     Thanks to Christian Ehrhardt for pointing this out
+   - pvrdma-fix-possible-mremap-overflow-in-pvrdma-device-CVE-2021-3582.patch
+     (Closes: #990565, CVE-2021-3582)
+   - pvrdma-ensure-correct-input-on-ring-init-CVE-2021-3607.patch
+     (Closes: #990564, CVE-2021-3607)
+   - pvrdma-fix-the-ring-init-error-flow-CVE-2021-3608.patch
+     (Closes: #990563, CVE-2021-3608)
+   - usb-limit-combined-packets-to-1-MiB-CVE-2021-3527.patch
+     usb-redir-avoid-dynamic-stack-allocation-CVE-2021-3527.patch
+     (Closes: #988157, CVE-2021-3527)
+  * mention closing of 3 bugs in am53c974 (ESP) device emulation by 6.0
+    (Closes: #979679, CVE-2020-35504)
+    (Closes: #984455, CVE-2020-35505)
+    (Closes: #984454, CVE-2020-35506)
+  * make fuse debian-only, since libfuse3 in ubuntu is in universe
+  * fix microvm default machine type for a new build system (LP: #1936894)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 21 Jul 2021 19:43:37 +0300
+
+qemu (1:6.0+dfsg-1~exp0) experimental; urgency=medium
+
+  * new upstream release
+    Closes: #979679, CVE-2020-35504
+    Closes: #984455, CVE-2020-35505
+    Closes: #984454, CVE-2020-35506
+  * remove obsolete patches, refresh use-fixed-data-path.patch
+  * use libncurses-dev, not old libncursesw5-dev
+  * enable fuse export (and build-depend on libfuse3-dev)
+  * install (new) manpages for qemu-storage-daemon
+  * enable new hexagon qemu-user target
+  * two patches to fix 3 new spelling mistakes
+  * remove now-unused shared-library-lacks-prerequisites lintian-overrides
+    for qemu-user-static
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 08 May 2021 10:16:05 +0300
+
 qemu (1:5.2+dfsg-11+deb11u3pexip2) pexip; urgency=medium
 
   * Disable skiboot build
@@ -11,22 +826,6 @@ qemu (1:5.2+dfsg-11+deb11u3pexip1) pexip; urgency=medium
     With security fixes that don't affect Infinity
 
  -- Steve McIntyre <steve.mcintyre@pexip.com>  Mon, 09 Oct 2023 15:16:00 +0100
-
-qemu (1:5.2+dfsg-11+deb11u3) bullseye; urgency=medium
-
-  * CVE-2021-20196 (Closes: #984453)
-  * CVE-2023-0330 (Closes: #1029155)
-  * CVE-2023-1544 (Closes: #1034179)
-  * CVE-2023-3354
-  * CVE-2021-3930
-  * CVE-2023-3180
-  * CVE-2021-20203 (Closes: #984452)
-  * CVE-2021-3507 (Closes: #987410)
-  * CVE-2020-14394 (Closes: #979677)
-  * CVE-2023-3301
-  * CVE-2022-0216 (Closes: #1014590)
-
- -- Moritz Mühlenhoff <jmm@debian.org>  Mon, 04 Sep 2023 16:11:35 +0200
 
 qemu (1:5.2+dfsg-11+deb11u2pexip4) pexip-bullseye; urgency=medium
 
@@ -52,51 +851,6 @@ qemu (1:5.2+dfsg-11+deb11u2pexip1) pexip; urgency=medium
   * Initial bullseye build
 
  -- Mark Hymers <mark.hymers@pexip.com>  Thu, 02 Jun 2022 14:42:53 +0100
-
-qemu (1:5.2+dfsg-11+deb11u2) bullseye-security; urgency=medium
-
-  * virtio-net-fix-map-leaking-on-error-during-receive-CVE-2022-26353.patch
-    fix memory leak after fix for CVE-2021-3748
-  * vhost-vsock-detach-the-virqueue-element-on-error-CVE-2022-26354.patch
-    vhost-sock device was not detaching invalid element from
-    the virtqueue on error
-  * ui-cursor-fix-integer-overflow-in-cursor_alloc-CVE-2021-4206.patch,
-    display-qxl-render-fix-race-condition-in-qxl_cursor-CVE-2021-4207.patch
-    two flaws can lead to allocation of small cursor object followed by a
-    subsequent heap-based buffer overflow with a potential for executing
-    arbitrary code within the context of QEMU process
-  * virtiofsd-drop-membership-of-all-supplementary-group-CVE-2022-0358.patch
-    potential group escalation allowed by virtiofsd
-
- -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 04 May 2022 22:50:01 +0300
-
-qemu (1:5.2+dfsg-11+deb11u1) bullseye-security; urgency=medium
-
-  [ Michael Tokarev ]
-  * usbredir-fix-free-call-CVE-2021-3682.patch
-    Closes: #991911, CVE-2021-3682: wrong free in usbredir in bufp_alloc()
-  * uas-add-stream-number-sanity-checks-CVE-2021-3713.patch
-    Closes: #992727, CVE-2021-3713: an OOB write to UASDevice fields
-     in UAS device emulation code
-  * virtio-net-fix-use-after-unmap-free-for-sg-CVE-2021-3748.patch
-    Closes: #993401, CVE-2021-3748: use-after-free in virtio_net_receive_rcu
-  * ati_2d-fix-buffer-overflow-in-ati_2d_blt-CVE-2021-3638.patch
-    Closes: #992726, CVE-2021-3638:
-     inconsistent check in ati_2d_blt() may lead to out-of-bounds write
-  * vhost-user-gpu fixes from upstream, 7 patches:
-     CVE-2021-3544: multiple memory leaks
-     CVE-2021-3545: information disclosure due to uninitialized memory reads
-     CVE-2021-3546: out-of-bounds write in virgl_cmd_get_capset()
-     Closes: #989042, CVE-2021-3544, CVE-2021-3545, CVE-2021-3546
-
-  [ Cyril Brulebois ]
-  * linux-user-elfload-fix-address-calculation-in-fallback.patch
-    This fixes problems with some access to an unmounted /proc, as seen
-    while building images for the Raspberry Pi devices. With thanks to
-    Diederik de Haas for the report and to Bernhard Übelacker for
-    pinpointing the upstream fix to backport. (Closes: #988174)
-
- -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 29 Sep 2021 13:14:52 +0300
 
 qemu (1:5.2+dfsg-11) unstable; urgency=medium
 

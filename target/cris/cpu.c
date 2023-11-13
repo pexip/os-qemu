@@ -35,6 +35,22 @@ static void cris_cpu_set_pc(CPUState *cs, vaddr value)
     cpu->env.pc = value;
 }
 
+static vaddr cris_cpu_get_pc(CPUState *cs)
+{
+    CRISCPU *cpu = CRIS_CPU(cs);
+
+    return cpu->env.pc;
+}
+
+static void cris_restore_state_to_opc(CPUState *cs,
+                                      const TranslationBlock *tb,
+                                      const uint64_t *data)
+{
+    CRISCPU *cpu = CRIS_CPU(cs);
+
+    cpu->env.pc = data[0];
+}
+
 static bool cris_cpu_has_work(CPUState *cs)
 {
     return cs->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
@@ -193,15 +209,46 @@ static void cris_cpu_initfn(Object *obj)
 #endif
 }
 
+#ifndef CONFIG_USER_ONLY
+#include "hw/core/sysemu-cpu-ops.h"
+
+static const struct SysemuCPUOps cris_sysemu_ops = {
+    .get_phys_page_debug = cris_cpu_get_phys_page_debug,
+};
+#endif
+
+#include "hw/core/tcg-cpu-ops.h"
+
+static const struct TCGCPUOps crisv10_tcg_ops = {
+    .initialize = cris_initialize_crisv10_tcg,
+    .restore_state_to_opc = cris_restore_state_to_opc,
+
+#ifndef CONFIG_USER_ONLY
+    .tlb_fill = cris_cpu_tlb_fill,
+    .cpu_exec_interrupt = cris_cpu_exec_interrupt,
+    .do_interrupt = crisv10_cpu_do_interrupt,
+#endif /* !CONFIG_USER_ONLY */
+};
+
+static const struct TCGCPUOps crisv32_tcg_ops = {
+    .initialize = cris_initialize_tcg,
+    .restore_state_to_opc = cris_restore_state_to_opc,
+
+#ifndef CONFIG_USER_ONLY
+    .tlb_fill = cris_cpu_tlb_fill,
+    .cpu_exec_interrupt = cris_cpu_exec_interrupt,
+    .do_interrupt = cris_cpu_do_interrupt,
+#endif /* !CONFIG_USER_ONLY */
+};
+
 static void crisv8_cpu_class_init(ObjectClass *oc, void *data)
 {
     CPUClass *cc = CPU_CLASS(oc);
     CRISCPUClass *ccc = CRIS_CPU_CLASS(oc);
 
     ccc->vr = 8;
-    cc->do_interrupt = crisv10_cpu_do_interrupt;
     cc->gdb_read_register = crisv10_cpu_gdb_read_register;
-    cc->tcg_initialize = cris_initialize_crisv10_tcg;
+    cc->tcg_ops = &crisv10_tcg_ops;
 }
 
 static void crisv9_cpu_class_init(ObjectClass *oc, void *data)
@@ -210,9 +257,8 @@ static void crisv9_cpu_class_init(ObjectClass *oc, void *data)
     CRISCPUClass *ccc = CRIS_CPU_CLASS(oc);
 
     ccc->vr = 9;
-    cc->do_interrupt = crisv10_cpu_do_interrupt;
     cc->gdb_read_register = crisv10_cpu_gdb_read_register;
-    cc->tcg_initialize = cris_initialize_crisv10_tcg;
+    cc->tcg_ops = &crisv10_tcg_ops;
 }
 
 static void crisv10_cpu_class_init(ObjectClass *oc, void *data)
@@ -221,9 +267,8 @@ static void crisv10_cpu_class_init(ObjectClass *oc, void *data)
     CRISCPUClass *ccc = CRIS_CPU_CLASS(oc);
 
     ccc->vr = 10;
-    cc->do_interrupt = crisv10_cpu_do_interrupt;
     cc->gdb_read_register = crisv10_cpu_gdb_read_register;
-    cc->tcg_initialize = cris_initialize_crisv10_tcg;
+    cc->tcg_ops = &crisv10_tcg_ops;
 }
 
 static void crisv11_cpu_class_init(ObjectClass *oc, void *data)
@@ -232,9 +277,8 @@ static void crisv11_cpu_class_init(ObjectClass *oc, void *data)
     CRISCPUClass *ccc = CRIS_CPU_CLASS(oc);
 
     ccc->vr = 11;
-    cc->do_interrupt = crisv10_cpu_do_interrupt;
     cc->gdb_read_register = crisv10_cpu_gdb_read_register;
-    cc->tcg_initialize = cris_initialize_crisv10_tcg;
+    cc->tcg_ops = &crisv10_tcg_ops;
 }
 
 static void crisv17_cpu_class_init(ObjectClass *oc, void *data)
@@ -243,16 +287,17 @@ static void crisv17_cpu_class_init(ObjectClass *oc, void *data)
     CRISCPUClass *ccc = CRIS_CPU_CLASS(oc);
 
     ccc->vr = 17;
-    cc->do_interrupt = crisv10_cpu_do_interrupt;
     cc->gdb_read_register = crisv10_cpu_gdb_read_register;
-    cc->tcg_initialize = cris_initialize_crisv10_tcg;
+    cc->tcg_ops = &crisv10_tcg_ops;
 }
 
 static void crisv32_cpu_class_init(ObjectClass *oc, void *data)
 {
+    CPUClass *cc = CPU_CLASS(oc);
     CRISCPUClass *ccc = CRIS_CPU_CLASS(oc);
 
     ccc->vr = 32;
+    cc->tcg_ops = &crisv32_tcg_ops;
 }
 
 static void cris_cpu_class_init(ObjectClass *oc, void *data)
@@ -268,23 +313,20 @@ static void cris_cpu_class_init(ObjectClass *oc, void *data)
 
     cc->class_by_name = cris_cpu_class_by_name;
     cc->has_work = cris_cpu_has_work;
-    cc->do_interrupt = cris_cpu_do_interrupt;
-    cc->cpu_exec_interrupt = cris_cpu_exec_interrupt;
     cc->dump_state = cris_cpu_dump_state;
     cc->set_pc = cris_cpu_set_pc;
+    cc->get_pc = cris_cpu_get_pc;
     cc->gdb_read_register = cris_cpu_gdb_read_register;
     cc->gdb_write_register = cris_cpu_gdb_write_register;
-    cc->tlb_fill = cris_cpu_tlb_fill;
 #ifndef CONFIG_USER_ONLY
-    cc->get_phys_page_debug = cris_cpu_get_phys_page_debug;
     dc->vmsd = &vmstate_cris_cpu;
+    cc->sysemu_ops = &cris_sysemu_ops;
 #endif
 
     cc->gdb_num_core_regs = 49;
     cc->gdb_stop_before_watchpoint = true;
 
     cc->disas_set_info = cris_disas_set_info;
-    cc->tcg_initialize = cris_initialize_tcg;
 }
 
 #define DEFINE_CRIS_CPU_TYPE(cpu_model, initfn) \

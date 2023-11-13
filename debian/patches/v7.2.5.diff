@@ -1,0 +1,1575 @@
+diff --git a/VERSION b/VERSION
+index 2bbaead448..8aea167e72 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.4
++7.2.5
+diff --git a/hw/arm/smmu-common.c b/hw/arm/smmu-common.c
+index e09b9c13b7..bbca3a8db3 100644
+--- a/hw/arm/smmu-common.c
++++ b/hw/arm/smmu-common.c
+@@ -193,8 +193,7 @@ static int get_pte(dma_addr_t baseaddr, uint32_t index, uint64_t *pte,
+     dma_addr_t addr = baseaddr + index * sizeof(*pte);
+ 
+     /* TODO: guarantee 64-bit single-copy atomicity */
+-    ret = dma_memory_read(&address_space_memory, addr, pte, sizeof(*pte),
+-                          MEMTXATTRS_UNSPECIFIED);
++    ret = ldq_le_dma(&address_space_memory, addr, pte, MEMTXATTRS_UNSPECIFIED);
+ 
+     if (ret != MEMTX_OK) {
+         info->type = SMMU_PTW_ERR_WALK_EABT;
+diff --git a/hw/arm/smmuv3.c b/hw/arm/smmuv3.c
+index daa80e9c7b..ce7091ff8e 100644
+--- a/hw/arm/smmuv3.c
++++ b/hw/arm/smmuv3.c
+@@ -98,20 +98,34 @@ static void smmuv3_write_gerrorn(SMMUv3State *s, uint32_t new_gerrorn)
+     trace_smmuv3_write_gerrorn(toggled & pending, s->gerrorn);
+ }
+ 
+-static inline MemTxResult queue_read(SMMUQueue *q, void *data)
++static inline MemTxResult queue_read(SMMUQueue *q, Cmd *cmd)
+ {
+     dma_addr_t addr = Q_CONS_ENTRY(q);
++    MemTxResult ret;
++    int i;
+ 
+-    return dma_memory_read(&address_space_memory, addr, data, q->entry_size,
+-                           MEMTXATTRS_UNSPECIFIED);
++    ret = dma_memory_read(&address_space_memory, addr, cmd, sizeof(Cmd),
++                          MEMTXATTRS_UNSPECIFIED);
++    if (ret != MEMTX_OK) {
++        return ret;
++    }
++    for (i = 0; i < ARRAY_SIZE(cmd->word); i++) {
++        le32_to_cpus(&cmd->word[i]);
++    }
++    return ret;
+ }
+ 
+-static MemTxResult queue_write(SMMUQueue *q, void *data)
++static MemTxResult queue_write(SMMUQueue *q, Evt *evt_in)
+ {
+     dma_addr_t addr = Q_PROD_ENTRY(q);
+     MemTxResult ret;
++    Evt evt = *evt_in;
++    int i;
+ 
+-    ret = dma_memory_write(&address_space_memory, addr, data, q->entry_size,
++    for (i = 0; i < ARRAY_SIZE(evt.word); i++) {
++        cpu_to_le32s(&evt.word[i]);
++    }
++    ret = dma_memory_write(&address_space_memory, addr, &evt, sizeof(Evt),
+                            MEMTXATTRS_UNSPECIFIED);
+     if (ret != MEMTX_OK) {
+         return ret;
+@@ -290,7 +304,7 @@ static void smmuv3_init_regs(SMMUv3State *s)
+ static int smmu_get_ste(SMMUv3State *s, dma_addr_t addr, STE *buf,
+                         SMMUEventInfo *event)
+ {
+-    int ret;
++    int ret, i;
+ 
+     trace_smmuv3_get_ste(addr);
+     /* TODO: guarantee 64-bit single-copy atomicity */
+@@ -303,6 +317,9 @@ static int smmu_get_ste(SMMUv3State *s, dma_addr_t addr, STE *buf,
+         event->u.f_ste_fetch.addr = addr;
+         return -EINVAL;
+     }
++    for (i = 0; i < ARRAY_SIZE(buf->word); i++) {
++        le32_to_cpus(&buf->word[i]);
++    }
+     return 0;
+ 
+ }
+@@ -312,7 +329,7 @@ static int smmu_get_cd(SMMUv3State *s, STE *ste, uint32_t ssid,
+                        CD *buf, SMMUEventInfo *event)
+ {
+     dma_addr_t addr = STE_CTXPTR(ste);
+-    int ret;
++    int ret, i;
+ 
+     trace_smmuv3_get_cd(addr);
+     /* TODO: guarantee 64-bit single-copy atomicity */
+@@ -325,6 +342,9 @@ static int smmu_get_cd(SMMUv3State *s, STE *ste, uint32_t ssid,
+         event->u.f_ste_fetch.addr = addr;
+         return -EINVAL;
+     }
++    for (i = 0; i < ARRAY_SIZE(buf->word); i++) {
++        le32_to_cpus(&buf->word[i]);
++    }
+     return 0;
+ }
+ 
+@@ -406,7 +426,7 @@ static int smmu_find_ste(SMMUv3State *s, uint32_t sid, STE *ste,
+         return -EINVAL;
+     }
+     if (s->features & SMMU_FEATURE_2LVL_STE) {
+-        int l1_ste_offset, l2_ste_offset, max_l2_ste, span;
++        int l1_ste_offset, l2_ste_offset, max_l2_ste, span, i;
+         dma_addr_t l1ptr, l2ptr;
+         STEDesc l1std;
+ 
+@@ -430,6 +450,9 @@ static int smmu_find_ste(SMMUv3State *s, uint32_t sid, STE *ste,
+             event->u.f_ste_fetch.addr = l1ptr;
+             return -EINVAL;
+         }
++        for (i = 0; i < ARRAY_SIZE(l1std.word); i++) {
++            le32_to_cpus(&l1std.word[i]);
++        }
+ 
+         span = L1STD_SPAN(&l1std);
+ 
+diff --git a/hw/block/xen-block.c b/hw/block/xen-block.c
+index 345b284d70..5e45a8b729 100644
+--- a/hw/block/xen-block.c
++++ b/hw/block/xen-block.c
+@@ -759,14 +759,15 @@ static XenBlockDrive *xen_block_drive_create(const char *id,
+     drive = g_new0(XenBlockDrive, 1);
+     drive->id = g_strdup(id);
+ 
+-    file_layer = qdict_new();
+-    driver_layer = qdict_new();
+-
+     rc = stat(filename, &st);
+     if (rc) {
+         error_setg_errno(errp, errno, "Could not stat file '%s'", filename);
+         goto done;
+     }
++
++    file_layer = qdict_new();
++    driver_layer = qdict_new();
++
+     if (S_ISBLK(st.st_mode)) {
+         qdict_put_str(file_layer, "driver", "host_device");
+     } else {
+@@ -774,7 +775,6 @@ static XenBlockDrive *xen_block_drive_create(const char *id,
+     }
+ 
+     qdict_put_str(file_layer, "filename", filename);
+-    g_free(filename);
+ 
+     if (mode && *mode != 'w') {
+         qdict_put_bool(file_layer, "read-only", true);
+@@ -809,7 +809,6 @@ static XenBlockDrive *xen_block_drive_create(const char *id,
+     qdict_put_str(file_layer, "locking", "off");
+ 
+     qdict_put_str(driver_layer, "driver", driver);
+-    g_free(driver);
+ 
+     qdict_put(driver_layer, "file", file_layer);
+ 
+@@ -820,6 +819,8 @@ static XenBlockDrive *xen_block_drive_create(const char *id,
+     qobject_unref(driver_layer);
+ 
+ done:
++    g_free(filename);
++    g_free(driver);
+     if (*errp) {
+         xen_block_drive_destroy(drive, NULL);
+         return NULL;
+diff --git a/hw/i386/intel_iommu.c b/hw/i386/intel_iommu.c
+index d025ef2873..6640b669e2 100644
+--- a/hw/i386/intel_iommu.c
++++ b/hw/i386/intel_iommu.c
+@@ -755,6 +755,8 @@ static int vtd_get_pdire_from_pdir_table(dma_addr_t pasid_dir_base,
+         return -VTD_FR_PASID_TABLE_INV;
+     }
+ 
++    pdire->val = le64_to_cpu(pdire->val);
++
+     return 0;
+ }
+ 
+@@ -779,6 +781,9 @@ static int vtd_get_pe_in_pasid_leaf_table(IntelIOMMUState *s,
+                         pe, entry_size, MEMTXATTRS_UNSPECIFIED)) {
+         return -VTD_FR_PASID_TABLE_INV;
+     }
++    for (size_t i = 0; i < ARRAY_SIZE(pe->val); i++) {
++        pe->val[i] = le64_to_cpu(pe->val[i]);
++    }
+ 
+     /* Do translation type check */
+     if (!vtd_pe_type_check(x86_iommu, pe)) {
+@@ -3318,14 +3323,15 @@ static int vtd_irte_get(IntelIOMMUState *iommu, uint16_t index,
+         return -VTD_FR_IR_ROOT_INVAL;
+     }
+ 
+-    trace_vtd_ir_irte_get(index, le64_to_cpu(entry->data[1]),
+-                          le64_to_cpu(entry->data[0]));
++    entry->data[0] = le64_to_cpu(entry->data[0]);
++    entry->data[1] = le64_to_cpu(entry->data[1]);
++
++    trace_vtd_ir_irte_get(index, entry->data[1], entry->data[0]);
+ 
+     if (!entry->irte.present) {
+         error_report_once("%s: detected non-present IRTE "
+                           "(index=%u, high=0x%" PRIx64 ", low=0x%" PRIx64 ")",
+-                          __func__, index, le64_to_cpu(entry->data[1]),
+-                          le64_to_cpu(entry->data[0]));
++                          __func__, index, entry->data[1], entry->data[0]);
+         return -VTD_FR_IR_ENTRY_P;
+     }
+ 
+@@ -3333,14 +3339,13 @@ static int vtd_irte_get(IntelIOMMUState *iommu, uint16_t index,
+         entry->irte.__reserved_2) {
+         error_report_once("%s: detected non-zero reserved IRTE "
+                           "(index=%u, high=0x%" PRIx64 ", low=0x%" PRIx64 ")",
+-                          __func__, index, le64_to_cpu(entry->data[1]),
+-                          le64_to_cpu(entry->data[0]));
++                          __func__, index, entry->data[1], entry->data[0]);
+         return -VTD_FR_IR_IRTE_RSVD;
+     }
+ 
+     if (sid != X86_IOMMU_SID_INVALID) {
+         /* Validate IRTE SID */
+-        source_id = le32_to_cpu(entry->irte.source_id);
++        source_id = entry->irte.source_id;
+         switch (entry->irte.sid_vtype) {
+         case VTD_SVT_NONE:
+             break;
+@@ -3394,7 +3399,7 @@ static int vtd_remap_irq_get(IntelIOMMUState *iommu, uint16_t index,
+     irq->trigger_mode = irte.irte.trigger_mode;
+     irq->vector = irte.irte.vector;
+     irq->delivery_mode = irte.irte.delivery_mode;
+-    irq->dest = le32_to_cpu(irte.irte.dest_id);
++    irq->dest = irte.irte.dest_id;
+     if (!iommu->intr_eime) {
+ #define  VTD_IR_APIC_DEST_MASK         (0xff00ULL)
+ #define  VTD_IR_APIC_DEST_SHIFT        (8)
+@@ -3449,7 +3454,7 @@ static int vtd_interrupt_remap_msi(IntelIOMMUState *iommu,
+         goto out;
+     }
+ 
+-    index = addr.addr.index_h << 15 | le16_to_cpu(addr.addr.index_l);
++    index = addr.addr.index_h << 15 | addr.addr.index_l;
+ 
+ #define  VTD_IR_MSI_DATA_SUBHANDLE       (0x0000ffff)
+ #define  VTD_IR_MSI_DATA_RESERVED        (0xffff0000)
+diff --git a/hw/i386/intel_iommu_internal.h b/hw/i386/intel_iommu_internal.h
+index f090e61e11..e4d43ce48c 100644
+--- a/hw/i386/intel_iommu_internal.h
++++ b/hw/i386/intel_iommu_internal.h
+@@ -321,12 +321,21 @@ typedef enum VTDFaultReason {
+ 
+ /* Interrupt Entry Cache Invalidation Descriptor: VT-d 6.5.2.7. */
+ struct VTDInvDescIEC {
++#if HOST_BIG_ENDIAN
++    uint64_t reserved_2:16;
++    uint64_t index:16;          /* Start index to invalidate */
++    uint64_t index_mask:5;      /* 2^N for continuous int invalidation */
++    uint64_t resved_1:22;
++    uint64_t granularity:1;     /* If set, it's global IR invalidation */
++    uint64_t type:4;            /* Should always be 0x4 */
++#else
+     uint32_t type:4;            /* Should always be 0x4 */
+     uint32_t granularity:1;     /* If set, it's global IR invalidation */
+     uint32_t resved_1:22;
+     uint32_t index_mask:5;      /* 2^N for continuous int invalidation */
+     uint32_t index:16;          /* Start index to invalidate */
+     uint32_t reserved_2:16;
++#endif
+ };
+ typedef struct VTDInvDescIEC VTDInvDescIEC;
+ 
+diff --git a/hw/i386/x86-iommu.c b/hw/i386/x86-iommu.c
+index 01d11325a6..726e9e1d16 100644
+--- a/hw/i386/x86-iommu.c
++++ b/hw/i386/x86-iommu.c
+@@ -63,7 +63,7 @@ void x86_iommu_irq_to_msi_message(X86IOMMUIrq *irq, MSIMessage *msg_out)
+     msg.redir_hint = irq->redir_hint;
+     msg.dest = irq->dest;
+     msg.__addr_hi = irq->dest & 0xffffff00;
+-    msg.__addr_head = cpu_to_le32(0xfee);
++    msg.__addr_head = 0xfee;
+     /* Keep this from original MSI address bits */
+     msg.__not_used = irq->msi_addr_last_bits;
+ 
+diff --git a/hw/ide/piix.c b/hw/ide/piix.c
+index 267dbf37db..066be77c8e 100644
+--- a/hw/ide/piix.c
++++ b/hw/ide/piix.c
+@@ -123,7 +123,7 @@ static void piix_ide_reset(DeviceState *dev)
+     pci_set_word(pci_conf + PCI_COMMAND, 0x0000);
+     pci_set_word(pci_conf + PCI_STATUS,
+                  PCI_STATUS_DEVSEL_MEDIUM | PCI_STATUS_FAST_BACK);
+-    pci_set_byte(pci_conf + 0x20, 0x01);  /* BMIBA: 20-23h */
++    pci_set_long(pci_conf + 0x20, 0x1);  /* BMIBA: 20-23h */
+ }
+ 
+ static int pci_piix_init_ports(PCIIDEState *d)
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 4abd49e298..8cd7a400a0 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -3888,6 +3888,7 @@ static void virtio_net_class_init(ObjectClass *klass, void *data)
+     vdc->vmsd = &vmstate_virtio_net_device;
+     vdc->primary_unplug_pending = primary_unplug_pending;
+     vdc->get_vhost = virtio_net_get_vhost;
++    vdc->toggle_device_iotlb = vhost_toggle_device_iotlb;
+ }
+ 
+ static const TypeInfo virtio_net_info = {
+diff --git a/hw/pci/pci_host.c b/hw/pci/pci_host.c
+index eaf217ff55..d2552cff1b 100644
+--- a/hw/pci/pci_host.c
++++ b/hw/pci/pci_host.c
+@@ -62,6 +62,17 @@ static void pci_adjust_config_limit(PCIBus *bus, uint32_t *limit)
+     }
+ }
+ 
++static bool is_pci_dev_ejected(PCIDevice *pci_dev)
++{
++    /*
++     * device unplug was requested and the guest acked it,
++     * so we stop responding config accesses even if the
++     * device is not deleted (failover flow)
++     */
++    return pci_dev && pci_dev->partially_hotplugged &&
++           !pci_dev->qdev.pending_deleted_event;
++}
++
+ void pci_host_config_write_common(PCIDevice *pci_dev, uint32_t addr,
+                                   uint32_t limit, uint32_t val, uint32_t len)
+ {
+@@ -75,7 +86,7 @@ void pci_host_config_write_common(PCIDevice *pci_dev, uint32_t addr,
+      * allowing direct removal of unexposed functions.
+      */
+     if ((pci_dev->qdev.hotplugged && !pci_get_function_0(pci_dev)) ||
+-        !pci_dev->has_power) {
++        !pci_dev->has_power || is_pci_dev_ejected(pci_dev)) {
+         return;
+     }
+ 
+@@ -100,7 +111,7 @@ uint32_t pci_host_config_read_common(PCIDevice *pci_dev, uint32_t addr,
+      * allowing direct removal of unexposed functions.
+      */
+     if ((pci_dev->qdev.hotplugged && !pci_get_function_0(pci_dev)) ||
+-        !pci_dev->has_power) {
++        !pci_dev->has_power || is_pci_dev_ejected(pci_dev)) {
+         return ~0x0;
+     }
+ 
+diff --git a/hw/vfio/pci.c b/hw/vfio/pci.c
+index 92a45de4c3..71509f9c7e 100644
+--- a/hw/vfio/pci.c
++++ b/hw/vfio/pci.c
+@@ -3158,6 +3158,9 @@ static void vfio_realize(PCIDevice *pdev, Error **errp)
+     return;
+ 
+ out_deregister:
++    if (vdev->interrupt == VFIO_INT_INTx) {
++        vfio_intx_disable(vdev);
++    }
+     pci_device_set_intx_routing_notifier(&vdev->pdev, NULL);
+     if (vdev->irqchip_change_notifier.notify) {
+         kvm_irqchip_remove_change_notifier(&vdev->irqchip_change_notifier);
+diff --git a/hw/virtio/vhost-stub.c b/hw/virtio/vhost-stub.c
+index c175148fce..aa858ef3fb 100644
+--- a/hw/virtio/vhost-stub.c
++++ b/hw/virtio/vhost-stub.c
+@@ -15,3 +15,7 @@ bool vhost_user_init(VhostUserState *user, CharBackend *chr, Error **errp)
+ void vhost_user_cleanup(VhostUserState *user)
+ {
+ }
++
++void vhost_toggle_device_iotlb(VirtIODevice *vdev)
++{
++}
+diff --git a/hw/virtio/vhost.c b/hw/virtio/vhost.c
+index f38997b3f6..35274393e2 100644
+--- a/hw/virtio/vhost.c
++++ b/hw/virtio/vhost.c
+@@ -781,7 +781,6 @@ static void vhost_iommu_region_add(MemoryListener *listener,
+     Int128 end;
+     int iommu_idx;
+     IOMMUMemoryRegion *iommu_mr;
+-    int ret;
+ 
+     if (!memory_region_is_iommu(section->mr)) {
+         return;
+@@ -796,7 +795,9 @@ static void vhost_iommu_region_add(MemoryListener *listener,
+     iommu_idx = memory_region_iommu_attrs_to_index(iommu_mr,
+                                                    MEMTXATTRS_UNSPECIFIED);
+     iommu_notifier_init(&iommu->n, vhost_iommu_unmap_notify,
+-                        IOMMU_NOTIFIER_DEVIOTLB_UNMAP,
++                        dev->vdev->device_iotlb_enabled ?
++                            IOMMU_NOTIFIER_DEVIOTLB_UNMAP :
++                            IOMMU_NOTIFIER_UNMAP,
+                         section->offset_within_region,
+                         int128_get64(end),
+                         iommu_idx);
+@@ -804,16 +805,8 @@ static void vhost_iommu_region_add(MemoryListener *listener,
+     iommu->iommu_offset = section->offset_within_address_space -
+                           section->offset_within_region;
+     iommu->hdev = dev;
+-    ret = memory_region_register_iommu_notifier(section->mr, &iommu->n, NULL);
+-    if (ret) {
+-        /*
+-         * Some vIOMMUs do not support dev-iotlb yet.  If so, try to use the
+-         * UNMAP legacy message
+-         */
+-        iommu->n.notifier_flags = IOMMU_NOTIFIER_UNMAP;
+-        memory_region_register_iommu_notifier(section->mr, &iommu->n,
+-                                              &error_fatal);
+-    }
++    memory_region_register_iommu_notifier(section->mr, &iommu->n,
++                                          &error_fatal);
+     QLIST_INSERT_HEAD(&dev->iommu_list, iommu, iommu_next);
+     /* TODO: can replay help performance here? */
+ }
+@@ -841,6 +834,27 @@ static void vhost_iommu_region_del(MemoryListener *listener,
+     }
+ }
+ 
++void vhost_toggle_device_iotlb(VirtIODevice *vdev)
++{
++    VirtioDeviceClass *vdc = VIRTIO_DEVICE_GET_CLASS(vdev);
++    struct vhost_dev *dev;
++    struct vhost_iommu *iommu;
++
++    if (vdev->vhost_started) {
++        dev = vdc->get_vhost(vdev);
++    } else {
++        return;
++    }
++
++    QLIST_FOREACH(iommu, &dev->iommu_list, iommu_next) {
++        memory_region_unregister_iommu_notifier(iommu->mr, &iommu->n);
++        iommu->n.notifier_flags = vdev->device_iotlb_enabled ?
++                IOMMU_NOTIFIER_DEVIOTLB_UNMAP : IOMMU_NOTIFIER_UNMAP;
++        memory_region_register_iommu_notifier(iommu->mr, &iommu->n,
++                                              &error_fatal);
++    }
++}
++
+ static int vhost_virtqueue_set_addr(struct vhost_dev *dev,
+                                     struct vhost_virtqueue *vq,
+                                     unsigned idx, bool enable_log)
+diff --git a/hw/virtio/virtio-crypto.c b/hw/virtio/virtio-crypto.c
+index a6dbdd32da..406b4e5fd0 100644
+--- a/hw/virtio/virtio-crypto.c
++++ b/hw/virtio/virtio-crypto.c
+@@ -635,6 +635,11 @@ virtio_crypto_sym_op_helper(VirtIODevice *vdev,
+         return NULL;
+     }
+ 
++    if (unlikely(src_len != dst_len)) {
++        virtio_error(vdev, "sym request src len is different from dst len");
++        return NULL;
++    }
++
+     max_len = (uint64_t)iv_len + aad_len + src_len + dst_len + hash_result_len;
+     if (unlikely(max_len > vcrypto->conf.max_size)) {
+         virtio_error(vdev, "virtio-crypto too big length");
+diff --git a/hw/virtio/virtio-iommu.c b/hw/virtio/virtio-iommu.c
+index 62e07ec2e4..eb82462c95 100644
+--- a/hw/virtio/virtio-iommu.c
++++ b/hw/virtio/virtio-iommu.c
+@@ -727,13 +727,15 @@ static void virtio_iommu_handle_command(VirtIODevice *vdev, VirtQueue *vq)
+     VirtIOIOMMU *s = VIRTIO_IOMMU(vdev);
+     struct virtio_iommu_req_head head;
+     struct virtio_iommu_req_tail tail = {};
+-    size_t output_size = sizeof(tail), sz;
+     VirtQueueElement *elem;
+     unsigned int iov_cnt;
+     struct iovec *iov;
+     void *buf = NULL;
++    size_t sz;
+ 
+     for (;;) {
++        size_t output_size = sizeof(tail);
++
+         elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
+         if (!elem) {
+             return;
+diff --git a/hw/virtio/virtio-pci.c b/hw/virtio/virtio-pci.c
+index a1c9dfa7bb..67e771c373 100644
+--- a/hw/virtio/virtio-pci.c
++++ b/hw/virtio/virtio-pci.c
+@@ -631,6 +631,38 @@ virtio_address_space_read(VirtIOPCIProxy *proxy, hwaddr addr,
+     }
+ }
+ 
++static void virtio_pci_ats_ctrl_trigger(PCIDevice *pci_dev, bool enable)
++{
++    VirtIOPCIProxy *proxy = VIRTIO_PCI(pci_dev);
++    VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
++    VirtioDeviceClass *k = VIRTIO_DEVICE_GET_CLASS(vdev);
++
++    vdev->device_iotlb_enabled = enable;
++
++    if (k->toggle_device_iotlb) {
++        k->toggle_device_iotlb(vdev);
++    }
++}
++
++static void pcie_ats_config_write(PCIDevice *dev, uint32_t address,
++                                  uint32_t val, int len)
++{
++    uint32_t off;
++    uint16_t ats_cap = dev->exp.ats_cap;
++
++    if (!ats_cap || address < ats_cap) {
++        return;
++    }
++    off = address - ats_cap;
++    if (off >= PCI_EXT_CAP_ATS_SIZEOF) {
++        return;
++    }
++
++    if (range_covers_byte(off, len, PCI_ATS_CTRL + 1)) {
++        virtio_pci_ats_ctrl_trigger(dev, !!(val & PCI_ATS_CTRL_ENABLE));
++    }
++}
++
+ static void virtio_write_config(PCIDevice *pci_dev, uint32_t address,
+                                 uint32_t val, int len)
+ {
+@@ -644,6 +676,10 @@ static void virtio_write_config(PCIDevice *pci_dev, uint32_t address,
+         pcie_cap_flr_write_config(pci_dev, address, val, len);
+     }
+ 
++    if (proxy->flags & VIRTIO_PCI_FLAG_ATS) {
++        pcie_ats_config_write(pci_dev, address, val, len);
++    }
++
+     if (range_covers_byte(address, len, PCI_COMMAND)) {
+         if (!(pci_dev->config[PCI_COMMAND] & PCI_COMMAND_MASTER)) {
+             virtio_set_disabled(vdev, true);
+diff --git a/include/hw/i386/intel_iommu.h b/include/hw/i386/intel_iommu.h
+index 46d973e629..7660dda768 100644
+--- a/include/hw/i386/intel_iommu.h
++++ b/include/hw/i386/intel_iommu.h
+@@ -142,37 +142,39 @@ enum {
+ union VTD_IR_TableEntry {
+     struct {
+ #if HOST_BIG_ENDIAN
+-        uint32_t __reserved_1:8;     /* Reserved 1 */
+-        uint32_t vector:8;           /* Interrupt Vector */
+-        uint32_t irte_mode:1;        /* IRTE Mode */
+-        uint32_t __reserved_0:3;     /* Reserved 0 */
+-        uint32_t __avail:4;          /* Available spaces for software */
+-        uint32_t delivery_mode:3;    /* Delivery Mode */
+-        uint32_t trigger_mode:1;     /* Trigger Mode */
+-        uint32_t redir_hint:1;       /* Redirection Hint */
+-        uint32_t dest_mode:1;        /* Destination Mode */
+-        uint32_t fault_disable:1;    /* Fault Processing Disable */
+-        uint32_t present:1;          /* Whether entry present/available */
++        uint64_t dest_id:32;         /* Destination ID */
++        uint64_t __reserved_1:8;     /* Reserved 1 */
++        uint64_t vector:8;           /* Interrupt Vector */
++        uint64_t irte_mode:1;        /* IRTE Mode */
++        uint64_t __reserved_0:3;     /* Reserved 0 */
++        uint64_t __avail:4;          /* Available spaces for software */
++        uint64_t delivery_mode:3;    /* Delivery Mode */
++        uint64_t trigger_mode:1;     /* Trigger Mode */
++        uint64_t redir_hint:1;       /* Redirection Hint */
++        uint64_t dest_mode:1;        /* Destination Mode */
++        uint64_t fault_disable:1;    /* Fault Processing Disable */
++        uint64_t present:1;          /* Whether entry present/available */
+ #else
+-        uint32_t present:1;          /* Whether entry present/available */
+-        uint32_t fault_disable:1;    /* Fault Processing Disable */
+-        uint32_t dest_mode:1;        /* Destination Mode */
+-        uint32_t redir_hint:1;       /* Redirection Hint */
+-        uint32_t trigger_mode:1;     /* Trigger Mode */
+-        uint32_t delivery_mode:3;    /* Delivery Mode */
+-        uint32_t __avail:4;          /* Available spaces for software */
+-        uint32_t __reserved_0:3;     /* Reserved 0 */
+-        uint32_t irte_mode:1;        /* IRTE Mode */
+-        uint32_t vector:8;           /* Interrupt Vector */
+-        uint32_t __reserved_1:8;     /* Reserved 1 */
++        uint64_t present:1;          /* Whether entry present/available */
++        uint64_t fault_disable:1;    /* Fault Processing Disable */
++        uint64_t dest_mode:1;        /* Destination Mode */
++        uint64_t redir_hint:1;       /* Redirection Hint */
++        uint64_t trigger_mode:1;     /* Trigger Mode */
++        uint64_t delivery_mode:3;    /* Delivery Mode */
++        uint64_t __avail:4;          /* Available spaces for software */
++        uint64_t __reserved_0:3;     /* Reserved 0 */
++        uint64_t irte_mode:1;        /* IRTE Mode */
++        uint64_t vector:8;           /* Interrupt Vector */
++        uint64_t __reserved_1:8;     /* Reserved 1 */
++        uint64_t dest_id:32;         /* Destination ID */
+ #endif
+-        uint32_t dest_id;            /* Destination ID */
+-        uint16_t source_id;          /* Source-ID */
+ #if HOST_BIG_ENDIAN
+         uint64_t __reserved_2:44;    /* Reserved 2 */
+         uint64_t sid_vtype:2;        /* Source-ID Validation Type */
+         uint64_t sid_q:2;            /* Source-ID Qualifier */
++        uint64_t source_id:16;       /* Source-ID */
+ #else
++        uint64_t source_id:16;       /* Source-ID */
+         uint64_t sid_q:2;            /* Source-ID Qualifier */
+         uint64_t sid_vtype:2;        /* Source-ID Validation Type */
+         uint64_t __reserved_2:44;    /* Reserved 2 */
+diff --git a/include/hw/i386/x86-iommu.h b/include/hw/i386/x86-iommu.h
+index 7637edb430..02dc2fe9ee 100644
+--- a/include/hw/i386/x86-iommu.h
++++ b/include/hw/i386/x86-iommu.h
+@@ -88,40 +88,42 @@ struct X86IOMMU_MSIMessage {
+     union {
+         struct {
+ #if HOST_BIG_ENDIAN
+-            uint32_t __addr_head:12; /* 0xfee */
+-            uint32_t dest:8;
+-            uint32_t __reserved:8;
+-            uint32_t redir_hint:1;
+-            uint32_t dest_mode:1;
+-            uint32_t __not_used:2;
++            uint64_t __addr_hi:32;
++            uint64_t __addr_head:12; /* 0xfee */
++            uint64_t dest:8;
++            uint64_t __reserved:8;
++            uint64_t redir_hint:1;
++            uint64_t dest_mode:1;
++            uint64_t __not_used:2;
+ #else
+-            uint32_t __not_used:2;
+-            uint32_t dest_mode:1;
+-            uint32_t redir_hint:1;
+-            uint32_t __reserved:8;
+-            uint32_t dest:8;
+-            uint32_t __addr_head:12; /* 0xfee */
++            uint64_t __not_used:2;
++            uint64_t dest_mode:1;
++            uint64_t redir_hint:1;
++            uint64_t __reserved:8;
++            uint64_t dest:8;
++            uint64_t __addr_head:12; /* 0xfee */
++            uint64_t __addr_hi:32;
+ #endif
+-            uint32_t __addr_hi;
+         } QEMU_PACKED;
+         uint64_t msi_addr;
+     };
+     union {
+         struct {
+ #if HOST_BIG_ENDIAN
+-            uint16_t trigger_mode:1;
+-            uint16_t level:1;
+-            uint16_t __resved:3;
+-            uint16_t delivery_mode:3;
+-            uint16_t vector:8;
++            uint32_t __resved1:16;
++            uint32_t trigger_mode:1;
++            uint32_t level:1;
++            uint32_t __resved:3;
++            uint32_t delivery_mode:3;
++            uint32_t vector:8;
+ #else
+-            uint16_t vector:8;
+-            uint16_t delivery_mode:3;
+-            uint16_t __resved:3;
+-            uint16_t level:1;
+-            uint16_t trigger_mode:1;
++            uint32_t vector:8;
++            uint32_t delivery_mode:3;
++            uint32_t __resved:3;
++            uint32_t level:1;
++            uint32_t trigger_mode:1;
++            uint32_t __resved1:16;
+ #endif
+-            uint16_t __resved1;
+         } QEMU_PACKED;
+         uint32_t msi_data;
+     };
+diff --git a/include/hw/virtio/vhost.h b/include/hw/virtio/vhost.h
+index 67a6807fac..c82dbb2c32 100644
+--- a/include/hw/virtio/vhost.h
++++ b/include/hw/virtio/vhost.h
+@@ -297,6 +297,7 @@ bool vhost_has_free_slot(void);
+ int vhost_net_set_backend(struct vhost_dev *hdev,
+                           struct vhost_vring_file *file);
+ 
++void vhost_toggle_device_iotlb(VirtIODevice *vdev);
+ int vhost_device_iotlb_miss(struct vhost_dev *dev, uint64_t iova, int write);
+ 
+ int vhost_virtqueue_start(struct vhost_dev *dev, struct VirtIODevice *vdev,
+diff --git a/include/hw/virtio/virtio.h b/include/hw/virtio/virtio.h
+index acfd4df125..96a56430a6 100644
+--- a/include/hw/virtio/virtio.h
++++ b/include/hw/virtio/virtio.h
+@@ -135,6 +135,7 @@ struct VirtIODevice
+     AddressSpace *dma_as;
+     QLIST_HEAD(, VirtQueue) *vector_queues;
+     QTAILQ_ENTRY(VirtIODevice) next;
++    bool device_iotlb_enabled;
+ };
+ 
+ struct VirtioDeviceClass {
+@@ -192,6 +193,7 @@ struct VirtioDeviceClass {
+     const VMStateDescription *vmsd;
+     bool (*primary_unplug_pending)(void *opaque);
+     struct vhost_dev *(*get_vhost)(VirtIODevice *vdev);
++    void (*toggle_device_iotlb)(VirtIODevice *vdev);
+ };
+ 
+ void virtio_instance_init_common(Object *proxy_obj, void *data,
+diff --git a/include/io/channel-tls.h b/include/io/channel-tls.h
+index 5672479e9e..26c67f17e2 100644
+--- a/include/io/channel-tls.h
++++ b/include/io/channel-tls.h
+@@ -48,6 +48,7 @@ struct QIOChannelTLS {
+     QIOChannel *master;
+     QCryptoTLSSession *session;
+     QIOChannelShutdown shutdown;
++    guint hs_ioc_tag;
+ };
+ 
+ /**
+diff --git a/io/channel-tls.c b/io/channel-tls.c
+index 4ce08ccc28..a91efb57f3 100644
+--- a/io/channel-tls.c
++++ b/io/channel-tls.c
+@@ -198,12 +198,13 @@ static void qio_channel_tls_handshake_task(QIOChannelTLS *ioc,
+         }
+ 
+         trace_qio_channel_tls_handshake_pending(ioc, status);
+-        qio_channel_add_watch_full(ioc->master,
+-                                   condition,
+-                                   qio_channel_tls_handshake_io,
+-                                   data,
+-                                   NULL,
+-                                   context);
++        ioc->hs_ioc_tag =
++            qio_channel_add_watch_full(ioc->master,
++                                       condition,
++                                       qio_channel_tls_handshake_io,
++                                       data,
++                                       NULL,
++                                       context);
+     }
+ }
+ 
+@@ -218,6 +219,7 @@ static gboolean qio_channel_tls_handshake_io(QIOChannel *ioc,
+     QIOChannelTLS *tioc = QIO_CHANNEL_TLS(
+         qio_task_get_source(task));
+ 
++    tioc->hs_ioc_tag = 0;
+     g_free(data);
+     qio_channel_tls_handshake_task(tioc, task, context);
+ 
+@@ -377,6 +379,10 @@ static int qio_channel_tls_close(QIOChannel *ioc,
+ {
+     QIOChannelTLS *tioc = QIO_CHANNEL_TLS(ioc);
+ 
++    if (tioc->hs_ioc_tag) {
++        g_clear_handle_id(&tioc->hs_ioc_tag, g_source_remove);
++    }
++
+     return qio_channel_close(tioc->master, errp);
+ }
+ 
+diff --git a/linux-user/arm/cpu_loop.c b/linux-user/arm/cpu_loop.c
+index c0790f3246..85804c367a 100644
+--- a/linux-user/arm/cpu_loop.c
++++ b/linux-user/arm/cpu_loop.c
+@@ -117,8 +117,9 @@ static void arm_kernel_cmpxchg32_helper(CPUARMState *env)
+ {
+     uint32_t oldval, newval, val, addr, cpsr, *host_addr;
+ 
+-    oldval = env->regs[0];
+-    newval = env->regs[1];
++    /* Swap if host != guest endianness, for the host cmpxchg below */
++    oldval = tswap32(env->regs[0]);
++    newval = tswap32(env->regs[1]);
+     addr = env->regs[2];
+ 
+     mmap_lock();
+@@ -174,6 +175,10 @@ static void arm_kernel_cmpxchg64_helper(CPUARMState *env)
+         return;
+     }
+ 
++    /* Swap if host != guest endianness, for the host cmpxchg below */
++    oldval = tswap64(oldval);
++    newval = tswap64(newval);
++
+ #ifdef CONFIG_ATOMIC64
+     val = qatomic_cmpxchg__nocheck(host_addr, oldval, newval);
+     cpsr = (val == oldval) * CPSR_C;
+diff --git a/net/vhost-vdpa.c b/net/vhost-vdpa.c
+index e533f8a348..1b1a27de02 100644
+--- a/net/vhost-vdpa.c
++++ b/net/vhost-vdpa.c
+@@ -403,8 +403,9 @@ static int vhost_vdpa_net_load_mac(VhostVDPAState *s, const VirtIONet *n)
+         if (unlikely(dev_written < 0)) {
+             return dev_written;
+         }
+-
+-        return *s->status != VIRTIO_NET_OK;
++        if (*s->status != VIRTIO_NET_OK) {
++            return -EIO;
++        }
+     }
+ 
+     return 0;
+@@ -428,8 +429,11 @@ static int vhost_vdpa_net_load_mq(VhostVDPAState *s,
+     if (unlikely(dev_written < 0)) {
+         return dev_written;
+     }
++    if (*s->status != VIRTIO_NET_OK) {
++        return -EIO;
++    }
+ 
+-    return *s->status != VIRTIO_NET_OK;
++    return 0;
+ }
+ 
+ static int vhost_vdpa_net_load(NetClientState *nc)
+@@ -525,7 +529,16 @@ out:
+         error_report("Bad device CVQ written length");
+     }
+     vhost_svq_push_elem(svq, elem, MIN(in_len, sizeof(status)));
+-    g_free(elem);
++    /*
++     * `elem` belongs to vhost_vdpa_net_handle_ctrl_avail() only when
++     * the function successfully forwards the CVQ command, indicated
++     * by a non-negative value of `dev_written`. Otherwise, it still
++     * belongs to SVQ.
++     * This function should only free the `elem` when it owns.
++     */
++    if (dev_written >= 0) {
++        g_free(elem);
++    }
+     return dev_written < 0 ? dev_written : 0;
+ }
+ 
+diff --git a/qemu-nbd.c b/qemu-nbd.c
+index 0cd5aa6f02..f71f5125d8 100644
+--- a/qemu-nbd.c
++++ b/qemu-nbd.c
+@@ -272,9 +272,14 @@ static void *show_parts(void *arg)
+     return NULL;
+ }
+ 
++struct NbdClientOpts {
++    char *device;
++    bool fork_process;
++};
++
+ static void *nbd_client_thread(void *arg)
+ {
+-    char *device = arg;
++    struct NbdClientOpts *opts = arg;
+     NBDExportInfo info = { .request_sizes = false, .name = g_strdup("") };
+     QIOChannelSocket *sioc;
+     int fd = -1;
+@@ -298,10 +303,10 @@ static void *nbd_client_thread(void *arg)
+         goto out;
+     }
+ 
+-    fd = open(device, O_RDWR);
++    fd = open(opts->device, O_RDWR);
+     if (fd < 0) {
+         /* Linux-only, we can use %m in printf.  */
+-        error_report("Failed to open %s: %m", device);
++        error_report("Failed to open %s: %m", opts->device);
+         goto out;
+     }
+ 
+@@ -311,11 +316,11 @@ static void *nbd_client_thread(void *arg)
+     }
+ 
+     /* update partition table */
+-    pthread_create(&show_parts_thread, NULL, show_parts, device);
++    pthread_create(&show_parts_thread, NULL, show_parts, opts->device);
+ 
+-    if (verbose) {
++    if (verbose && !opts->fork_process) {
+         fprintf(stderr, "NBD device %s is now connected to %s\n",
+-                device, srcpath);
++                opts->device, srcpath);
+     } else {
+         /* Close stderr so that the qemu-nbd process exits.  */
+         dup2(STDOUT_FILENO, STDERR_FILENO);
+@@ -575,11 +580,13 @@ int main(int argc, char **argv)
+     bool writethrough = false; /* Client will flush as needed. */
+     bool fork_process = false;
+     bool list = false;
+-    int old_stderr = -1;
+     unsigned socket_activation;
+     const char *pid_file_name = NULL;
+     const char *selinux_label = NULL;
+     BlockExportOptions *export_opts;
++#if HAVE_NBD_DEVICE
++    struct NbdClientOpts opts;
++#endif
+ 
+ #ifdef CONFIG_POSIX
+     os_setup_early_signal_handling();
+@@ -930,11 +937,6 @@ int main(int argc, char **argv)
+         } else if (pid == 0) {
+             close(stderr_fd[0]);
+ 
+-            /* Remember parent's stderr if we will be restoring it. */
+-            if (fork_process) {
+-                old_stderr = dup(STDERR_FILENO);
+-            }
+-
+             ret = qemu_daemon(1, 0);
+ 
+             /* Temporarily redirect stderr to the parent's pipe...  */
+@@ -1123,8 +1125,12 @@ int main(int argc, char **argv)
+     if (device) {
+ #if HAVE_NBD_DEVICE
+         int ret;
++        opts = (struct NbdClientOpts) {
++            .device = device,
++            .fork_process = fork_process,
++        };
+ 
+-        ret = pthread_create(&client_thread, NULL, nbd_client_thread, device);
++        ret = pthread_create(&client_thread, NULL, nbd_client_thread, &opts);
+         if (ret != 0) {
+             error_report("Failed to create client thread: %s", strerror(ret));
+             exit(EXIT_FAILURE);
+@@ -1150,8 +1156,7 @@ int main(int argc, char **argv)
+     }
+ 
+     if (fork_process) {
+-        dup2(old_stderr, STDERR_FILENO);
+-        close(old_stderr);
++        dup2(STDOUT_FILENO, STDERR_FILENO);
+     }
+ 
+     state = RUNNING;
+diff --git a/qga/installer/qemu-ga.wxs b/qga/installer/qemu-ga.wxs
+index 3442383627..949ba07fd2 100644
+--- a/qga/installer/qemu-ga.wxs
++++ b/qga/installer/qemu-ga.wxs
+@@ -116,22 +116,22 @@
+       </Directory>
+     </Directory>
+ 
+-    <Property Id="cmd" Value="cmd.exe"/>
++    <Property Id="rundll" Value="rundll32.exe"/>
+     <Property Id="REINSTALLMODE" Value="amus"/>
+ 
+     <?ifdef var.InstallVss?>
+     <CustomAction Id="RegisterCom"
+-              ExeCommand='/c "[qemu_ga_directory]qemu-ga.exe" -s vss-install'
++              ExeCommand='"[qemu_ga_directory]qga-vss.dll",DLLCOMRegister'
+               Execute="deferred"
+-              Property="cmd"
++              Property="rundll"
+               Impersonate="no"
+               Return="check"
+               >
+     </CustomAction>
+     <CustomAction Id="UnRegisterCom"
+-              ExeCommand='/c "[qemu_ga_directory]qemu-ga.exe" -s vss-uninstall'
++              ExeCommand='"[qemu_ga_directory]qga-vss.dll",DLLCOMUnregister'
+               Execute="deferred"
+-              Property="cmd"
++              Property="rundll"
+               Impersonate="no"
+               Return="check"
+               >
+diff --git a/qga/vss-win32/install.cpp b/qga/vss-win32/install.cpp
+index b8087e5baa..ff93b08a9e 100644
+--- a/qga/vss-win32/install.cpp
++++ b/qga/vss-win32/install.cpp
+@@ -357,6 +357,15 @@ out:
+     return hr;
+ }
+ 
++STDAPI_(void) CALLBACK DLLCOMRegister(HWND, HINSTANCE, LPSTR, int)
++{
++    COMRegister();
++}
++
++STDAPI_(void) CALLBACK DLLCOMUnregister(HWND, HINSTANCE, LPSTR, int)
++{
++    COMUnregister();
++}
+ 
+ static BOOL CreateRegistryKey(LPCTSTR key, LPCTSTR value, LPCTSTR data)
+ {
+diff --git a/qga/vss-win32/qga-vss.def b/qga/vss-win32/qga-vss.def
+index 927782c31b..ee97a81427 100644
+--- a/qga/vss-win32/qga-vss.def
++++ b/qga/vss-win32/qga-vss.def
+@@ -1,6 +1,8 @@
+ LIBRARY      "QGA-PROVIDER.DLL"
+ 
+ EXPORTS
++	DLLCOMRegister
++	DLLCOMUnregister
+ 	COMRegister		PRIVATE
+ 	COMUnregister		PRIVATE
+ 	DllCanUnloadNow		PRIVATE
+diff --git a/target/arm/translate.c b/target/arm/translate.c
+index a06da05640..9cf4a6819e 100644
+--- a/target/arm/translate.c
++++ b/target/arm/translate.c
+@@ -9030,7 +9030,7 @@ static bool trans_IT(DisasContext *s, arg_IT *a)
+ /* v8.1M CSEL/CSINC/CSNEG/CSINV */
+ static bool trans_CSEL(DisasContext *s, arg_CSEL *a)
+ {
+-    TCGv_i32 rn, rm, zero;
++    TCGv_i32 rn, rm;
+     DisasCompare c;
+ 
+     if (!arm_dc_feature(s, ARM_FEATURE_V8_1M)) {
+@@ -9048,16 +9048,17 @@ static bool trans_CSEL(DisasContext *s, arg_CSEL *a)
+     }
+ 
+     /* In this insn input reg fields of 0b1111 mean "zero", not "PC" */
+-    zero = tcg_constant_i32(0);
++    rn = tcg_temp_new_i32();
++    rm = tcg_temp_new_i32();
+     if (a->rn == 15) {
+-        rn = zero;
++        tcg_gen_movi_i32(rn, 0);
+     } else {
+-        rn = load_reg(s, a->rn);
++        load_reg_var(s, rn, a->rn);
+     }
+     if (a->rm == 15) {
+-        rm = zero;
++        tcg_gen_movi_i32(rm, 0);
+     } else {
+-        rm = load_reg(s, a->rm);
++        load_reg_var(s, rm, a->rm);
+     }
+ 
+     switch (a->op) {
+@@ -9077,7 +9078,7 @@ static bool trans_CSEL(DisasContext *s, arg_CSEL *a)
+     }
+ 
+     arm_test_cc(&c, a->fcond);
+-    tcg_gen_movcond_i32(c.cond, rn, c.value, zero, rn, rm);
++    tcg_gen_movcond_i32(c.cond, rn, c.value, tcg_constant_i32(0), rn, rm);
+     arm_free_cc(&c);
+ 
+     store_reg(s, a->rd, rn);
+diff --git a/target/hppa/cpu.h b/target/hppa/cpu.h
+index 6f3b6beecf..6f441f159b 100644
+--- a/target/hppa/cpu.h
++++ b/target/hppa/cpu.h
+@@ -168,6 +168,9 @@ typedef struct {
+ } hppa_tlb_entry;
+ 
+ typedef struct CPUArchState {
++    target_ureg iaoq_f;      /* front */
++    target_ureg iaoq_b;      /* back, aka next instruction */
++
+     target_ureg gr[32];
+     uint64_t fr[32];
+     uint64_t sr[8];          /* stored shifted into place for gva */
+@@ -186,8 +189,6 @@ typedef struct CPUArchState {
+     target_ureg psw_cb;      /* in least significant bit of next nibble */
+     target_ureg psw_cb_msb;  /* boolean */
+ 
+-    target_ureg iaoq_f;      /* front */
+-    target_ureg iaoq_b;      /* back, aka next instruction */
+     uint64_t iasq_f;
+     uint64_t iasq_b;
+ 
+diff --git a/target/i386/tcg/decode-new.c.inc b/target/i386/tcg/decode-new.c.inc
+index c2ee712561..ee4f4a899f 100644
+--- a/target/i386/tcg/decode-new.c.inc
++++ b/target/i386/tcg/decode-new.c.inc
+@@ -1815,16 +1815,18 @@ static void disas_insn_new(DisasContext *s, CPUState *cpu, int b)
+         }
+         break;
+ 
+-    case X86_SPECIAL_MMX:
+-        if (!(s->prefix & (PREFIX_REPZ | PREFIX_REPNZ | PREFIX_DATA))) {
+-            gen_helper_enter_mmx(cpu_env);
+-        }
++    default:
+         break;
+     }
+ 
+     if (!validate_vex(s, &decode)) {
+         return;
+     }
++    if (decode.e.special == X86_SPECIAL_MMX &&
++        !(s->prefix & (PREFIX_REPZ | PREFIX_REPNZ | PREFIX_DATA))) {
++        gen_helper_enter_mmx(cpu_env);
++    }
++
+     if (decode.op[0].has_ea || decode.op[1].has_ea || decode.op[2].has_ea) {
+         gen_load_ea(s, &decode.mem, decode.e.vex_class == 12);
+     }
+diff --git a/target/loongarch/cpu.h b/target/loongarch/cpu.h
+index e15c633b0b..6fc583f3e8 100644
+--- a/target/loongarch/cpu.h
++++ b/target/loongarch/cpu.h
+@@ -317,6 +317,7 @@ typedef struct CPUArchState {
+     uint64_t CSR_DBG;
+     uint64_t CSR_DERA;
+     uint64_t CSR_DSAVE;
++    uint64_t CSR_CPUID;
+ 
+ #ifndef CONFIG_USER_ONLY
+     LoongArchTLB  tlb[LOONGARCH_TLB_MAX];
+diff --git a/target/loongarch/csr_helper.c b/target/loongarch/csr_helper.c
+index 7e02787895..b778e6952d 100644
+--- a/target/loongarch/csr_helper.c
++++ b/target/loongarch/csr_helper.c
+@@ -36,6 +36,15 @@ target_ulong helper_csrrd_pgd(CPULoongArchState *env)
+     return v;
+ }
+ 
++target_ulong helper_csrrd_cpuid(CPULoongArchState *env)
++{
++    LoongArchCPU *lac = env_archcpu(env);
++
++    env->CSR_CPUID = CPU(lac)->cpu_index;
++
++    return env->CSR_CPUID;
++}
++
+ target_ulong helper_csrrd_tval(CPULoongArchState *env)
+ {
+     LoongArchCPU *cpu = env_archcpu(env);
+diff --git a/target/loongarch/helper.h b/target/loongarch/helper.h
+index 9c01823a26..f47b0f2d05 100644
+--- a/target/loongarch/helper.h
++++ b/target/loongarch/helper.h
+@@ -98,6 +98,7 @@ DEF_HELPER_1(rdtime_d, i64, env)
+ #ifndef CONFIG_USER_ONLY
+ /* CSRs helper */
+ DEF_HELPER_1(csrrd_pgd, i64, env)
++DEF_HELPER_1(csrrd_cpuid, i64, env)
+ DEF_HELPER_1(csrrd_tval, i64, env)
+ DEF_HELPER_2(csrwr_estat, i64, env, tl)
+ DEF_HELPER_2(csrwr_asid, i64, env, tl)
+diff --git a/target/loongarch/insn_trans/trans_privileged.c.inc b/target/loongarch/insn_trans/trans_privileged.c.inc
+index 40f82becb0..e3d92c7a22 100644
+--- a/target/loongarch/insn_trans/trans_privileged.c.inc
++++ b/target/loongarch/insn_trans/trans_privileged.c.inc
+@@ -99,13 +99,7 @@ static const CSRInfo csr_info[] = {
+     CSR_OFF(PWCH),
+     CSR_OFF(STLBPS),
+     CSR_OFF(RVACFG),
+-    [LOONGARCH_CSR_CPUID] = {
+-        .offset = (int)offsetof(CPUState, cpu_index)
+-                  - (int)offsetof(LoongArchCPU, env),
+-        .flags = CSRFL_READONLY,
+-        .readfn = NULL,
+-        .writefn = NULL
+-    },
++    CSR_OFF_FUNCS(CPUID, CSRFL_READONLY, gen_helper_csrrd_cpuid, NULL),
+     CSR_OFF_FLAGS(PRCFG1, CSRFL_READONLY),
+     CSR_OFF_FLAGS(PRCFG2, CSRFL_READONLY),
+     CSR_OFF_FLAGS(PRCFG3, CSRFL_READONLY),
+diff --git a/target/m68k/m68k-semi.c b/target/m68k/m68k-semi.c
+index 87b1314925..7a88205ce7 100644
+--- a/target/m68k/m68k-semi.c
++++ b/target/m68k/m68k-semi.c
+@@ -165,7 +165,7 @@ void do_m68k_semihosting(CPUM68KState *env, int nr)
+         GET_ARG64(2);
+         GET_ARG64(3);
+         semihost_sys_lseek(cs, m68k_semi_u64_cb, arg0,
+-                           deposit64(arg2, arg1, 32, 32), arg3);
++                           deposit64(arg2, 32, 32, arg1), arg3);
+         break;
+ 
+     case HOSTED_RENAME:
+diff --git a/target/nios2/nios2-semi.c b/target/nios2/nios2-semi.c
+index f76e8588c5..19a7d0e763 100644
+--- a/target/nios2/nios2-semi.c
++++ b/target/nios2/nios2-semi.c
+@@ -132,8 +132,8 @@ void do_nios2_semihosting(CPUNios2State *env)
+     args = env->regs[R_ARG1];
+     switch (nr) {
+     case HOSTED_EXIT:
+-        gdb_exit(env->regs[R_ARG0]);
+-        exit(env->regs[R_ARG0]);
++        gdb_exit(env->regs[R_ARG1]);
++        exit(env->regs[R_ARG1]);
+ 
+     case HOSTED_OPEN:
+         GET_ARG(0);
+@@ -168,7 +168,7 @@ void do_nios2_semihosting(CPUNios2State *env)
+         GET_ARG64(2);
+         GET_ARG64(3);
+         semihost_sys_lseek(cs, nios2_semi_u64_cb, arg0,
+-                           deposit64(arg2, arg1, 32, 32), arg3);
++                           deposit64(arg2, 32, 32, arg1), arg3);
+         break;
+ 
+     case HOSTED_RENAME:
+diff --git a/target/ppc/excp_helper.c b/target/ppc/excp_helper.c
+index 6cf88f635a..839d95c1eb 100644
+--- a/target/ppc/excp_helper.c
++++ b/target/ppc/excp_helper.c
+@@ -2645,6 +2645,12 @@ void helper_pminsn(CPUPPCState *env, uint32_t insn)
+     env->resume_as_sreset = (insn != PPC_PM_STOP) ||
+         (env->spr[SPR_PSSCR] & PSSCR_EC);
+ 
++    /* HDECR is not to wake from PM state, it may have already fired */
++    if (env->resume_as_sreset) {
++        PowerPCCPU *cpu = env_archcpu(env);
++        ppc_set_irq(cpu, PPC_INTERRUPT_HDECR, 0);
++    }
++
+     ppc_maybe_interrupt(env);
+ }
+ #endif /* defined(TARGET_PPC64) */
+diff --git a/target/ppc/mmu-hash64.c b/target/ppc/mmu-hash64.c
+index b9b31fd276..64c2a9cab3 100644
+--- a/target/ppc/mmu-hash64.c
++++ b/target/ppc/mmu-hash64.c
+@@ -770,7 +770,8 @@ static bool ppc_hash64_use_vrma(CPUPPCState *env)
+     }
+ }
+ 
+-static void ppc_hash64_set_isi(CPUState *cs, int mmu_idx, uint64_t error_code)
++static void ppc_hash64_set_isi(CPUState *cs, int mmu_idx, uint64_t slb_vsid,
++                               uint64_t error_code)
+ {
+     CPUPPCState *env = &POWERPC_CPU(cs)->env;
+     bool vpm;
+@@ -782,13 +783,15 @@ static void ppc_hash64_set_isi(CPUState *cs, int mmu_idx, uint64_t error_code)
+     }
+     if (vpm && !mmuidx_hv(mmu_idx)) {
+         cs->exception_index = POWERPC_EXCP_HISI;
++        env->spr[SPR_ASDR] = slb_vsid;
+     } else {
+         cs->exception_index = POWERPC_EXCP_ISI;
+     }
+     env->error_code = error_code;
+ }
+ 
+-static void ppc_hash64_set_dsi(CPUState *cs, int mmu_idx, uint64_t dar, uint64_t dsisr)
++static void ppc_hash64_set_dsi(CPUState *cs, int mmu_idx, uint64_t slb_vsid,
++                               uint64_t dar, uint64_t dsisr)
+ {
+     CPUPPCState *env = &POWERPC_CPU(cs)->env;
+     bool vpm;
+@@ -802,6 +805,7 @@ static void ppc_hash64_set_dsi(CPUState *cs, int mmu_idx, uint64_t dar, uint64_t
+         cs->exception_index = POWERPC_EXCP_HDSI;
+         env->spr[SPR_HDAR] = dar;
+         env->spr[SPR_HDSISR] = dsisr;
++        env->spr[SPR_ASDR] = slb_vsid;
+     } else {
+         cs->exception_index = POWERPC_EXCP_DSI;
+         env->spr[SPR_DAR] = dar;
+@@ -870,12 +874,46 @@ static target_ulong rmls_limit(PowerPCCPU *cpu)
+     return rma_sizes[rmls];
+ }
+ 
+-static int build_vrma_slbe(PowerPCCPU *cpu, ppc_slb_t *slb)
++/* Return the LLP in SLB_VSID format */
++static uint64_t get_vrma_llp(PowerPCCPU *cpu)
+ {
+     CPUPPCState *env = &cpu->env;
+-    target_ulong lpcr = env->spr[SPR_LPCR];
+-    uint32_t vrmasd = (lpcr & LPCR_VRMASD) >> LPCR_VRMASD_SHIFT;
+-    target_ulong vsid = SLB_VSID_VRMA | ((vrmasd << 4) & SLB_VSID_LLP_MASK);
++    uint64_t llp;
++
++    if (env->mmu_model == POWERPC_MMU_3_00) {
++        ppc_v3_pate_t pate;
++        uint64_t ps, l, lp;
++
++        /*
++         * ISA v3.0 removes the LPCR[VRMASD] field and puts the VRMA base
++         * page size (L||LP equivalent) in the PS field in the HPT partition
++         * table entry.
++         */
++        if (!ppc64_v3_get_pate(cpu, cpu->env.spr[SPR_LPIDR], &pate)) {
++            error_report("Bad VRMA with no partition table entry");
++            return 0;
++        }
++        ps = PATE0_GET_PS(pate.dw0);
++        /* PS has L||LP in 3 consecutive bits, put them into SLB LLP format */
++        l = (ps >> 2) & 0x1;
++        lp = ps & 0x3;
++        llp = (l << SLB_VSID_L_SHIFT) | (lp << SLB_VSID_LP_SHIFT);
++
++    } else {
++        uint64_t lpcr = env->spr[SPR_LPCR];
++        target_ulong vrmasd = (lpcr & LPCR_VRMASD) >> LPCR_VRMASD_SHIFT;
++
++        /* VRMASD LLP matches SLB format, just shift and mask it */
++        llp = (vrmasd << SLB_VSID_LP_SHIFT) & SLB_VSID_LLP_MASK;
++    }
++
++    return llp;
++}
++
++static int build_vrma_slbe(PowerPCCPU *cpu, ppc_slb_t *slb)
++{
++    uint64_t llp = get_vrma_llp(cpu);
++    target_ulong vsid = SLB_VSID_VRMA | llp;
+     int i;
+ 
+     for (i = 0; i < PPC_PAGE_SIZES_MAX_SZ; i++) {
+@@ -893,8 +931,7 @@ static int build_vrma_slbe(PowerPCCPU *cpu, ppc_slb_t *slb)
+         }
+     }
+ 
+-    error_report("Bad page size encoding in LPCR[VRMASD]; LPCR=0x"
+-                 TARGET_FMT_lx, lpcr);
++    error_report("Bad VRMA page size encoding 0x" TARGET_FMT_lx, llp);
+ 
+     return -1;
+ }
+@@ -963,13 +1000,13 @@ bool ppc_hash64_xlate(PowerPCCPU *cpu, vaddr eaddr, MMUAccessType access_type,
+                 }
+                 switch (access_type) {
+                 case MMU_INST_FETCH:
+-                    ppc_hash64_set_isi(cs, mmu_idx, SRR1_PROTFAULT);
++                    ppc_hash64_set_isi(cs, mmu_idx, 0, SRR1_PROTFAULT);
+                     break;
+                 case MMU_DATA_LOAD:
+-                    ppc_hash64_set_dsi(cs, mmu_idx, eaddr, DSISR_PROTFAULT);
++                    ppc_hash64_set_dsi(cs, mmu_idx, 0, eaddr, DSISR_PROTFAULT);
+                     break;
+                 case MMU_DATA_STORE:
+-                    ppc_hash64_set_dsi(cs, mmu_idx, eaddr,
++                    ppc_hash64_set_dsi(cs, mmu_idx, 0, eaddr,
+                                        DSISR_PROTFAULT | DSISR_ISSTORE);
+                     break;
+                 default:
+@@ -1022,7 +1059,7 @@ bool ppc_hash64_xlate(PowerPCCPU *cpu, vaddr eaddr, MMUAccessType access_type,
+     /* 3. Check for segment level no-execute violation */
+     if (access_type == MMU_INST_FETCH && (slb->vsid & SLB_VSID_N)) {
+         if (guest_visible) {
+-            ppc_hash64_set_isi(cs, mmu_idx, SRR1_NOEXEC_GUARD);
++            ppc_hash64_set_isi(cs, mmu_idx, slb->vsid, SRR1_NOEXEC_GUARD);
+         }
+         return false;
+     }
+@@ -1035,13 +1072,14 @@ bool ppc_hash64_xlate(PowerPCCPU *cpu, vaddr eaddr, MMUAccessType access_type,
+         }
+         switch (access_type) {
+         case MMU_INST_FETCH:
+-            ppc_hash64_set_isi(cs, mmu_idx, SRR1_NOPTE);
++            ppc_hash64_set_isi(cs, mmu_idx, slb->vsid, SRR1_NOPTE);
+             break;
+         case MMU_DATA_LOAD:
+-            ppc_hash64_set_dsi(cs, mmu_idx, eaddr, DSISR_NOPTE);
++            ppc_hash64_set_dsi(cs, mmu_idx, slb->vsid, eaddr, DSISR_NOPTE);
+             break;
+         case MMU_DATA_STORE:
+-            ppc_hash64_set_dsi(cs, mmu_idx, eaddr, DSISR_NOPTE | DSISR_ISSTORE);
++            ppc_hash64_set_dsi(cs, mmu_idx, slb->vsid, eaddr,
++                               DSISR_NOPTE | DSISR_ISSTORE);
+             break;
+         default:
+             g_assert_not_reached();
+@@ -1075,7 +1113,7 @@ bool ppc_hash64_xlate(PowerPCCPU *cpu, vaddr eaddr, MMUAccessType access_type,
+             if (PAGE_EXEC & ~amr_prot) {
+                 srr1 |= SRR1_IAMR; /* Access violates virt pg class key prot */
+             }
+-            ppc_hash64_set_isi(cs, mmu_idx, srr1);
++            ppc_hash64_set_isi(cs, mmu_idx, slb->vsid, srr1);
+         } else {
+             int dsisr = 0;
+             if (need_prot & ~pp_prot) {
+@@ -1087,7 +1125,7 @@ bool ppc_hash64_xlate(PowerPCCPU *cpu, vaddr eaddr, MMUAccessType access_type,
+             if (need_prot & ~amr_prot) {
+                 dsisr |= DSISR_AMR;
+             }
+-            ppc_hash64_set_dsi(cs, mmu_idx, eaddr, dsisr);
++            ppc_hash64_set_dsi(cs, mmu_idx, slb->vsid, eaddr, dsisr);
+         }
+         return false;
+     }
+diff --git a/target/ppc/mmu-hash64.h b/target/ppc/mmu-hash64.h
+index 1496955d38..de653fcae5 100644
+--- a/target/ppc/mmu-hash64.h
++++ b/target/ppc/mmu-hash64.h
+@@ -41,8 +41,10 @@ void ppc_hash64_finalize(PowerPCCPU *cpu);
+ #define SLB_VSID_KP             0x0000000000000400ULL
+ #define SLB_VSID_N              0x0000000000000200ULL /* no-execute */
+ #define SLB_VSID_L              0x0000000000000100ULL
++#define SLB_VSID_L_SHIFT        PPC_BIT_NR(55)
+ #define SLB_VSID_C              0x0000000000000080ULL /* class */
+ #define SLB_VSID_LP             0x0000000000000030ULL
++#define SLB_VSID_LP_SHIFT       PPC_BIT_NR(59)
+ #define SLB_VSID_ATTR           0x0000000000000FFFULL
+ #define SLB_VSID_LLP_MASK       (SLB_VSID_L | SLB_VSID_LP)
+ #define SLB_VSID_4K             0x0000000000000000ULL
+@@ -58,6 +60,9 @@ void ppc_hash64_finalize(PowerPCCPU *cpu);
+ #define SDR_64_HTABSIZE        0x000000000000001FULL
+ 
+ #define PATE0_HTABORG           0x0FFFFFFFFFFC0000ULL
++#define PATE0_PS                PPC_BITMASK(56, 58)
++#define PATE0_GET_PS(dw0)       (((dw0) & PATE0_PS) >> PPC_BIT_NR(58))
++
+ #define HPTES_PER_GROUP         8
+ #define HASH_PTE_SIZE_64        16
+ #define HASH_PTEG_SIZE_64       (HASH_PTE_SIZE_64 * HPTES_PER_GROUP)
+diff --git a/target/ppc/translate.c b/target/ppc/translate.c
+index 1de7eca9c4..90f749a728 100644
+--- a/target/ppc/translate.c
++++ b/target/ppc/translate.c
+@@ -4327,6 +4327,9 @@ static void pmu_count_insns(DisasContext *ctx)
+ 
+ static inline bool use_goto_tb(DisasContext *ctx, target_ulong dest)
+ {
++    if (unlikely(ctx->singlestep_enabled)) {
++        return false;
++    }
+     return translator_use_goto_tb(&ctx->base, dest);
+ }
+ 
+diff --git a/target/s390x/tcg/excp_helper.c b/target/s390x/tcg/excp_helper.c
+index fe02d82201..7094020dcd 100644
+--- a/target/s390x/tcg/excp_helper.c
++++ b/target/s390x/tcg/excp_helper.c
+@@ -638,7 +638,7 @@ void monitor_event(CPUS390XState *env,
+ void HELPER(monitor_call)(CPUS390XState *env, uint64_t monitor_code,
+                           uint32_t monitor_class)
+ {
+-    g_assert(monitor_class <= 0xff);
++    g_assert(monitor_class <= 0xf);
+ 
+     if (env->cregs[8] & (0x8000 >> monitor_class)) {
+         monitor_event(env, monitor_code, monitor_class, GETPC());
+diff --git a/target/s390x/tcg/fpu_helper.c b/target/s390x/tcg/fpu_helper.c
+index be80b2373c..0bde369768 100644
+--- a/target/s390x/tcg/fpu_helper.c
++++ b/target/s390x/tcg/fpu_helper.c
+@@ -44,7 +44,8 @@ uint8_t s390_softfloat_exc_to_ieee(unsigned int exc)
+     s390_exc |= (exc & float_flag_divbyzero) ? S390_IEEE_MASK_DIVBYZERO : 0;
+     s390_exc |= (exc & float_flag_overflow) ? S390_IEEE_MASK_OVERFLOW : 0;
+     s390_exc |= (exc & float_flag_underflow) ? S390_IEEE_MASK_UNDERFLOW : 0;
+-    s390_exc |= (exc & float_flag_inexact) ? S390_IEEE_MASK_INEXACT : 0;
++    s390_exc |= (exc & (float_flag_inexact | float_flag_invalid_cvti)) ?
++                S390_IEEE_MASK_INEXACT : 0;
+ 
+     return s390_exc;
+ }
+diff --git a/target/s390x/tcg/insn-data.h.inc b/target/s390x/tcg/insn-data.h.inc
+index 4249632af3..0e328ea0fd 100644
+--- a/target/s390x/tcg/insn-data.h.inc
++++ b/target/s390x/tcg/insn-data.h.inc
+@@ -157,7 +157,7 @@
+     C(0xb2fa, NIAI,    E,     EH,  0, 0, 0, 0, 0, 0)
+ 
+ /* CHECKSUM */
+-    C(0xb241, CKSM,    RRE,   Z,   r1_o, ra2, new, r1_32, cksm, 0)
++    C(0xb241, CKSM,    RRE,   Z,   r1_o, ra2_E, new, r1_32, cksm, 0)
+ 
+ /* COPY SIGN */
+     F(0xb372, CPSDR,   RRF_b, FPSSH, f3, f2, new, f1, cps, 0, IF_AFP1 | IF_AFP2 | IF_AFP3)
+diff --git a/target/s390x/tcg/mem_helper.c b/target/s390x/tcg/mem_helper.c
+index 7e7de5e2f1..791a412d95 100644
+--- a/target/s390x/tcg/mem_helper.c
++++ b/target/s390x/tcg/mem_helper.c
+@@ -704,6 +704,11 @@ uint32_t HELPER(clm)(CPUS390XState *env, uint32_t r1, uint32_t mask,
+     HELPER_LOG("%s: r1 0x%x mask 0x%x addr 0x%" PRIx64 "\n", __func__, r1,
+                mask, addr);
+ 
++    if (!mask) {
++        /* Recognize access exceptions for the first byte */
++        probe_read(env, addr, 1, cpu_mmu_index(env, false), ra);
++    }
++
+     while (mask) {
+         if (mask & 8) {
+             uint8_t d = cpu_ldub_data_ra(env, addr, ra);
+diff --git a/target/s390x/tcg/translate.c b/target/s390x/tcg/translate.c
+index 0885bf2641..ff64d6c28f 100644
+--- a/target/s390x/tcg/translate.c
++++ b/target/s390x/tcg/translate.c
+@@ -2641,6 +2641,12 @@ static DisasJumpType op_icm(DisasContext *s, DisasOps *o)
+         ccm = ((1ull << len) - 1) << pos;
+         break;
+ 
++    case 0:
++        /* Recognize access exceptions for the first byte.  */
++        tcg_gen_qemu_ld_i64(tmp, o->in2, get_mem_index(s), MO_UB);
++        gen_op_movi_cc(s, 0);
++        return DISAS_NEXT;
++
+     default:
+         /* This is going to be a sequence of loads and inserts.  */
+         pos = base + 32 - 8;
+@@ -3344,9 +3350,9 @@ static DisasJumpType op_mc(DisasContext *s, DisasOps *o)
+ #if !defined(CONFIG_USER_ONLY)
+     TCGv_i32 i2;
+ #endif
+-    const uint16_t monitor_class = get_field(s, i2);
++    const uint8_t monitor_class = get_field(s, i2);
+ 
+-    if (monitor_class & 0xff00) {
++    if (monitor_class & 0xf0) {
+         gen_program_exception(s, PGM_SPECIFICATION);
+         return DISAS_NORETURN;
+     }
+@@ -5992,6 +5998,12 @@ static void in2_ra2(DisasContext *s, DisasOps *o)
+ }
+ #define SPEC_in2_ra2 0
+ 
++static void in2_ra2_E(DisasContext *s, DisasOps *o)
++{
++    return in2_ra2(s, o);
++}
++#define SPEC_in2_ra2_E SPEC_r2_even
++
+ static void in2_a2(DisasContext *s, DisasOps *o)
+ {
+     int x2 = have_field(s, x2) ? get_field(s, x2) : 0;
+diff --git a/target/s390x/tcg/translate_vx.c.inc b/target/s390x/tcg/translate_vx.c.inc
+index d39ee81cd6..79e2bbe0a7 100644
+--- a/target/s390x/tcg/translate_vx.c.inc
++++ b/target/s390x/tcg/translate_vx.c.inc
+@@ -3192,7 +3192,7 @@ static DisasJumpType op_vfmax(DisasContext *s, DisasOps *o)
+     const uint8_t m5 = get_field(s, m5);
+     gen_helper_gvec_3_ptr *fn;
+ 
+-    if (m6 == 5 || m6 == 6 || m6 == 7 || m6 > 13) {
++    if (m6 == 5 || m6 == 6 || m6 == 7 || m6 >= 13) {
+         gen_program_exception(s, PGM_SPECIFICATION);
+         return DISAS_NORETURN;
+     }
+diff --git a/ui/vnc-clipboard.c b/ui/vnc-clipboard.c
+index 8aeadfaa21..c759be3438 100644
+--- a/ui/vnc-clipboard.c
++++ b/ui/vnc-clipboard.c
+@@ -50,8 +50,11 @@ static uint8_t *inflate_buffer(uint8_t *in, uint32_t in_len, uint32_t *size)
+         ret = inflate(&stream, Z_FINISH);
+         switch (ret) {
+         case Z_OK:
+-        case Z_STREAM_END:
+             break;
++        case Z_STREAM_END:
++            *size = stream.total_out;
++            inflateEnd(&stream);
++            return out;
+         case Z_BUF_ERROR:
+             out_len <<= 1;
+             if (out_len > (1 << 20)) {
+@@ -66,11 +69,6 @@ static uint8_t *inflate_buffer(uint8_t *in, uint32_t in_len, uint32_t *size)
+         }
+     }
+ 
+-    *size = stream.total_out;
+-    inflateEnd(&stream);
+-
+-    return out;
+-
+ err_end:
+     inflateEnd(&stream);
+ err:
+diff --git a/util/thread-pool.c b/util/thread-pool.c
+index 31113b5860..39accc9ebe 100644
+--- a/util/thread-pool.c
++++ b/util/thread-pool.c
+@@ -120,13 +120,13 @@ static void *worker_thread(void *opaque)
+ 
+     pool->cur_threads--;
+     qemu_cond_signal(&pool->worker_stopped);
+-    qemu_mutex_unlock(&pool->lock);
+ 
+     /*
+      * Wake up another thread, in case we got a wakeup but decided
+      * to exit due to pool->cur_threads > pool->max_threads.
+      */
+     qemu_cond_signal(&pool->request_cond);
++    qemu_mutex_unlock(&pool->lock);
+     return NULL;
+ }
+ 

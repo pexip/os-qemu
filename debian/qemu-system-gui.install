@@ -1,4 +1,3 @@
-usr/lib/*/qemu/ui-gtk.so
 usr/share/locale/*/LC_MESSAGES/qemu.mo
-# pulseaudio audio driver pulls X
-usr/lib/*/qemu/audio-pa.so
+debian/tmp/usr/share/qemu/vhost-user/50-qemu-gpu.json
+debian/tmp/usr/lib/qemu/vhost-user-gpu

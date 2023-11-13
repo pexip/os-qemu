@@ -1,0 +1,1420 @@
+diff --git a/.gitlab-ci.d/buildtest.yml b/.gitlab-ci.d/buildtest.yml
+index d21b4a1fd4..10886bb414 100644
+--- a/.gitlab-ci.d/buildtest.yml
++++ b/.gitlab-ci.d/buildtest.yml
+@@ -109,8 +109,8 @@ crash-test-debian:
+     IMAGE: debian-amd64
+   script:
+     - cd build
+-    - make check-venv
+-    - tests/venv/bin/python3 scripts/device-crash-test -q ./qemu-system-i386
++    - make NINJA=":" check-venv
++    - tests/venv/bin/python3 scripts/device-crash-test -q --tcg-only ./qemu-system-i386
+ 
+ build-system-fedora:
+   extends: .native_build_job_template
+@@ -155,7 +155,7 @@ crash-test-fedora:
+     IMAGE: fedora
+   script:
+     - cd build
+-    - make check-venv
++    - make NINJA=":" check-venv
+     - tests/venv/bin/python3 scripts/device-crash-test -q ./qemu-system-ppc
+     - tests/venv/bin/python3 scripts/device-crash-test -q ./qemu-system-riscv32
+ 
+diff --git a/VERSION b/VERSION
+index 429dc57af3..2bbaead448 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.3
++7.2.4
+diff --git a/docs/system/multi-process.rst b/docs/system/multi-process.rst
+index 210531ee17..1b8852c27c 100644
+--- a/docs/system/multi-process.rst
++++ b/docs/system/multi-process.rst
+@@ -2,7 +2,7 @@ Multi-process QEMU
+ ==================
+ 
+ This document describes how to configure and use multi-process qemu.
+-For the design document refer to docs/devel/qemu-multiprocess.
++For the design document refer to docs/devel/multi-process.rst.
+ 
+ 1) Configuration
+ ----------------
+diff --git a/fsdev/virtfs-proxy-helper.c b/fsdev/virtfs-proxy-helper.c
+index 5cafcd7703..d9511f429c 100644
+--- a/fsdev/virtfs-proxy-helper.c
++++ b/fsdev/virtfs-proxy-helper.c
+@@ -26,6 +26,7 @@
+ #include "qemu/xattr.h"
+ #include "9p-iov-marshal.h"
+ #include "hw/9pfs/9p-proxy.h"
++#include "hw/9pfs/9p-util.h"
+ #include "fsdev/9p-iov-marshal.h"
+ 
+ #define PROGNAME "virtfs-proxy-helper"
+@@ -338,6 +339,28 @@ static void resetugid(int suid, int sgid)
+     }
+ }
+ 
++/*
++ * Open regular file or directory. Attempts to open any special file are
++ * rejected.
++ *
++ * returns file descriptor or -1 on error
++ */
++static int open_regular(const char *pathname, int flags, mode_t mode)
++{
++    int fd;
++
++    fd = open(pathname, flags, mode);
++    if (fd < 0) {
++        return fd;
++    }
++
++    if (close_if_special_file(fd) < 0) {
++        return -1;
++    }
++
++    return fd;
++}
++
+ /*
+  * send response in two parts
+  * 1) ProxyHeader
+@@ -682,7 +705,7 @@ static int do_create(struct iovec *iovec)
+     if (ret < 0) {
+         goto unmarshal_err_out;
+     }
+-    ret = open(path.data, flags, mode);
++    ret = open_regular(path.data, flags, mode);
+     if (ret < 0) {
+         ret = -errno;
+     }
+@@ -707,7 +730,7 @@ static int do_open(struct iovec *iovec)
+     if (ret < 0) {
+         goto err_out;
+     }
+-    ret = open(path.data, flags);
++    ret = open_regular(path.data, flags, 0);
+     if (ret < 0) {
+         ret = -errno;
+     }
+diff --git a/hw/9pfs/9p-util.h b/hw/9pfs/9p-util.h
+index c3526144c9..6b44e5f7a4 100644
+--- a/hw/9pfs/9p-util.h
++++ b/hw/9pfs/9p-util.h
+@@ -13,6 +13,8 @@
+ #ifndef QEMU_9P_UTIL_H
+ #define QEMU_9P_UTIL_H
+ 
++#include "qemu/error-report.h"
++
+ #ifdef O_PATH
+ #define O_PATH_9P_UTIL O_PATH
+ #else
+@@ -112,6 +114,38 @@ static inline void close_preserve_errno(int fd)
+     errno = serrno;
+ }
+ 
++/**
++ * close_if_special_file() - Close @fd if neither regular file nor directory.
++ *
++ * @fd: file descriptor of open file
++ * Return: 0 on regular file or directory, -1 otherwise
++ *
++ * CVE-2023-2861: Prohibit opening any special file directly on host
++ * (especially device files), as a compromised client could potentially gain
++ * access outside exported tree under certain, unsafe setups. We expect
++ * client to handle I/O on special files exclusively on guest side.
++ */
++static inline int close_if_special_file(int fd)
++{
++    struct stat stbuf;
++
++    if (fstat(fd, &stbuf) < 0) {
++        close_preserve_errno(fd);
++        return -1;
++    }
++    if (!S_ISREG(stbuf.st_mode) && !S_ISDIR(stbuf.st_mode)) {
++        error_report_once(
++            "9p: broken or compromised client detected; attempt to open "
++            "special file (i.e. neither regular file, nor directory)"
++        );
++        close(fd);
++        errno = ENXIO;
++        return -1;
++    }
++
++    return 0;
++}
++
+ static inline int openat_dir(int dirfd, const char *name)
+ {
+     return openat(dirfd, name,
+@@ -146,6 +180,10 @@ again:
+         return -1;
+     }
+ 
++    if (close_if_special_file(fd) < 0) {
++        return -1;
++    }
++
+     serrno = errno;
+     /* O_NONBLOCK was only needed to open the file. Let's drop it. We don't
+      * do that with O_PATH since fcntl(F_SETFL) isn't supported, and openat()
+diff --git a/hw/arm/xlnx-zynqmp.c b/hw/arm/xlnx-zynqmp.c
+index 335cfc417d..5905a33015 100644
+--- a/hw/arm/xlnx-zynqmp.c
++++ b/hw/arm/xlnx-zynqmp.c
+@@ -213,7 +213,7 @@ static void xlnx_zynqmp_create_rpu(MachineState *ms, XlnxZynqMPState *s,
+                                    const char *boot_cpu, Error **errp)
+ {
+     int i;
+-    int num_rpus = MIN(ms->smp.cpus - XLNX_ZYNQMP_NUM_APU_CPUS,
++    int num_rpus = MIN((int)(ms->smp.cpus - XLNX_ZYNQMP_NUM_APU_CPUS),
+                        XLNX_ZYNQMP_NUM_RPU_CPUS);
+ 
+     if (num_rpus <= 0) {
+diff --git a/hw/display/virtio-gpu.c b/hw/display/virtio-gpu.c
+index 5e15c79b94..4e2e0dd53a 100644
+--- a/hw/display/virtio-gpu.c
++++ b/hw/display/virtio-gpu.c
+@@ -498,6 +498,8 @@ static void virtio_gpu_resource_flush(VirtIOGPU *g,
+     struct virtio_gpu_resource_flush rf;
+     struct virtio_gpu_scanout *scanout;
+     pixman_region16_t flush_region;
++    bool within_bounds = false;
++    bool update_submitted = false;
+     int i;
+ 
+     VIRTIO_GPU_FILL_CMD(rf);
+@@ -518,13 +520,28 @@ static void virtio_gpu_resource_flush(VirtIOGPU *g,
+                 rf.r.x < scanout->x + scanout->width &&
+                 rf.r.x + rf.r.width >= scanout->x &&
+                 rf.r.y < scanout->y + scanout->height &&
+-                rf.r.y + rf.r.height >= scanout->y &&
+-                console_has_gl(scanout->con)) {
+-                dpy_gl_update(scanout->con, 0, 0, scanout->width,
+-                              scanout->height);
++                rf.r.y + rf.r.height >= scanout->y) {
++                within_bounds = true;
++
++                if (console_has_gl(scanout->con)) {
++                    dpy_gl_update(scanout->con, 0, 0, scanout->width,
++                                  scanout->height);
++                    update_submitted = true;
++                }
+             }
+         }
+-        return;
++
++        if (update_submitted) {
++            return;
++        }
++        if (!within_bounds) {
++            qemu_log_mask(LOG_GUEST_ERROR, "%s: flush bounds outside scanouts"
++                          " bounds for flush %d: %d %d %d %d\n",
++                          __func__, rf.resource_id, rf.r.x, rf.r.y,
++                          rf.r.width, rf.r.height);
++            cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
++            return;
++        }
+     }
+ 
+     if (!res->blob &&
+diff --git a/hw/dma/xilinx_axidma.c b/hw/dma/xilinx_axidma.c
+index cbb8f0f169..99e50f65e2 100644
+--- a/hw/dma/xilinx_axidma.c
++++ b/hw/dma/xilinx_axidma.c
+@@ -168,6 +168,11 @@ static inline int stream_idle(struct Stream *s)
+     return !!(s->regs[R_DMASR] & DMASR_IDLE);
+ }
+ 
++static inline int stream_halted(struct Stream *s)
++{
++    return !!(s->regs[R_DMASR] & DMASR_HALTED);
++}
++
+ static void stream_reset(struct Stream *s)
+ {
+     s->regs[R_DMASR] = DMASR_HALTED;  /* starts up halted.  */
+@@ -269,7 +274,7 @@ static void stream_process_mem2s(struct Stream *s, StreamSink *tx_data_dev,
+     uint64_t addr;
+     bool eop;
+ 
+-    if (!stream_running(s) || stream_idle(s)) {
++    if (!stream_running(s) || stream_idle(s) || stream_halted(s)) {
+         return;
+     }
+ 
+@@ -326,7 +331,7 @@ static size_t stream_process_s2mem(struct Stream *s, unsigned char *buf,
+     unsigned int rxlen;
+     size_t pos = 0;
+ 
+-    if (!stream_running(s) || stream_idle(s)) {
++    if (!stream_running(s) || stream_idle(s) || stream_halted(s)) {
+         return 0;
+     }
+ 
+@@ -407,7 +412,7 @@ xilinx_axidma_data_stream_can_push(StreamSink *obj,
+     XilinxAXIDMAStreamSink *ds = XILINX_AXI_DMA_DATA_STREAM(obj);
+     struct Stream *s = &ds->dma->streams[1];
+ 
+-    if (!stream_running(s) || stream_idle(s)) {
++    if (!stream_running(s) || stream_idle(s) || stream_halted(s)) {
+         ds->dma->notify = notify;
+         ds->dma->notify_opaque = notify_opaque;
+         return false;
+diff --git a/hw/hppa/machine.c b/hw/hppa/machine.c
+index de1cc7ab71..98a78b84b4 100644
+--- a/hw/hppa/machine.c
++++ b/hw/hppa/machine.c
+@@ -123,6 +123,7 @@ static FWCfgState *create_fw_cfg(MachineState *ms)
+ {
+     FWCfgState *fw_cfg;
+     uint64_t val;
++    const char qemu_version[] = QEMU_VERSION;
+ 
+     fw_cfg = fw_cfg_init_mem(FW_CFG_IO_BASE, FW_CFG_IO_BASE + 4);
+     fw_cfg_add_i16(fw_cfg, FW_CFG_NB_CPUS, ms->smp.cpus);
+@@ -148,6 +149,10 @@ static FWCfgState *create_fw_cfg(MachineState *ms)
+     fw_cfg_add_i16(fw_cfg, FW_CFG_BOOT_DEVICE, ms->boot_config.order[0]);
+     qemu_register_boot_set(fw_cfg_boot_set, fw_cfg);
+ 
++    fw_cfg_add_file(fw_cfg, "/etc/qemu-version",
++                    g_memdup(qemu_version, sizeof(qemu_version)),
++                    sizeof(qemu_version));
++
+     return fw_cfg;
+ }
+ 
+@@ -418,10 +423,16 @@ static void hppa_machine_reset(MachineState *ms, ShutdownCause reason)
+ 
+     /* Start all CPUs at the firmware entry point.
+      *  Monarch CPU will initialize firmware, secondary CPUs
+-     *  will enter a small idle look and wait for rendevouz. */
++     *  will enter a small idle loop and wait for rendevouz. */
+     for (i = 0; i < smp_cpus; i++) {
+-        cpu_set_pc(CPU(cpu[i]), firmware_entry);
++        CPUState *cs = CPU(cpu[i]);
++
++        cpu_set_pc(cs, firmware_entry);
++        cpu[i]->env.psw = PSW_Q;
+         cpu[i]->env.gr[5] = CPU_HPA + i * 0x1000;
++
++        cs->exception_index = -1;
++        cs->halted = 0;
+     }
+ 
+     /* already initialized by machine_hppa_init()? */
+diff --git a/hw/intc/allwinner-a10-pic.c b/hw/intc/allwinner-a10-pic.c
+index 4875e68ba6..d0bf8d545b 100644
+--- a/hw/intc/allwinner-a10-pic.c
++++ b/hw/intc/allwinner-a10-pic.c
+@@ -51,7 +51,7 @@ static void aw_a10_pic_set_irq(void *opaque, int irq, int level)
+     AwA10PICState *s = opaque;
+     uint32_t *pending_reg = &s->irq_pending[irq / 32];
+ 
+-    *pending_reg = deposit32(*pending_reg, irq % 32, 1, level);
++    *pending_reg = deposit32(*pending_reg, irq % 32, 1, !!level);
+     aw_a10_pic_update(s);
+ }
+ 
+diff --git a/hw/misc/aspeed_hace.c b/hw/misc/aspeed_hace.c
+index ac21be306c..69175e972d 100644
+--- a/hw/misc/aspeed_hace.c
++++ b/hw/misc/aspeed_hace.c
+@@ -189,7 +189,7 @@ static void do_hash_operation(AspeedHACEState *s, int algo, bool sg_mode,
+                               bool acc_mode)
+ {
+     struct iovec iov[ASPEED_HACE_MAX_SG];
+-    g_autofree uint8_t *digest_buf;
++    g_autofree uint8_t *digest_buf = NULL;
+     size_t digest_len = 0;
+     int niov = 0;
+     int i;
+diff --git a/hw/ppc/ppc.c b/hw/ppc/ppc.c
+index dc86c1c7db..fbdc48911e 100644
+--- a/hw/ppc/ppc.c
++++ b/hw/ppc/ppc.c
+@@ -806,6 +806,8 @@ static void __cpu_ppc_store_decr(PowerPCCPU *cpu, uint64_t *nextp,
+     int64_t signed_decr;
+ 
+     /* Truncate value to decr_width and sign extend for simplicity */
++    value = extract64(value, 0, nr_bits);
++    decr = extract64(decr, 0, nr_bits);
+     signed_value = sextract64(value, 0, nr_bits);
+     signed_decr = sextract64(decr, 0, nr_bits);
+ 
+diff --git a/hw/ppc/prep.c b/hw/ppc/prep.c
+index fcbe4c5837..ec8d9584fb 100644
+--- a/hw/ppc/prep.c
++++ b/hw/ppc/prep.c
+@@ -271,9 +271,11 @@ static void ibm_40p_init(MachineState *machine)
+     }
+ 
+     /* PCI -> ISA bridge */
+-    i82378_dev = DEVICE(pci_create_simple(pci_bus, PCI_DEVFN(11, 0), "i82378"));
++    i82378_dev = DEVICE(pci_new(PCI_DEVFN(11, 0), "i82378"));
+     qdev_connect_gpio_out(i82378_dev, 0,
+                           qdev_get_gpio_in(DEVICE(cpu), PPC6xx_INPUT_INT));
++    qdev_realize_and_unref(i82378_dev, BUS(pci_bus), &error_fatal);
++
+     sysbus_connect_irq(pcihost, 0, qdev_get_gpio_in(i82378_dev, 15));
+     isa_bus = ISA_BUS(qdev_get_child_bus(i82378_dev, "isa.0"));
+ 
+diff --git a/hw/remote/trace-events b/hw/remote/trace-events
+index c167b3c7a5..0d1b7d56a5 100644
+--- a/hw/remote/trace-events
++++ b/hw/remote/trace-events
+@@ -5,8 +5,8 @@ mpqemu_recv_io_error(int cmd, int size, int nfds) "failed to receive %d size %d,
+ 
+ # vfio-user-obj.c
+ vfu_prop(const char *prop, const char *val) "vfu: setting %s as %s"
+-vfu_cfg_read(uint32_t offset, uint32_t val) "vfu: cfg: 0x%u -> 0x%x"
+-vfu_cfg_write(uint32_t offset, uint32_t val) "vfu: cfg: 0x%u <- 0x%x"
++vfu_cfg_read(uint32_t offset, uint32_t val) "vfu: cfg: 0x%x -> 0x%x"
++vfu_cfg_write(uint32_t offset, uint32_t val) "vfu: cfg: 0x%x <- 0x%x"
+ vfu_dma_register(uint64_t gpa, size_t len) "vfu: registering GPA 0x%"PRIx64", %zu bytes"
+ vfu_dma_unregister(uint64_t gpa) "vfu: unregistering GPA 0x%"PRIx64""
+ vfu_bar_register(int i, uint64_t addr, uint64_t size) "vfu: BAR %d: addr 0x%"PRIx64" size 0x%"PRIx64""
+diff --git a/hw/riscv/numa.c b/hw/riscv/numa.c
+index 7fe92d402f..edf6750f54 100644
+--- a/hw/riscv/numa.c
++++ b/hw/riscv/numa.c
+@@ -207,6 +207,12 @@ int64_t riscv_numa_get_default_cpu_node_id(const MachineState *ms, int idx)
+ {
+     int64_t nidx = 0;
+ 
++    if (ms->numa_state->num_nodes > ms->smp.cpus) {
++        error_report("Number of NUMA nodes (%d)"
++                     " cannot exceed the number of available CPUs (%d).",
++                     ms->numa_state->num_nodes, ms->smp.max_cpus);
++        exit(EXIT_FAILURE);
++    }
+     if (ms->numa_state->num_nodes) {
+         nidx = idx / (ms->smp.cpus / ms->numa_state->num_nodes);
+         if (ms->numa_state->num_nodes <= nidx) {
+diff --git a/hw/timer/nrf51_timer.c b/hw/timer/nrf51_timer.c
+index 42be79c736..50c6772383 100644
+--- a/hw/timer/nrf51_timer.c
++++ b/hw/timer/nrf51_timer.c
+@@ -45,7 +45,12 @@ static uint32_t update_counter(NRF51TimerState *s, int64_t now)
+     uint32_t ticks = ns_to_ticks(s, now - s->update_counter_ns);
+ 
+     s->counter = (s->counter + ticks) % BIT(bitwidths[s->bitmode]);
+-    s->update_counter_ns = now;
++    /*
++     * Only advance the sync time to the timestamp of the last tick,
++     * not all the way to 'now', so we don't lose time if we do
++     * multiple resyncs in a single tick.
++     */
++    s->update_counter_ns += ticks_to_ns(s, ticks);
+     return ticks;
+ }
+ 
+diff --git a/hw/vfio/pci.c b/hw/vfio/pci.c
+index 939dcc3d4a..92a45de4c3 100644
+--- a/hw/vfio/pci.c
++++ b/hw/vfio/pci.c
+@@ -663,6 +663,8 @@ static void vfio_msi_enable(VFIOPCIDevice *vdev)
+ 
+     vfio_disable_interrupts(vdev);
+ 
++    vdev->nr_vectors = msi_nr_vectors_allocated(&vdev->pdev);
++retry:
+     /*
+      * Setting vector notifiers needs to enable route for each vector.
+      * Deferring to commit the KVM routes once rather than per vector
+@@ -670,8 +672,6 @@ static void vfio_msi_enable(VFIOPCIDevice *vdev)
+      */
+     vfio_prepare_kvm_msi_virq_batch(vdev);
+ 
+-    vdev->nr_vectors = msi_nr_vectors_allocated(&vdev->pdev);
+-retry:
+     vdev->msi_vectors = g_new0(VFIOMSIVector, vdev->nr_vectors);
+ 
+     for (i = 0; i < vdev->nr_vectors; i++) {
+@@ -3159,7 +3159,9 @@ static void vfio_realize(PCIDevice *pdev, Error **errp)
+ 
+ out_deregister:
+     pci_device_set_intx_routing_notifier(&vdev->pdev, NULL);
+-    kvm_irqchip_remove_change_notifier(&vdev->irqchip_change_notifier);
++    if (vdev->irqchip_change_notifier.notify) {
++        kvm_irqchip_remove_change_notifier(&vdev->irqchip_change_notifier);
++    }
+ out_teardown:
+     vfio_teardown_msi(vdev);
+     vfio_bars_exit(vdev);
+diff --git a/hw/virtio/vhost.c b/hw/virtio/vhost.c
+index fdcd1a8fdf..f38997b3f6 100644
+--- a/hw/virtio/vhost.c
++++ b/hw/virtio/vhost.c
+@@ -1934,6 +1934,9 @@ fail_vq:
+     }
+ 
+ fail_mem:
++    if (vhost_dev_has_iommu(hdev)) {
++        memory_listener_unregister(&hdev->iommu_listener);
++    }
+ fail_features:
+     vdev->vhost_started = false;
+     hdev->started = false;
+diff --git a/include/qemu/compiler.h b/include/qemu/compiler.h
+index f20a76e4a2..c7ffcaba43 100644
+--- a/include/qemu/compiler.h
++++ b/include/qemu/compiler.h
+@@ -184,4 +184,17 @@
+ #define QEMU_DISABLE_CFI
+ #endif
+ 
++/*
++ * Apple clang version 14 has a bug in its __builtin_subcll(); define
++ * BUILTIN_SUBCLL_BROKEN for the offending versions so we can avoid it.
++ * When a version of Apple clang which has this bug fixed is released
++ * we can add an upper bound to this check.
++ * See https://gitlab.com/qemu-project/qemu/-/issues/1631
++ * and https://gitlab.com/qemu-project/qemu/-/issues/1659 for details.
++ * The bug never made it into any upstream LLVM releases, only Apple ones.
++ */
++#if defined(__apple_build_version__) && __clang_major__ >= 14
++#define BUILTIN_SUBCLL_BROKEN
++#endif
++
+ #endif /* COMPILER_H */
+diff --git a/include/qemu/host-utils.h b/include/qemu/host-utils.h
+index 88d476161c..b3434ec0bc 100644
+--- a/include/qemu/host-utils.h
++++ b/include/qemu/host-utils.h
+@@ -596,7 +596,7 @@ static inline uint64_t uadd64_carry(uint64_t x, uint64_t y, bool *pcarry)
+  */
+ static inline uint64_t usub64_borrow(uint64_t x, uint64_t y, bool *pborrow)
+ {
+-#if __has_builtin(__builtin_subcll)
++#if __has_builtin(__builtin_subcll) && !defined(BUILTIN_SUBCLL_BROKEN)
+     unsigned long long b = *pborrow;
+     x = __builtin_subcll(x, y, b, &b);
+     *pborrow = b & 1;
+diff --git a/linux-user/s390x/cpu_loop.c b/linux-user/s390x/cpu_loop.c
+index 285bc60071..8b7ac2879e 100644
+--- a/linux-user/s390x/cpu_loop.c
++++ b/linux-user/s390x/cpu_loop.c
+@@ -86,6 +86,15 @@ void cpu_loop(CPUS390XState *env)
+             } else if (ret != -QEMU_ESIGRETURN) {
+                 env->regs[2] = ret;
+             }
++
++            if (unlikely(cs->singlestep_enabled)) {
++                /*
++                 * cpu_tb_exec() did not raise EXCP_DEBUG, because it has seen
++                 * that EXCP_SVC was already pending.
++                 */
++                cs->exception_index = EXCP_DEBUG;
++            }
++
+             break;
+ 
+         case EXCP_DEBUG:
+diff --git a/net/vhost-vdpa.c b/net/vhost-vdpa.c
+index 2b4b85d8f8..e533f8a348 100644
+--- a/net/vhost-vdpa.c
++++ b/net/vhost-vdpa.c
+@@ -49,6 +49,7 @@ const int vdpa_feature_bits[] = {
+     VIRTIO_F_VERSION_1,
+     VIRTIO_NET_F_CSUM,
+     VIRTIO_NET_F_GUEST_CSUM,
++    VIRTIO_NET_F_CTRL_GUEST_OFFLOADS,
+     VIRTIO_NET_F_GSO,
+     VIRTIO_NET_F_GUEST_TSO4,
+     VIRTIO_NET_F_GUEST_TSO6,
+@@ -160,6 +161,14 @@ static void vhost_vdpa_cleanup(NetClientState *nc)
+     VhostVDPAState *s = DO_UPCAST(VhostVDPAState, nc, nc);
+     struct vhost_dev *dev = &s->vhost_net->dev;
+ 
++    /*
++     * If a peer NIC is attached, do not cleanup anything.
++     * Cleanup will happen as a part of qemu_cleanup() -> net_cleanup()
++     * when the guest is shutting down.
++     */
++    if (nc->peer && nc->peer->info->type == NET_CLIENT_DRIVER_NIC) {
++        return;
++    }
+     qemu_vfree(s->cvq_cmd_out_buffer);
+     qemu_vfree(s->status);
+     if (dev->vq_index + dev->nvqs == dev->vq_index_end) {
+@@ -500,7 +509,7 @@ static int vhost_vdpa_net_handle_ctrl_avail(VhostShadowVirtqueue *svq,
+     }
+ 
+     if (*s->status != VIRTIO_NET_OK) {
+-        return VIRTIO_NET_ERR;
++        goto out;
+     }
+ 
+     status = VIRTIO_NET_ERR;
+diff --git a/pc-bios/keymaps/meson.build b/pc-bios/keymaps/meson.build
+index 06c75e646b..452395b962 100644
+--- a/pc-bios/keymaps/meson.build
++++ b/pc-bios/keymaps/meson.build
+@@ -1,5 +1,5 @@
+ keymaps = {
+-  'ar': '-l ar',
++  'ar': '-l ara',
+   'bepo': '-l fr -v dvorak',
+   'cz': '-l cz',
+   'da': '-l dk',
+diff --git a/qga/commands-posix.c b/qga/commands-posix.c
+index 32493d6383..182eba4a38 100644
+--- a/qga/commands-posix.c
++++ b/qga/commands-posix.c
+@@ -1925,10 +1925,10 @@ static void guest_suspend(SuspendMode mode, Error **errp)
+     if (systemd_supports_mode(mode, &local_err)) {
+         mode_supported = true;
+         systemd_suspend(mode, &local_err);
+-    }
+ 
+-    if (!local_err) {
+-        return;
++        if (!local_err) {
++            return;
++        }
+     }
+ 
+     error_free(local_err);
+@@ -1937,10 +1937,10 @@ static void guest_suspend(SuspendMode mode, Error **errp)
+     if (pmutils_supports_mode(mode, &local_err)) {
+         mode_supported = true;
+         pmutils_suspend(mode, &local_err);
+-    }
+ 
+-    if (!local_err) {
+-        return;
++        if (!local_err) {
++            return;
++        }
+     }
+ 
+     error_free(local_err);
+diff --git a/scripts/device-crash-test b/scripts/device-crash-test
+index 73bcb98693..b74d887331 100755
+--- a/scripts/device-crash-test
++++ b/scripts/device-crash-test
+@@ -397,7 +397,7 @@ def binariesToTest(args, testcase):
+ 
+ 
+ def accelsToTest(args, testcase):
+-    if getBinaryInfo(args, testcase['binary']).kvm_available:
++    if getBinaryInfo(args, testcase['binary']).kvm_available and not args.tcg_only:
+         yield 'kvm'
+     yield 'tcg'
+ 
+@@ -510,6 +510,8 @@ def main():
+                         help="Full mode: test cases that are expected to fail")
+     parser.add_argument('--strict', action='store_true', dest='strict',
+                         help="Treat all warnings as fatal")
++    parser.add_argument('--tcg-only', action='store_true', dest='tcg_only',
++                        help="Only test with TCG accelerator")
+     parser.add_argument('qemu', nargs='*', metavar='QEMU',
+                         help='QEMU binary to run')
+     args = parser.parse_args()
+diff --git a/softmmu/icount.c b/softmmu/icount.c
+index 4504433e16..a5cef9c60a 100644
+--- a/softmmu/icount.c
++++ b/softmmu/icount.c
+@@ -259,11 +259,16 @@ static void icount_warp_rt(void)
+         warp_delta = clock - timers_state.vm_clock_warp_start;
+         if (icount_enabled() == 2) {
+             /*
+-             * In adaptive mode, do not let QEMU_CLOCK_VIRTUAL run too
+-             * far ahead of real time.
++             * In adaptive mode, do not let QEMU_CLOCK_VIRTUAL run too far
++             * ahead of real time (it might already be ahead so careful not
++             * to go backwards).
+              */
+             int64_t cur_icount = icount_get_locked();
+             int64_t delta = clock - cur_icount;
++
++            if (delta < 0) {
++                delta = 0;
++            }
+             warp_delta = MIN(warp_delta, delta);
+         }
+         qatomic_set_i64(&timers_state.qemu_icount_bias,
+diff --git a/target/arm/tlb_helper.c b/target/arm/tlb_helper.c
+index 0f4f4fc809..1384fe6f98 100644
+--- a/target/arm/tlb_helper.c
++++ b/target/arm/tlb_helper.c
+@@ -82,8 +82,17 @@ static uint32_t compute_fsr_fsc(CPUARMState *env, ARMMMUFaultInfo *fi,
+     ARMMMUIdx arm_mmu_idx = core_to_arm_mmu_idx(env, mmu_idx);
+     uint32_t fsr, fsc;
+ 
+-    if (target_el == 2 || arm_el_is_aa64(env, target_el) ||
+-        arm_s1_regime_using_lpae_format(env, arm_mmu_idx)) {
++    /*
++     * For M-profile there is no guest-facing FSR. We compute a
++     * short-form value for env->exception.fsr which we will then
++     * examine in arm_v7m_cpu_do_interrupt(). In theory we could
++     * use the LPAE format instead as long as both bits of code agree
++     * (and arm_fi_to_lfsc() handled the M-profile specific
++     * ARMFault_QEMU_NSCExec and ARMFault_QEMU_SFault cases).
++     */
++    if (!arm_feature(env, ARM_FEATURE_M) &&
++        (target_el == 2 || arm_el_is_aa64(env, target_el) ||
++         arm_s1_regime_using_lpae_format(env, arm_mmu_idx))) {
+         /*
+          * LPAE format fault status register : bottom 6 bits are
+          * status code in the same form as needed for syndrome
+diff --git a/target/arm/translate-a64.c b/target/arm/translate-a64.c
+index 2ee171f249..f0b8db7ce5 100644
+--- a/target/arm/translate-a64.c
++++ b/target/arm/translate-a64.c
+@@ -3536,8 +3536,22 @@ static void disas_ldst_atomic(DisasContext *s, uint32_t insn,
+      */
+     fn(tcg_rt, clean_addr, tcg_rs, get_mem_index(s), mop);
+ 
+-    if ((mop & MO_SIGN) && size != MO_64) {
+-        tcg_gen_ext32u_i64(tcg_rt, tcg_rt);
++    if (mop & MO_SIGN) {
++        switch (size) {
++        case MO_8:
++            tcg_gen_ext8u_i64(tcg_rt, tcg_rt);
++            break;
++        case MO_16:
++            tcg_gen_ext16u_i64(tcg_rt, tcg_rt);
++            break;
++        case MO_32:
++            tcg_gen_ext32u_i64(tcg_rt, tcg_rt);
++            break;
++        case MO_64:
++            break;
++        default:
++            g_assert_not_reached();
++        }
+     }
+ }
+ 
+@@ -4176,9 +4190,13 @@ static void disas_ldst_tag(DisasContext *s, uint32_t insn)
+         if (s->ata) {
+             gen_helper_ldg(tcg_rt, cpu_env, addr, tcg_rt);
+         } else {
++            /*
++             * Tag access disabled: we must check for aborts on the load
++             * load from [rn+offset], and then insert a 0 tag into rt.
++             */
+             clean_addr = clean_data_tbi(s, addr);
+             gen_probe_access(s, clean_addr, MMU_DATA_LOAD, MO_8);
+-            gen_address_with_allocation_tag0(tcg_rt, addr);
++            gen_address_with_allocation_tag0(tcg_rt, tcg_rt);
+         }
+     } else {
+         tcg_rt = cpu_reg_sp(s, rt);
+diff --git a/target/ppc/cpu_init.c b/target/ppc/cpu_init.c
+index cbf0081374..294a18a5b7 100644
+--- a/target/ppc/cpu_init.c
++++ b/target/ppc/cpu_init.c
+@@ -7085,7 +7085,7 @@ static void ppc_cpu_reset(DeviceState *dev)
+         if (env->mmu_model != POWERPC_MMU_REAL) {
+             ppc_tlb_invalidate_all(env);
+         }
+-        pmu_update_summaries(env);
++        pmu_mmcr01_updated(env);
+     }
+ 
+     /* clean any pending stop state */
+diff --git a/target/ppc/excp_helper.c b/target/ppc/excp_helper.c
+index 30bc2e6adf..6cf88f635a 100644
+--- a/target/ppc/excp_helper.c
++++ b/target/ppc/excp_helper.c
+@@ -1358,9 +1358,12 @@ static void powerpc_excp_books(PowerPCCPU *cpu, int excp)
+ 
+     /*
+      * We don't want to generate a Hypervisor Emulation Assistance
+-     * Interrupt if we don't have HVB in msr_mask (PAPR mode).
++     * Interrupt if we don't have HVB in msr_mask (PAPR mode),
++     * unless running a nested-hv guest, in which case the L1
++     * kernel wants the interrupt.
+      */
+-    if (excp == POWERPC_EXCP_HV_EMU && !(env->msr_mask & MSR_HVB)) {
++    if (excp == POWERPC_EXCP_HV_EMU && !(env->msr_mask & MSR_HVB) &&
++            !books_vhyp_handles_hv_excp(cpu)) {
+         excp = POWERPC_EXCP_PROGRAM;
+     }
+ 
+diff --git a/target/ppc/helper_regs.c b/target/ppc/helper_regs.c
+index c0aee5855b..e200091a23 100644
+--- a/target/ppc/helper_regs.c
++++ b/target/ppc/helper_regs.c
+@@ -46,6 +46,48 @@ void hreg_swap_gpr_tgpr(CPUPPCState *env)
+     env->tgpr[3] = tmp;
+ }
+ 
++static uint32_t hreg_compute_pmu_hflags_value(CPUPPCState *env)
++{
++    uint32_t hflags = 0;
++
++#if defined(TARGET_PPC64)
++    if (env->spr[SPR_POWER_MMCR0] & MMCR0_PMCC0) {
++        hflags |= 1 << HFLAGS_PMCC0;
++    }
++    if (env->spr[SPR_POWER_MMCR0] & MMCR0_PMCC1) {
++        hflags |= 1 << HFLAGS_PMCC1;
++    }
++    if (env->spr[SPR_POWER_MMCR0] & MMCR0_PMCjCE) {
++        hflags |= 1 << HFLAGS_PMCJCE;
++    }
++
++#ifndef CONFIG_USER_ONLY
++    if (env->pmc_ins_cnt) {
++        hflags |= 1 << HFLAGS_INSN_CNT;
++    }
++    if (env->pmc_ins_cnt & 0x1e) {
++        hflags |= 1 << HFLAGS_PMC_OTHER;
++    }
++#endif
++#endif
++
++    return hflags;
++}
++
++/* Mask of all PMU hflags */
++static uint32_t hreg_compute_pmu_hflags_mask(CPUPPCState *env)
++{
++    uint32_t hflags_mask = 0;
++#if defined(TARGET_PPC64)
++    hflags_mask |= 1 << HFLAGS_PMCC0;
++    hflags_mask |= 1 << HFLAGS_PMCC1;
++    hflags_mask |= 1 << HFLAGS_PMCJCE;
++    hflags_mask |= 1 << HFLAGS_INSN_CNT;
++    hflags_mask |= 1 << HFLAGS_PMC_OTHER;
++#endif
++    return hflags_mask;
++}
++
+ static uint32_t hreg_compute_hflags_value(CPUPPCState *env)
+ {
+     target_ulong msr = env->msr;
+@@ -103,30 +145,12 @@ static uint32_t hreg_compute_hflags_value(CPUPPCState *env)
+     if (env->spr[SPR_LPCR] & LPCR_HR) {
+         hflags |= 1 << HFLAGS_HR;
+     }
+-    if (env->spr[SPR_POWER_MMCR0] & MMCR0_PMCC0) {
+-        hflags |= 1 << HFLAGS_PMCC0;
+-    }
+-    if (env->spr[SPR_POWER_MMCR0] & MMCR0_PMCC1) {
+-        hflags |= 1 << HFLAGS_PMCC1;
+-    }
+-    if (env->spr[SPR_POWER_MMCR0] & MMCR0_PMCjCE) {
+-        hflags |= 1 << HFLAGS_PMCJCE;
+-    }
+ 
+ #ifndef CONFIG_USER_ONLY
+     if (!env->has_hv_mode || (msr & (1ull << MSR_HV))) {
+         hflags |= 1 << HFLAGS_HV;
+     }
+ 
+-#if defined(TARGET_PPC64)
+-    if (env->pmc_ins_cnt) {
+-        hflags |= 1 << HFLAGS_INSN_CNT;
+-    }
+-    if (env->pmc_ins_cnt & 0x1e) {
+-        hflags |= 1 << HFLAGS_PMC_OTHER;
+-    }
+-#endif
+-
+     /*
+      * This is our encoding for server processors. The architecture
+      * specifies that there is no such thing as userspace with
+@@ -171,6 +195,8 @@ static uint32_t hreg_compute_hflags_value(CPUPPCState *env)
+     hflags |= dmmu_idx << HFLAGS_DMMU_IDX;
+ #endif
+ 
++    hflags |= hreg_compute_pmu_hflags_value(env);
++
+     return hflags | (msr & msr_mask);
+ }
+ 
+@@ -179,6 +205,17 @@ void hreg_compute_hflags(CPUPPCState *env)
+     env->hflags = hreg_compute_hflags_value(env);
+ }
+ 
++/*
++ * This can be used as a lighter-weight alternative to hreg_compute_hflags
++ * when PMU MMCR0 or pmc_ins_cnt changes. pmc_ins_cnt is changed by
++ * pmu_update_summaries.
++ */
++void hreg_update_pmu_hflags(CPUPPCState *env)
++{
++    env->hflags &= ~hreg_compute_pmu_hflags_mask(env);
++    env->hflags |= hreg_compute_pmu_hflags_value(env);
++}
++
+ #ifdef CONFIG_DEBUG_TCG
+ void cpu_get_tb_cpu_state(CPUPPCState *env, target_ulong *pc,
+                           target_ulong *cs_base, uint32_t *flags)
+diff --git a/target/ppc/helper_regs.h b/target/ppc/helper_regs.h
+index 42f26870b9..8196c1346d 100644
+--- a/target/ppc/helper_regs.h
++++ b/target/ppc/helper_regs.h
+@@ -22,6 +22,7 @@
+ 
+ void hreg_swap_gpr_tgpr(CPUPPCState *env);
+ void hreg_compute_hflags(CPUPPCState *env);
++void hreg_update_pmu_hflags(CPUPPCState *env);
+ void cpu_interrupt_exittb(CPUState *cs);
+ int hreg_store_msr(CPUPPCState *env, target_ulong value, int alter_hv);
+ 
+diff --git a/target/ppc/machine.c b/target/ppc/machine.c
+index be6eb3d968..134b16c625 100644
+--- a/target/ppc/machine.c
++++ b/target/ppc/machine.c
+@@ -21,10 +21,6 @@ static void post_load_update_msr(CPUPPCState *env)
+      */
+     env->msr ^= env->msr_mask & ~((1ULL << MSR_TGPR) | MSR_HVB);
+     ppc_store_msr(env, msr);
+-
+-    if (tcg_enabled()) {
+-        pmu_update_summaries(env);
+-    }
+ }
+ 
+ static int get_avr(QEMUFile *f, void *pv, size_t size,
+@@ -317,6 +313,10 @@ static int cpu_post_load(void *opaque, int version_id)
+ 
+     post_load_update_msr(env);
+ 
++    if (tcg_enabled()) {
++        pmu_mmcr01_updated(env);
++    }
++
+     return 0;
+ }
+ 
+diff --git a/target/ppc/power8-pmu.c b/target/ppc/power8-pmu.c
+index 1381072b9e..fccd011088 100644
+--- a/target/ppc/power8-pmu.c
++++ b/target/ppc/power8-pmu.c
+@@ -31,7 +31,11 @@ static bool pmc_has_overflow_enabled(CPUPPCState *env, int sprn)
+     return env->spr[SPR_POWER_MMCR0] & MMCR0_PMCjCE;
+ }
+ 
+-void pmu_update_summaries(CPUPPCState *env)
++/*
++ * Called after MMCR0 or MMCR1 changes to update pmc_ins_cnt and pmc_cyc_cnt.
++ * hflags must subsequently be updated.
++ */
++static void pmu_update_summaries(CPUPPCState *env)
+ {
+     target_ulong mmcr0 = env->spr[SPR_POWER_MMCR0];
+     target_ulong mmcr1 = env->spr[SPR_POWER_MMCR1];
+@@ -39,7 +43,7 @@ void pmu_update_summaries(CPUPPCState *env)
+     int cyc_cnt = 0;
+ 
+     if (mmcr0 & MMCR0_FC) {
+-        goto hflags_calc;
++        goto out;
+     }
+ 
+     if (!(mmcr0 & MMCR0_FC14) && mmcr1 != 0) {
+@@ -73,10 +77,19 @@ void pmu_update_summaries(CPUPPCState *env)
+     ins_cnt |= !(mmcr0 & MMCR0_FC56) << 5;
+     cyc_cnt |= !(mmcr0 & MMCR0_FC56) << 6;
+ 
+- hflags_calc:
++ out:
+     env->pmc_ins_cnt = ins_cnt;
+     env->pmc_cyc_cnt = cyc_cnt;
+-    env->hflags = deposit32(env->hflags, HFLAGS_INSN_CNT, 1, ins_cnt != 0);
++}
++
++void pmu_mmcr01_updated(CPUPPCState *env)
++{
++    pmu_update_summaries(env);
++    hreg_update_pmu_hflags(env);
++    /*
++     * Should this update overflow timers (if mmcr0 is updated) so they
++     * get set in cpu_post_load?
++     */
+ }
+ 
+ static bool pmu_increment_insns(CPUPPCState *env, uint32_t num_insns)
+@@ -234,18 +247,11 @@ static void pmu_delete_timers(CPUPPCState *env)
+ 
+ void helper_store_mmcr0(CPUPPCState *env, target_ulong value)
+ {
+-    bool hflags_pmcc0 = (value & MMCR0_PMCC0) != 0;
+-    bool hflags_pmcc1 = (value & MMCR0_PMCC1) != 0;
+-
+     pmu_update_cycles(env);
+ 
+     env->spr[SPR_POWER_MMCR0] = value;
+ 
+-    /* MMCR0 writes can change HFLAGS_PMCC[01] and HFLAGS_INSN_CNT */
+-    env->hflags = deposit32(env->hflags, HFLAGS_PMCC0, 1, hflags_pmcc0);
+-    env->hflags = deposit32(env->hflags, HFLAGS_PMCC1, 1, hflags_pmcc1);
+-
+-    pmu_update_summaries(env);
++    pmu_mmcr01_updated(env);
+ 
+     /* Update cycle overflow timers with the current MMCR0 state */
+     pmu_update_overflow_timers(env);
+@@ -257,8 +263,7 @@ void helper_store_mmcr1(CPUPPCState *env, uint64_t value)
+ 
+     env->spr[SPR_POWER_MMCR1] = value;
+ 
+-    /* MMCR1 writes can change HFLAGS_INSN_CNT */
+-    pmu_update_summaries(env);
++    pmu_mmcr01_updated(env);
+ }
+ 
+ target_ulong helper_read_pmc(CPUPPCState *env, uint32_t sprn)
+@@ -287,8 +292,8 @@ static void fire_PMC_interrupt(PowerPCCPU *cpu)
+         env->spr[SPR_POWER_MMCR0] &= ~MMCR0_FCECE;
+         env->spr[SPR_POWER_MMCR0] |= MMCR0_FC;
+ 
+-        /* Changing MMCR0_FC requires a new HFLAGS_INSN_CNT calc */
+-        pmu_update_summaries(env);
++        /* Changing MMCR0_FC requires summaries and hflags update */
++        pmu_mmcr01_updated(env);
+ 
+         /*
+          * Delete all pending timers if we need to freeze
+@@ -299,6 +304,7 @@ static void fire_PMC_interrupt(PowerPCCPU *cpu)
+     }
+ 
+     if (env->spr[SPR_POWER_MMCR0] & MMCR0_PMAE) {
++        /* These MMCR0 bits do not require summaries or hflags update. */
+         env->spr[SPR_POWER_MMCR0] &= ~MMCR0_PMAE;
+         env->spr[SPR_POWER_MMCR0] |= MMCR0_PMAO;
+     }
+diff --git a/target/ppc/power8-pmu.h b/target/ppc/power8-pmu.h
+index c0093e2219..775e640053 100644
+--- a/target/ppc/power8-pmu.h
++++ b/target/ppc/power8-pmu.h
+@@ -18,10 +18,10 @@
+ #define PMC_COUNTER_NEGATIVE_VAL 0x80000000UL
+ 
+ void cpu_ppc_pmu_init(CPUPPCState *env);
+-void pmu_update_summaries(CPUPPCState *env);
++void pmu_mmcr01_updated(CPUPPCState *env);
+ #else
+ static inline void cpu_ppc_pmu_init(CPUPPCState *env) { }
+-static inline void pmu_update_summaries(CPUPPCState *env) { }
++static inline void pmu_mmcr01_updated(CPUPPCState *env) { }
+ #endif
+ 
+ #endif
+diff --git a/target/ppc/translate.c b/target/ppc/translate.c
+index 19c1d17cb0..1de7eca9c4 100644
+--- a/target/ppc/translate.c
++++ b/target/ppc/translate.c
+@@ -3972,6 +3972,7 @@ static void gen_lqarx(DisasContext *ctx)
+     }
+     tcg_temp_free(EA);
+ 
++    tcg_gen_mov_tl(cpu_reserve, EA);
+     tcg_gen_st_tl(hi, cpu_env, offsetof(CPUPPCState, reserve_val));
+     tcg_gen_st_tl(lo, cpu_env, offsetof(CPUPPCState, reserve_val2));
+ }
+diff --git a/target/s390x/cpu_models.c b/target/s390x/cpu_models.c
+index c3a4f80633..a85c56b4ee 100644
+--- a/target/s390x/cpu_models.c
++++ b/target/s390x/cpu_models.c
+@@ -604,8 +604,8 @@ void s390_realize_cpu_model(CPUState *cs, Error **errp)
+ #if !defined(CONFIG_USER_ONLY)
+     cpu->env.cpuid = s390_cpuid_from_cpu_model(cpu->model);
+     if (tcg_enabled()) {
+-        /* basic mode, write the cpu address into the first 4 bit of the ID */
+-        cpu->env.cpuid = deposit64(cpu->env.cpuid, 54, 4, cpu->env.core_id);
++        cpu->env.cpuid = deposit64(cpu->env.cpuid, CPU_PHYS_ADDR_SHIFT,
++                                   CPU_PHYS_ADDR_BITS, cpu->env.core_id);
+     }
+ #endif
+ }
+diff --git a/target/s390x/cpu_models.h b/target/s390x/cpu_models.h
+index fb1adc8b21..cc7305ec21 100644
+--- a/target/s390x/cpu_models.h
++++ b/target/s390x/cpu_models.h
+@@ -96,10 +96,18 @@ static inline bool s390_known_cpu_type(uint16_t type)
+ {
+     return s390_get_gen_for_cpu_type(type) != 0;
+ }
++#define CPU_ID_SHIFT 32
++#define CPU_ID_BITS 24
++/*
++ * When cpu_id_format is 0 (basic mode), the leftmost 4 bits of cpu_id contain
++ * the rightmost 4 bits of the physical CPU address.
++ */
++#define CPU_PHYS_ADDR_BITS 4
++#define CPU_PHYS_ADDR_SHIFT (CPU_ID_SHIFT + CPU_ID_BITS - CPU_PHYS_ADDR_BITS)
+ static inline uint64_t s390_cpuid_from_cpu_model(const S390CPUModel *model)
+ {
+     return ((uint64_t)model->cpu_ver << 56) |
+-           ((uint64_t)model->cpu_id << 32) |
++           ((uint64_t)model->cpu_id << CPU_ID_SHIFT) |
+            ((uint64_t)model->def->type << 16) |
+            (model->def->gen == 7 ? 0 : (uint64_t)model->cpu_id_format << 15);
+ }
+diff --git a/target/s390x/tcg/insn-data.h.inc b/target/s390x/tcg/insn-data.h.inc
+index 13ffdda4da..4249632af3 100644
+--- a/target/s390x/tcg/insn-data.h.inc
++++ b/target/s390x/tcg/insn-data.h.inc
+@@ -486,7 +486,7 @@
+     F(0xb343, LCXBR,   RRE,   Z,   x2h, x2l, new_P, x1, negf128, f128, IF_BFP)
+     F(0xb373, LCDFR,   RRE,   FPSSH, 0, f2, new, f1, negf64, 0, IF_AFP1 | IF_AFP2)
+ /* LOAD COUNT TO BLOCK BOUNDARY */
+-    C(0xe727, LCBB,    RXE,   V,   la2, 0, r1, 0, lcbb, 0)
++    C(0xe727, LCBB,    RXE,   V,   la2, 0, new, r1_32, lcbb, 0)
+ /* LOAD HALFWORD */
+     C(0xb927, LHR,     RRE,   EI,  0, r2_16s, 0, r1_32, mov2, 0)
+     C(0xb907, LGHR,    RRE,   EI,  0, r2_16s, 0, r1, mov2, 0)
+@@ -564,7 +564,7 @@
+     C(0xec46, LOCGHI,  RIE_g, LOC2, r1, i2, r1, 0, loc, 0)
+     C(0xec4e, LOCHHI,  RIE_g, LOC2, r1_sr32, i2, new, r1_32h, loc, 0)
+ /* LOAD HIGH ON CONDITION */
+-    C(0xb9e0, LOCFHR,  RRF_c, LOC2, r1_sr32, r2, new, r1_32h, loc, 0)
++    C(0xb9e0, LOCFHR,  RRF_c, LOC2, r1_sr32, r2_sr32, new, r1_32h, loc, 0)
+     C(0xebe0, LOCFH,   RSY_b, LOC2, r1_sr32, m2_32u, new, r1_32h, loc, 0)
+ /* LOAD PAIR DISJOINT */
+     D(0xc804, LPD,     SSF,   ILA, 0, 0, new_P, r3_P32, lpd, 0, MO_TEUL)
+diff --git a/tests/tcg/s390x/Makefile.target b/tests/tcg/s390x/Makefile.target
+index 07fcc6d0ce..cb90d4183d 100644
+--- a/tests/tcg/s390x/Makefile.target
++++ b/tests/tcg/s390x/Makefile.target
+@@ -26,6 +26,8 @@ TESTS+=branch-relative-long
+ TESTS+=noexec
+ 
+ Z13_TESTS=vistr
++Z13_TESTS+=lcbb
++Z13_TESTS+=locfhr
+ $(Z13_TESTS): CFLAGS+=-march=z13 -O2
+ TESTS+=$(Z13_TESTS)
+ 
+@@ -54,7 +56,16 @@ run-gdbstub-signals-s390x: signals-s390x
+ 		--bin $< --test $(S390X_SRC)/gdbstub/test-signals-s390x.py, \
+ 	mixing signals and debugging)
+ 
+-EXTRA_RUNS += run-gdbstub-signals-s390x
++hello-s390x-asm: CFLAGS+=-nostdlib
++
++run-gdbstub-svc: hello-s390x-asm
++	$(call run-test, $@, $(GDB_SCRIPT) \
++		--gdb $(HAVE_GDB_BIN) \
++		--qemu $(QEMU) --qargs "$(QEMU_OPTS)" \
++		--bin $< --test $(S390X_SRC)/gdbstub/test-svc.py, \
++	single-stepping svc)
++
++EXTRA_RUNS += run-gdbstub-signals-s390x run-gdbstub-svc
+ endif
+ 
+ # MVX versions of sha512
+diff --git a/tests/tcg/s390x/gdbstub/test-svc.py b/tests/tcg/s390x/gdbstub/test-svc.py
+new file mode 100644
+index 0000000000..7851ca7284
+--- /dev/null
++++ b/tests/tcg/s390x/gdbstub/test-svc.py
+@@ -0,0 +1,64 @@
++"""Test single-stepping SVC.
++
++This runs as a sourced script (via -x, via run-test.py)."""
++from __future__ import print_function
++import gdb
++import sys
++
++
++n_failures = 0
++
++
++def report(cond, msg):
++    """Report success/fail of a test"""
++    if cond:
++        print("PASS: {}".format(msg))
++    else:
++        print("FAIL: {}".format(msg))
++        global n_failures
++        n_failures += 1
++
++
++def run_test():
++    """Run through the tests one by one"""
++    report("lghi\t" in gdb.execute("x/i $pc", False, True), "insn #1")
++    gdb.execute("si")
++    report("larl\t" in gdb.execute("x/i $pc", False, True), "insn #2")
++    gdb.execute("si")
++    report("lghi\t" in gdb.execute("x/i $pc", False, True), "insn #3")
++    gdb.execute("si")
++    report("svc\t" in gdb.execute("x/i $pc", False, True), "insn #4")
++    gdb.execute("si")
++    report("xgr\t" in gdb.execute("x/i $pc", False, True), "insn #5")
++    gdb.execute("si")
++    report("svc\t" in gdb.execute("x/i $pc", False, True), "insn #6")
++    gdb.execute("si")
++
++
++def main():
++    """Prepare the environment and run through the tests"""
++    try:
++        inferior = gdb.selected_inferior()
++        print("ATTACHED: {}".format(inferior.architecture().name()))
++    except (gdb.error, AttributeError):
++        print("SKIPPING (not connected)")
++        exit(0)
++
++    if gdb.parse_and_eval('$pc') == 0:
++        print("SKIP: PC not set")
++        exit(0)
++
++    try:
++        # These are not very useful in scripts
++        gdb.execute("set pagination off")
++        gdb.execute("set confirm off")
++
++        # Run the actual tests
++        run_test()
++    except gdb.error:
++        report(False, "GDB Exception: {}".format(sys.exc_info()[0]))
++    print("All tests complete: %d failures" % n_failures)
++    exit(n_failures)
++
++
++main()
+diff --git a/tests/tcg/s390x/hello-s390x-asm.S b/tests/tcg/s390x/hello-s390x-asm.S
+new file mode 100644
+index 0000000000..2e9faa1604
+--- /dev/null
++++ b/tests/tcg/s390x/hello-s390x-asm.S
+@@ -0,0 +1,20 @@
++/*
++ * Hello, World! in assembly.
++ */
++
++.globl _start
++_start:
++
++/* puts("Hello, World!"); */
++lghi %r2,1
++larl %r3,foo
++lghi %r4,foo_end-foo
++svc 4
++
++/* exit(0); */
++xgr %r2,%r2
++svc 1
++
++.align 2
++foo: .asciz "Hello, World!\n"
++foo_end:
+diff --git a/tests/tcg/s390x/lcbb.c b/tests/tcg/s390x/lcbb.c
+new file mode 100644
+index 0000000000..8d368e0998
+--- /dev/null
++++ b/tests/tcg/s390x/lcbb.c
+@@ -0,0 +1,51 @@
++/*
++ * Test the LCBB instruction.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#include <assert.h>
++#include <stdlib.h>
++
++static inline __attribute__((__always_inline__)) void
++lcbb(long *r1, void *dxb2, int m3, int *cc)
++{
++    asm("lcbb %[r1],%[dxb2],%[m3]\n"
++        "ipm %[cc]"
++        : [r1] "+r" (*r1), [cc] "=r" (*cc)
++        : [dxb2] "R" (*(char *)dxb2), [m3] "i" (m3)
++        : "cc");
++    *cc = (*cc >> 28) & 3;
++}
++
++static char buf[0x1000] __attribute__((aligned(0x1000)));
++
++static inline __attribute__((__always_inline__)) void
++test_lcbb(void *p, int m3, int exp_r1, int exp_cc)
++{
++    long r1 = 0xfedcba9876543210;
++    int cc;
++
++    lcbb(&r1, p, m3, &cc);
++    assert(r1 == (0xfedcba9800000000 | exp_r1));
++    assert(cc == exp_cc);
++}
++
++int main(void)
++{
++    test_lcbb(&buf[0],    0, 16, 0);
++    test_lcbb(&buf[63],   0,  1, 3);
++    test_lcbb(&buf[0],    1, 16, 0);
++    test_lcbb(&buf[127],  1,  1, 3);
++    test_lcbb(&buf[0],    2, 16, 0);
++    test_lcbb(&buf[255],  2,  1, 3);
++    test_lcbb(&buf[0],    3, 16, 0);
++    test_lcbb(&buf[511],  3,  1, 3);
++    test_lcbb(&buf[0],    4, 16, 0);
++    test_lcbb(&buf[1023], 4,  1, 3);
++    test_lcbb(&buf[0],    5, 16, 0);
++    test_lcbb(&buf[2047], 5,  1, 3);
++    test_lcbb(&buf[0],    6, 16, 0);
++    test_lcbb(&buf[4095], 6,  1, 3);
++
++    return EXIT_SUCCESS;
++}
+diff --git a/tests/tcg/s390x/locfhr.c b/tests/tcg/s390x/locfhr.c
+new file mode 100644
+index 0000000000..ab9ff6e449
+--- /dev/null
++++ b/tests/tcg/s390x/locfhr.c
+@@ -0,0 +1,29 @@
++/*
++ * Test the LOCFHR instruction.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#include <assert.h>
++#include <stdlib.h>
++
++static inline __attribute__((__always_inline__)) long
++locfhr(long r1, long r2, int m3, int cc)
++{
++    cc <<= 28;
++    asm("spm %[cc]\n"
++        "locfhr %[r1],%[r2],%[m3]\n"
++        : [r1] "+r" (r1)
++        : [cc] "r" (cc), [r2] "r" (r2), [m3] "i" (m3)
++        : "cc");
++    return r1;
++}
++
++int main(void)
++{
++    assert(locfhr(0x1111111122222222, 0x3333333344444444, 8, 0) ==
++           0x3333333322222222);
++    assert(locfhr(0x5555555566666666, 0x7777777788888888, 11, 1) ==
++           0x5555555566666666);
++
++    return EXIT_SUCCESS;
++}
+diff --git a/ui/gtk-egl.c b/ui/gtk-egl.c
+index e84431790c..e99e3b0d8c 100644
+--- a/ui/gtk-egl.c
++++ b/ui/gtk-egl.c
+@@ -88,8 +88,8 @@ void gd_egl_draw(VirtualConsole *vc)
+ #endif
+         gd_egl_scanout_flush(&vc->gfx.dcl, 0, 0, vc->gfx.w, vc->gfx.h);
+ 
+-        vc->gfx.scale_x = (double)ww / vc->gfx.w;
+-        vc->gfx.scale_y = (double)wh / vc->gfx.h;
++        vc->gfx.scale_x = (double)ww / surface_width(vc->gfx.ds);
++        vc->gfx.scale_y = (double)wh / surface_height(vc->gfx.ds);
+ 
+         glFlush();
+ #ifdef CONFIG_GBM
+@@ -256,8 +256,9 @@ void gd_egl_scanout_dmabuf(DisplayChangeListener *dcl,
+     }
+ 
+     gd_egl_scanout_texture(dcl, dmabuf->texture,
+-                           false, dmabuf->width, dmabuf->height,
+-                           0, 0, dmabuf->width, dmabuf->height);
++                           dmabuf->y0_top, dmabuf->width, dmabuf->height,
++                           dmabuf->x, dmabuf->y, dmabuf->scanout_width,
++                           dmabuf->scanout_height);
+ 
+     if (dmabuf->allow_fences) {
+         vc->gfx.guest_fb.dmabuf = dmabuf;
+diff --git a/ui/gtk-gl-area.c b/ui/gtk-gl-area.c
+index 7696df1f6b..1605818bd1 100644
+--- a/ui/gtk-gl-area.c
++++ b/ui/gtk-gl-area.c
+@@ -298,8 +298,9 @@ void gd_gl_area_scanout_dmabuf(DisplayChangeListener *dcl,
+     }
+ 
+     gd_gl_area_scanout_texture(dcl, dmabuf->texture,
+-                               false, dmabuf->width, dmabuf->height,
+-                               0, 0, dmabuf->width, dmabuf->height);
++                               dmabuf->y0_top, dmabuf->width, dmabuf->height,
++                               dmabuf->x, dmabuf->y, dmabuf->scanout_width,
++                               dmabuf->scanout_height);
+ 
+     if (dmabuf->allow_fences) {
+         vc->gfx.guest_fb.dmabuf = dmabuf;
+diff --git a/ui/gtk.c b/ui/gtk.c
+index dfaf6d33c3..e681e8c319 100644
+--- a/ui/gtk.c
++++ b/ui/gtk.c
+@@ -868,7 +868,6 @@ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
+ {
+     VirtualConsole *vc = opaque;
+     GtkDisplayState *s = vc->s;
+-    GdkWindow *window;
+     int x, y;
+     int mx, my;
+     int fbh, fbw;
+@@ -881,10 +880,9 @@ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
+     fbw = surface_width(vc->gfx.ds) * vc->gfx.scale_x;
+     fbh = surface_height(vc->gfx.ds) * vc->gfx.scale_y;
+ 
+-    window = gtk_widget_get_window(vc->gfx.drawing_area);
+-    ww = gdk_window_get_width(window);
+-    wh = gdk_window_get_height(window);
+-    ws = gdk_window_get_scale_factor(window);
++    ww = gtk_widget_get_allocated_width(widget);
++    wh = gtk_widget_get_allocated_height(widget);
++    ws = gtk_widget_get_scale_factor(widget);
+ 
+     mx = my = 0;
+     if (ww > fbw) {
+diff --git a/ui/sdl2-gl.c b/ui/sdl2-gl.c
+index 39cab8cde7..bbfa70eac3 100644
+--- a/ui/sdl2-gl.c
++++ b/ui/sdl2-gl.c
+@@ -67,6 +67,10 @@ void sdl2_gl_update(DisplayChangeListener *dcl,
+ 
+     assert(scon->opengl);
+ 
++    if (!scon->real_window) {
++        return;
++    }
++
+     SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
+     surface_gl_update_texture(scon->gls, scon->surface, x, y, w, h);
+     scon->updates++;
+diff --git a/ui/sdl2.c b/ui/sdl2.c
+index 8cb77416af..d630459b78 100644
+--- a/ui/sdl2.c
++++ b/ui/sdl2.c
+@@ -849,7 +849,14 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
+ #ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR /* only available since SDL 2.0.8 */
+     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+ #endif
++#ifndef CONFIG_WIN32
++    /* QEMU uses its own low level keyboard hook procecure on Windows */
+     SDL_SetHint(SDL_HINT_GRAB_KEYBOARD, "1");
++#endif
++#ifdef SDL_HINT_ALLOW_ALT_TAB_WHILE_GRABBED
++    SDL_SetHint(SDL_HINT_ALLOW_ALT_TAB_WHILE_GRABBED, "0");
++#endif
++    SDL_SetHint(SDL_HINT_WINDOWS_NO_CLOSE_ON_ALT_F4, "1");
+     memset(&info, 0, sizeof(info));
+     SDL_VERSION(&info.version);
+ 
+diff --git a/ui/vnc-jobs.c b/ui/vnc-jobs.c
+index 886f9bf611..fcca7ec632 100644
+--- a/ui/vnc-jobs.c
++++ b/ui/vnc-jobs.c
+@@ -250,12 +250,13 @@ static int vnc_worker_thread_loop(VncJobQueue *queue)
+     /* Here job can only be NULL if queue->exit is true */
+     job = QTAILQ_FIRST(&queue->jobs);
+     vnc_unlock_queue(queue);
+-    assert(job->vs->magic == VNC_MAGIC);
+ 
+     if (queue->exit) {
+         return -1;
+     }
+ 
++    assert(job->vs->magic == VNC_MAGIC);
++
+     vnc_lock_output(job->vs);
+     if (job->vs->ioc == NULL || job->vs->abort == true) {
+         vnc_unlock_output(job->vs);

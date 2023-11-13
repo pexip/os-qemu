@@ -50,15 +50,12 @@
 # @colo: guest is paused to save/restore VM state under colo checkpoint,
 #        VM can not get into this state unless colo capability is enabled
 #        for migration. (since 2.8)
-# @preconfig: QEMU is paused before board specific init callback is executed.
-#             The state is reachable only if the --preconfig CLI option is used.
-#             (Since 3.0)
 ##
 { 'enum': 'RunState',
   'data': [ 'debug', 'inmigrate', 'internal-error', 'io-error', 'paused',
             'postmigrate', 'prelaunch', 'finish-migrate', 'restore-vm',
             'running', 'save-vm', 'shutdown', 'suspended', 'watchdog',
-            'guest-panicked', 'colo', 'preconfig' ] }
+            'guest-panicked', 'colo' ] }
 
 ##
 # @ShutdownCause:
@@ -89,12 +86,16 @@
 #                   ignores --no-reboot. This is useful for sanitizing
 #                   hypercalls on s390 that are used during kexec/kdump/boot
 #
+# @snapshot-load: A snapshot is being loaded by the record & replay
+#                 subsystem. This value is used only within QEMU.  It
+#                 doesn't occur in QMP. (since 7.2)
+#
 ##
 { 'enum': 'ShutdownCause',
   # Beware, shutdown_caused_by_guest() depends on enumeration order
   'data': [ 'none', 'host-error', 'host-qmp-quit', 'host-qmp-system-reset',
             'host-signal', 'host-ui', 'guest-shutdown', 'guest-reset',
-            'guest-panic', 'subsystem-reset'] }
+            'guest-panic', 'subsystem-reset', 'snapshot-load'] }
 
 ##
 # @StatusInfo:
@@ -107,7 +108,7 @@
 #
 # @status: the virtual machine @RunState
 #
-# Since:  0.14.0
+# Since: 0.14
 #
 # Notes: @singlestep is enabled through the GDB stub
 ##
@@ -121,7 +122,7 @@
 #
 # Returns: @StatusInfo reflecting all VCPUs
 #
-# Since:  0.14.0
+# Since: 0.14
 #
 # Example:
 #
@@ -149,11 +150,12 @@
 # Note: If the command-line option "-no-shutdown" has been specified, qemu will
 #       not exit, and a STOP event will eventually follow the SHUTDOWN event
 #
-# Since: 0.12.0
+# Since: 0.12
 #
 # Example:
 #
-# <- { "event": "SHUTDOWN", "data": { "guest": true },
+# <- { "event": "SHUTDOWN",
+#      "data": { "guest": true, "reason": "guest-shutdown" },
 #      "timestamp": { "seconds": 1267040730, "microseconds": 682951 } }
 #
 ##
@@ -165,7 +167,7 @@
 # Emitted when the virtual machine is powered down through the power control
 # system, such as via ACPI.
 #
-# Since: 0.12.0
+# Since: 0.12
 #
 # Example:
 #
@@ -187,11 +189,12 @@
 #
 # @reason: The @ShutdownCause of the RESET. (since 4.0)
 #
-# Since: 0.12.0
+# Since: 0.12
 #
 # Example:
 #
-# <- { "event": "RESET", "data": { "guest": false },
+# <- { "event": "RESET",
+#      "data": { "guest": false, "reason": "guest-reset" },
 #      "timestamp": { "seconds": 1267041653, "microseconds": 9518 } }
 #
 ##
@@ -202,7 +205,7 @@
 #
 # Emitted when the virtual machine is stopped
 #
-# Since: 0.12.0
+# Since: 0.12
 #
 # Example:
 #
@@ -217,7 +220,7 @@
 #
 # Emitted when the virtual machine resumes execution
 #
-# Since: 0.12.0
+# Since: 0.12
 #
 # Example:
 #
@@ -288,7 +291,7 @@
 #
 # Note: This event is rate-limited.
 #
-# Since: 0.13.0
+# Since: 0.13
 #
 # Example:
 #
@@ -329,6 +332,51 @@
             'inject-nmi' ] }
 
 ##
+# @RebootAction:
+#
+# Possible QEMU actions upon guest reboot
+#
+# @reset: Reset the VM
+#
+# @shutdown: Shutdown the VM and exit, according to the shutdown action
+#
+# Since: 6.0
+##
+{ 'enum': 'RebootAction',
+  'data': [ 'reset', 'shutdown' ] }
+
+##
+# @ShutdownAction:
+#
+# Possible QEMU actions upon guest shutdown
+#
+# @poweroff: Shutdown the VM and exit
+#
+# @pause: pause the VM
+#
+# Since: 6.0
+##
+{ 'enum': 'ShutdownAction',
+  'data': [ 'poweroff', 'pause' ] }
+
+##
+# @PanicAction:
+#
+# @none: Continue VM execution
+#
+# @pause: Pause the VM
+#
+# @shutdown: Shutdown the VM and exit, according to the shutdown action
+#
+# @exit-failure: Shutdown the VM and exit with nonzero status
+#                (since 7.1)
+#
+# Since: 6.0
+##
+{ 'enum': 'PanicAction',
+  'data': [ 'pause', 'shutdown', 'exit-failure', 'none' ] }
+
+##
 # @watchdog-set-action:
 #
 # Set watchdog action
@@ -336,6 +384,40 @@
 # Since: 2.11
 ##
 { 'command': 'watchdog-set-action', 'data' : {'action': 'WatchdogAction'} }
+
+##
+# @set-action:
+#
+# Set the actions that will be taken by the emulator in response to guest
+# events.
+#
+# @reboot: @RebootAction action taken on guest reboot.
+#
+# @shutdown: @ShutdownAction action taken on guest shutdown.
+#
+# @panic: @PanicAction action taken on guest panic.
+#
+# @watchdog: @WatchdogAction action taken when watchdog timer expires .
+#
+# Returns: Nothing on success.
+#
+# Since: 6.0
+#
+# Example:
+#
+# -> { "execute": "set-action",
+#      "arguments": { "reboot": "shutdown",
+#                     "shutdown" : "pause",
+#                     "panic": "pause",
+#                     "watchdog": "inject-nmi" } }
+# <- { "return": {} }
+##
+{ 'command': 'set-action',
+  'data': { '*reboot': 'RebootAction',
+            '*shutdown': 'ShutdownAction',
+            '*panic': 'PanicAction',
+            '*watchdog': 'WatchdogAction' },
+  'allow-preconfig': true }
 
 ##
 # @GUEST_PANICKED:
@@ -351,7 +433,8 @@
 # Example:
 #
 # <- { "event": "GUEST_PANICKED",
-#      "data": { "action": "pause" } }
+#      "data": { "action": "pause" },
+#      "timestamp": { "seconds": 1648245231, "microseconds": 900001 } }
 #
 ##
 { 'event': 'GUEST_PANICKED',
@@ -371,7 +454,8 @@
 # Example:
 #
 # <- { "event": "GUEST_CRASHLOADED",
-#      "data": { "action": "run" } }
+#      "data": { "action": "run" },
+#      "timestamp": { "seconds": 1648245259, "microseconds": 893771 } }
 #
 ##
 { 'event': 'GUEST_CRASHLOADED',
@@ -494,7 +578,9 @@
 # <- { "event": "MEMORY_FAILURE",
 #      "data": { "recipient": "hypervisor",
 #                "action": "fatal",
-#                "flags": { 'action-required': false } }
+#                "flags": { "action-required": false,
+#                           "recursive": false } },
+#      "timestamp": { "seconds": 1267061043, "microseconds": 959568 } }
 #
 ##
 { 'event': 'MEMORY_FAILURE',
@@ -513,12 +599,10 @@
 # @guest: memory failure at guest memory,
 #
 # Since: 5.2
-#
 ##
 { 'enum': 'MemoryFailureRecipient',
   'data': [ 'hypervisor',
             'guest' ] }
-
 
 ##
 # @MemoryFailureAction:
@@ -540,7 +624,6 @@
 #         to handle memory failures.
 #
 # Since: 5.2
-#
 ##
 { 'enum': 'MemoryFailureAction',
   'data': [ 'ignore',
@@ -560,8 +643,24 @@
 #             failure was still in progress.
 #
 # Since: 5.2
-#
 ##
 { 'struct': 'MemoryFailureFlags',
   'data': { 'action-required': 'bool',
             'recursive': 'bool'} }
+
+##
+# @NotifyVmexitOption:
+#
+# An enumeration of the options specified when enabling notify VM exit
+#
+# @run: enable the feature, do nothing and continue if the notify VM exit happens.
+#
+# @internal-error: enable the feature, raise a internal error if the notify
+#                  VM exit happens.
+#
+# @disable: disable the feature.
+#
+# Since: 7.2
+##
+{ 'enum': 'NotifyVmexitOption',
+  'data': [ 'run', 'internal-error', 'disable' ] }

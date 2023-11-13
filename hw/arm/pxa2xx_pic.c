@@ -17,6 +17,7 @@
 #include "hw/sysbus.h"
 #include "migration/vmstate.h"
 #include "qom/object.h"
+#include "target/arm/cpregs.h"
 
 #define ICIP	0x00	/* Interrupt Controller IRQ Pending register */
 #define ICMR	0x04	/* Interrupt Controller Mask register */
@@ -256,7 +257,6 @@ static const ARMCPRegInfo pxa_pic_cp_reginfo[] = {
     REGINFO_FOR_PIC_CP("ICLR2", 8),
     REGINFO_FOR_PIC_CP("ICFP2", 9),
     REGINFO_FOR_PIC_CP("ICPR2", 0xa),
-    REGINFO_SENTINEL
 };
 
 static const MemoryRegionOps pxa2xx_pic_ops = {
@@ -301,7 +301,7 @@ DeviceState *pxa2xx_pic_init(hwaddr base, ARMCPU *cpu)
     return dev;
 }
 
-static VMStateDescription vmstate_pxa2xx_pic_regs = {
+static const VMStateDescription vmstate_pxa2xx_pic_regs = {
     .name = "pxa2xx_pic",
     .version_id = 0,
     .minimum_version_id = 0,
