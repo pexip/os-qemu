@@ -1,3 +1,9 @@
+qemu (1:7.2+dfsg-7+deb12u2pexip1) pexip-bookworm; urgency=medium
+
+  * Initial bookworm build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Thu, 16 Nov 2023 10:27:48 +0000
+
 qemu (1:7.2+dfsg-7+deb12u2) bookworm; urgency=medium
 
   * d/rules: add the forgotten --enable-virtfs for the xen build.
