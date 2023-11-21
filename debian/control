@@ -68,7 +68,7 @@ Build-Depends: debhelper-compat (= 13),
  librbd-dev            [amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x ppc64 sparc64],
 # before buster it was glusterfs-common so keep it for now for bpo
 # --enable-glusterfs	linux-any
- libglusterfs-dev [linux-any] | glusterfs-common [linux-any],
+# libglusterfs-dev [linux-any] | glusterfs-common [linux-any],
 # --enable-vnc-sasl
  libsasl2-dev,
 # --enable-sdl
