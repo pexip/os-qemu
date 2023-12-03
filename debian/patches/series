@@ -3,6 +3,8 @@ v7.2.2.diff
 v7.2.3.diff
 v7.2.4.diff
 v7.2.5.diff
+v7.2.6.diff
+v7.2.7.diff
 microvm-default-machine-type.patch
 skip-meson-pc-bios.diff
 linux-user-binfmt-P.diff
@@ -20,3 +22,4 @@ openbios-spelling-endianess.patch
 slof-spelling-seperator.patch
 ignore-roms-dependency-in-qtest.patch
 hw_mips_malta-Fix-malta-machine-on-big-endian-hosts.patch
+hw-ide-ahci-fix-legacy-software-reset.patch
