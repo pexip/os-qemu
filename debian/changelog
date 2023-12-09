@@ -1,3 +1,9 @@
+qemu (1:7.2+dfsg-7+deb12u3pexip2) pexip-bookworm; urgency=medium
+
+  * Bookworm build for product distribution
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Sat, 09 Dec 2023 22:57:59 +0000
+
 qemu (1:7.2+dfsg-7+deb12u3pexip1) pexip-bookworm; urgency=medium
 
   * New upstream release.
