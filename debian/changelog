@@ -1,3 +1,143 @@
+qemu (1:7.2+dfsg-7+deb12u3) bookworm; urgency=medium
+
+  * +hw-ide-ahci-fix-legacy-software-reset.patch - fix legacy ide regression
+    introduced in 7.2.6
+  * update to upstream 7.2.7 stable/bugfix release, v7.2.7.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.7 :
+   - Update version for 7.2.7 release
+   - target/tricore: Rename tricore_feature
+   - tracetool: avoid invalid escape in Python string
+   - tests/tcg/s390x: Test LAALG with negative cc_src
+   - target/s390x: Fix LAALG not updating cc_src
+   - tests/qtest: ahci-test: add test exposing reset issue with pending callback
+   - hw/ide: reset: cancel async DMA operation before resetting state
+   - target/mips: Fix TX79 LQ/SQ opcodes
+   - target/mips: Fix MSA BZ/BNZ opcodes displacement
+   - ui/gtk-egl: apply scale factor when calculating window's dimension
+   - ui/gtk: force realization of drawing area
+   - ati-vga: Implement fallback for pixman routines
+   - block/nvme: nvme_process_completion() fix bound for cid
+   - target/arm: Correctly propagate stage 1 BTI guarded bit in a two-stage walk
+   - target/arm: Fix handling of SW and NSW bits for stage 2 walks
+   - target/arm: Don't allow stage 2 page table walks to downgrade to NS
+   - target/arm: Don't access TCG code when debugging with KVM
+   - Revert "linux-user: fix compat with glibc >= 2.36 sys/mount.h"
+   - Revert "linux-user: add more compat ioctl definitions"
+   - qemu-iotests: 024: add rebasing test case for overlay_size > backing_size
+   - qemu-img: rebase: stop when reaching EOF of old backing file
+   - tests/tcg: Add -fno-stack-protector
+   - tests/migration: Add -fno-stack-protector
+   - misc/led: LED state is set opposite of what is expected
+   - hw/sd/sdhci: Block Size Register bits [14:12] is lost
+   - lasips2: LASI PS/2 devices are not user-createable
+   - linux-user/sh4: Fix crashes on signal delivery
+   - linux-user/mips: fix abort on integer overflow
+   - migration: Fix analyze-migration read operation signedness
+   - hw/pvrdma: Protect against buggy or malicious guest driver
+   - disas/riscv: Fix the typo of inverted order of pmpaddr13 and pmpaddr14
+   - hw/audio/es1370: reset current sample counter
+   - migration/qmp: Fix crash on setting tls-authz with null
+   - amd_iommu: Fix APIC address check
+   - linux-user/hppa: Fix struct target_sigcontext layout
+   - chardev/char-pty: Avoid losing bytes when the other side just
+     (re-)connected
+   - hw/display/ramfb: plug slight guest-triggerable leak on mode setting
+   - target/i386: fix memory operand size for CVTPS2PD
+   - target/i386: generalize operand size "ph" for use in CVTPS2PD
+   - target/i386: Fix exception classes for MOVNTPS/MOVNTPD.
+   - target/i386: Fix exception classes for SSE/AVX instructions.
+   - target/i386: Fix and add some comments next to SSE/AVX instructions.
+   - tests/tcg/i386: correct mask for VPERM2F128/VPERM2I128
+   - target/i386: fix operand size of unary SSE operations
+   - scsi-disk: ensure that FORMAT UNIT commands are terminated
+   - esp: restrict non-DMA transfer length to that of available data
+   - esp: use correct type for esp_dma_enable() in sysbus_esp_gpio_demux()
+   - optionrom: Remove build-id section
+   - ui/vnc: fix handling of VNC_FEATURE_XVP
+   - ui/vnc: fix debug output for invalid audio message
+   - hw/scsi/scsi-disk: Disallow block sizes smaller than 512 [CVE-2023-42467]
+   - accel/tcg: mttcg remove false-negative halted assertion
+   - target/arm: Don't skip MTE checks for LDRT/STRT at EL0
+   - hw/cxl: Fix CFMW config memory leak
+   - linux-user/hppa: lock both words of function descriptor
+   - linux-user/hppa: clear the PSW 'N' bit when delivering signals
+   - hw/ppc: Always store the decrementer value
+   - target/ppc: Decrementer fix BookE semantics
+   - target/ppc: Sign-extend large decrementer to 64-bits
+   - hw/ppc: Avoid decrementer rounding errors
+   - hw/ppc: Round up the decrementer interval when converting to ns
+   - host-utils: Add muldiv64_round_up
+   - hw/ppc: Introduce functions for conversion between timebase and nanoseconds
+
+  * update to upstream 7.2.6 stable/bugfix release, v7.2.6.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.6 :
+   - Update version for 7.2.6 release
+   - tpm: fix crash when FD >= 1024 and unnecessary errors due to EINTR
+   - s390x/ap: fix missing subsystem reset registration
+   - ui: fix crash when there are no active_console
+   - hw/tpm: TIS on sysbus: Remove unsupport ppi command line option
+   - target/riscv/pmp.c: respect mseccfg.RLB for pmpaddrX changes
+   - hw/riscv: virt: Fix riscv,pmu DT node path
+   - linux-user/riscv: Use abi type for target_ucontext
+   - hw/intc: Make rtc variable names consistent
+   - hw/intc: Fix upper/lower mtime write calculation
+   - hw/char/riscv_htif: Fix printing of console characters on big endian hosts
+   - arm64: Restore trapless ptimer access
+   - virtio: Drop out of coroutine context in virtio_load()
+   - qxl: don't assert() if device isn't yet initialized
+   - hw/net/vmxnet3: Fix guest-triggerable assert()
+   - docs tests: Fix use of migrate_set_parameter
+   - qemu-options.hx: Rephrase the descriptions of the -hd* and -cdrom options
+   - hw/i2c/aspeed: Fix TXBUF transmission start position error
+   - hw/i2c/aspeed: Fix Tx count and Rx size error in buffer pool mode
+   - hw/ide/ahci: fix broken SError handling
+   - hw/ide/ahci: fix ahci_write_fis_sdb()
+   - hw/ide/ahci: PxCI should not get cleared when ERR_STAT is set
+   - hw/ide/ahci: PxSACT and PxCI is cleared when PxCMD.ST is cleared
+   - hw/ide/ahci: simplify and document PxCI handling
+   - hw/ide/ahci: write D2H FIS when processing NCQ command
+   - hw/ide/core: set ERR_STAT in unsupported command completion
+   - target/ppc: Flush inputs to zero with NJ in ppc_store_vscr
+   - ppc/vof: Fix missed fields in VOF cleanup
+   - hw/ppc/e500: fix broken snapshot replay
+   - block-migration: Ensure we don't crash during migration cleanup
+   - docs/about/license: Update LICENSE URL
+   - target/arm: Fix 64-bit SSRA
+   - target/arm: Fix SME ST1Q
+   - accel/kvm: Specify default IPA size for arm64
+   - kvm: Introduce kvm_arch_get_default_type hook
+   - include/hw/virtio/virtio-gpu: Fix virtio-gpu with blob on big endian hosts
+   - target/s390x: Check reserved bits of VFMIN/VFMAX's M5
+   - target/s390x: Fix VSTL with a large length
+   - target/s390x: Use a 16-bit immediate in VREP
+   - target/s390x: Fix the "ignored match" case in VSTRS
+   - Fixed incorrect LLONG alignment for openrisc and cris
+   - include/exec/user: Set ABI_LLONG_ALIGNMENT to 4 for nios2
+   - include/exec/user: Set ABI_LLONG_ALIGNMENT to 4 for microblaze
+   - linux-user/elfload: Set V in ELF_HWCAP for RISC-V
+   - hw/nvme: fix CRC64 for guard tag
+   - dump: kdump-zlib data pages not dumped with pvtime/aarch64
+   - hw/smbios: Fix core count in type4
+   - hw/smbios: Fix thread count in type4
+   - hw/smbios: Fix smbios_smp_sockets caculation
+   - machine: Add helpers to get cores/threads per socket
+   - pnv_lpc: disable reentrancy detection for lpc-hc
+   - loongarch: mark loongarch_ipi_iocsr re-entrnacy safe
+   - apic: disable reentrancy detection for apic-msi
+   - raven: disable reentrancy detection for iomem
+   - bcm2835_property: disable reentrancy detection for iomem
+   - lsi53c895a: disable reentrancy detection for MMIO region, too
+   - lsi53c895a: disable reentrancy detection for script RAM
+   - hw: replace most qemu_bh_new calls with qemu_bh_new_guarded
+   - checkpatch: add qemu_bh_new/aio_bh_new checks
+   - async: avoid use-after-free on re-entrancy guard
+   - async: Add an optional reentrancy guard to the BH API
+   - memory: prevent dma-reentracy issues
+   - python: drop pipenv
+   - gitlab-ci: check-dco.py: switch from master to stable-7.2 branch
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sun, 03 Dec 2023 15:36:08 +0300
+
 qemu (1:7.2+dfsg-7+deb12u2pexip1) pexip-bookworm; urgency=medium
 
   * Initial bookworm build

@@ -1,0 +1,2307 @@
+Subject: v7.2.7
+Date: Tue Nov 21 12:02:48 2023 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.6
+and upstream qemu v7.2.7.
+--
+ VERSION                           |  2 +-
+ accel/tcg/tcg-accel-ops-mttcg.c   |  9 +---
+ block/nvme.c                      |  7 +--
+ chardev/char-pty.c                | 22 +++++++--
+ disas/riscv.c                     |  4 +-
+ hw/audio/es1370.c                 |  2 +-
+ hw/cxl/cxl-host.c                 | 12 ++---
+ hw/display/ati.c                  |  8 ++++
+ hw/display/ati_2d.c               | 75 +++++++++++++++++++++---------
+ hw/display/ati_int.h              |  1 +
+ hw/display/ramfb.c                |  1 +
+ hw/i386/amd_iommu.c               |  9 +---
+ hw/i386/amd_iommu.h               |  2 -
+ hw/ide/core.c                     | 14 +++---
+ hw/input/lasips2.c                | 10 ++++
+ hw/misc/led.c                     |  2 +-
+ hw/ppc/ppc.c                      | 97 +++++++++++++++++++++++---------------
+ hw/rdma/vmw/pvrdma_main.c         | 16 ++++++-
+ hw/scsi/esp.c                     |  5 +-
+ hw/scsi/scsi-disk.c               |  9 +++-
+ hw/sd/sdhci.c                     | 15 ++++--
+ include/qemu/host-utils.h         | 21 ++++++++-
+ linux-user/hppa/signal.c          |  8 ++--
+ linux-user/mips/cpu_loop.c        |  4 +-
+ linux-user/sh4/signal.c           |  8 ++++
+ linux-user/syscall.c              | 43 -----------------
+ meson.build                       |  2 -
+ migration/migration.c             |  9 +++-
+ pc-bios/optionrom/Makefile        |  2 +-
+ qemu-img.c                        | 13 +++++-
+ scripts/analyze-migration.py      |  6 +--
+ scripts/tracetool/__init__.py     |  2 +-
+ target/arm/helper.c               |  9 ++++
+ target/arm/internals.h            |  1 -
+ target/arm/ptw.c                  | 89 ++++++++++++++++++++++++-----------
+ target/i386/tcg/decode-new.c.inc  | 98 ++++++++++++++++++++++-----------------
+ target/i386/tcg/decode-new.h      |  2 +-
+ target/i386/tcg/emit.c.inc        | 30 ++++++++++--
+ target/mips/tcg/msa.decode        |  4 +-
+ target/mips/tcg/tx79.decode       |  2 +-
+ target/s390x/tcg/insn-data.h.inc  |  2 +-
+ target/s390x/tcg/translate.c      | 19 +++++++-
+ target/tricore/cpu.c              |  6 +--
+ target/tricore/cpu.h              |  2 +-
+ target/tricore/op_helper.c        |  4 +-
+ tests/migration/s390x/Makefile    |  4 +-
+ tests/qemu-iotests/024            | 57 +++++++++++++++++++++++
+ tests/qemu-iotests/024.out        | 30 ++++++++++++
+ tests/qtest/ahci-test.c           | 86 +++++++++++++++++++++++++++++++++-
+ tests/tcg/Makefile.target         |  2 +-
+ tests/tcg/aarch64/Makefile.target |  2 +-
+ tests/tcg/arm/Makefile.target     |  2 +-
+ tests/tcg/cris/Makefile.target    |  2 +-
+ tests/tcg/hexagon/Makefile.target |  2 +-
+ tests/tcg/i386/Makefile.target    |  2 +-
+ tests/tcg/i386/test-avx.py        |  2 +-
+ tests/tcg/minilib/Makefile.target |  2 +-
+ tests/tcg/mips/Makefile.target    |  2 +-
+ tests/tcg/mips/hello-mips.c       |  4 +-
+ tests/tcg/s390x/Makefile.target   |  1 +
+ tests/tcg/s390x/laalg.c           | 27 +++++++++++
+ ui/gtk-egl.c                      | 14 +++---
+ ui/gtk.c                          | 10 ++++
+ ui/vnc.c                          |  6 +--
+ 64 files changed, 686 insertions(+), 279 deletions(-)
+
+diff --git a/VERSION b/VERSION
+index ba6a7620d4..4afc54e7b7 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.6
++7.2.7
+diff --git a/accel/tcg/tcg-accel-ops-mttcg.c b/accel/tcg/tcg-accel-ops-mttcg.c
+index d50239e0e2..3a021624f4 100644
+--- a/accel/tcg/tcg-accel-ops-mttcg.c
++++ b/accel/tcg/tcg-accel-ops-mttcg.c
+@@ -100,14 +100,9 @@ static void *mttcg_cpu_thread_fn(void *arg)
+                 break;
+             case EXCP_HALTED:
+                 /*
+-                 * during start-up the vCPU is reset and the thread is
+-                 * kicked several times. If we don't ensure we go back
+-                 * to sleep in the halted state we won't cleanly
+-                 * start-up when the vCPU is enabled.
+-                 *
+-                 * cpu->halted should ensure we sleep in wait_io_event
++                 * Usually cpu->halted is set, but may have already been
++                 * reset by another thread by the time we arrive here.
+                  */
+-                g_assert(cpu->halted);
+                 break;
+             case EXCP_ATOMIC:
+                 qemu_mutex_unlock_iothread();
+diff --git a/block/nvme.c b/block/nvme.c
+index 656624c585..14d01a5ea9 100644
+--- a/block/nvme.c
++++ b/block/nvme.c
+@@ -419,9 +419,10 @@ static bool nvme_process_completion(NVMeQueuePair *q)
+             q->cq_phase = !q->cq_phase;
+         }
+         cid = le16_to_cpu(c->cid);
+-        if (cid == 0 || cid > NVME_QUEUE_SIZE) {
+-            warn_report("NVMe: Unexpected CID in completion queue: %"PRIu32", "
+-                        "queue size: %u", cid, NVME_QUEUE_SIZE);
++        if (cid == 0 || cid > NVME_NUM_REQS) {
++            warn_report("NVMe: Unexpected CID in completion queue: %" PRIu32
++                        ", should be within: 1..%u inclusively", cid,
++                        NVME_NUM_REQS);
+             continue;
+         }
+         trace_nvme_complete_command(s, q->index, cid);
+diff --git a/chardev/char-pty.c b/chardev/char-pty.c
+index 53f25c6bbd..e6d0b05211 100644
+--- a/chardev/char-pty.c
++++ b/chardev/char-pty.c
+@@ -108,11 +108,27 @@ static void pty_chr_update_read_handler(Chardev *chr)
+ static int char_pty_chr_write(Chardev *chr, const uint8_t *buf, int len)
+ {
+     PtyChardev *s = PTY_CHARDEV(chr);
++    GPollFD pfd;
++    int rc;
+ 
+-    if (!s->connected) {
+-        return len;
++    if (s->connected) {
++        return io_channel_send(s->ioc, buf, len);
++    }
++
++    /*
++     * The other side might already be re-connected, but the timer might
++     * not have fired yet. So let's check here whether we can write again:
++     */
++    pfd.fd = QIO_CHANNEL_FILE(s->ioc)->fd;
++    pfd.events = G_IO_OUT;
++    pfd.revents = 0;
++    TFR(rc = g_poll(&pfd, 1, 0));
++    g_assert(rc >= 0);
++    if (!(pfd.revents & G_IO_HUP) && (pfd.revents & G_IO_OUT)) {
++        io_channel_send(s->ioc, buf, len);
+     }
+-    return io_channel_send(s->ioc, buf, len);
++
++    return len;
+ }
+ 
+ static GSource *pty_chr_add_watch(Chardev *chr, GIOCondition cond)
+diff --git a/disas/riscv.c b/disas/riscv.c
+index d216b9c39b..dee4e580a0 100644
+--- a/disas/riscv.c
++++ b/disas/riscv.c
+@@ -2173,8 +2173,8 @@ static const char *csr_name(int csrno)
+     case 0x03ba: return "pmpaddr10";
+     case 0x03bb: return "pmpaddr11";
+     case 0x03bc: return "pmpaddr12";
+-    case 0x03bd: return "pmpaddr14";
+-    case 0x03be: return "pmpaddr13";
++    case 0x03bd: return "pmpaddr13";
++    case 0x03be: return "pmpaddr14";
+     case 0x03bf: return "pmpaddr15";
+     case 0x0780: return "mtohost";
+     case 0x0781: return "mfromhost";
+diff --git a/hw/audio/es1370.c b/hw/audio/es1370.c
+index 6904589814..7032bee2f6 100644
+--- a/hw/audio/es1370.c
++++ b/hw/audio/es1370.c
+@@ -503,7 +503,7 @@ static void es1370_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
+     case ES1370_REG_DAC2_SCOUNT:
+     case ES1370_REG_ADC_SCOUNT:
+         d += (addr - ES1370_REG_DAC1_SCOUNT) >> 2;
+-        d->scount = (val & 0xffff) | (d->scount & ~0xffff);
++        d->scount = (val & 0xffff) << 16 | (val & 0xffff);
+         ldebug ("chan %td CURR_SAMP_CT %d, SAMP_CT %d\n",
+                 d - &s->chan[0], val >> 16, (val & 0xffff));
+         break;
+diff --git a/hw/cxl/cxl-host.c b/hw/cxl/cxl-host.c
+index 1adf61231a..0fc3e57138 100644
+--- a/hw/cxl/cxl-host.c
++++ b/hw/cxl/cxl-host.c
+@@ -39,12 +39,6 @@ static void cxl_fixed_memory_window_config(CXLState *cxl_state,
+         return;
+     }
+ 
+-    fw->targets = g_malloc0_n(fw->num_targets, sizeof(*fw->targets));
+-    for (i = 0, target = object->targets; target; i++, target = target->next) {
+-        /* This link cannot be resolved yet, so stash the name for now */
+-        fw->targets[i] = g_strdup(target->value);
+-    }
+-
+     if (object->size % (256 * MiB)) {
+         error_setg(errp,
+                    "Size of a CXL fixed memory window must my a multiple of 256MiB");
+@@ -64,6 +58,12 @@ static void cxl_fixed_memory_window_config(CXLState *cxl_state,
+         fw->enc_int_gran = 0;
+     }
+ 
++    fw->targets = g_malloc0_n(fw->num_targets, sizeof(*fw->targets));
++    for (i = 0, target = object->targets; target; i++, target = target->next) {
++        /* This link cannot be resolved yet, so stash the name for now */
++        fw->targets[i] = g_strdup(target->value);
++    }
++
+     cxl_state->fixed_windows = g_list_append(cxl_state->fixed_windows,
+                                              g_steal_pointer(&fw));
+ 
+diff --git a/hw/display/ati.c b/hw/display/ati.c
+index 6e38e00502..4f3bebcfd3 100644
+--- a/hw/display/ati.c
++++ b/hw/display/ati.c
+@@ -1014,6 +1014,7 @@ static Property ati_vga_properties[] = {
+     DEFINE_PROP_UINT16("x-device-id", ATIVGAState, dev_id,
+                        PCI_DEVICE_ID_ATI_RAGE128_PF),
+     DEFINE_PROP_BOOL("guest_hwcursor", ATIVGAState, cursor_guest_mode, false),
++    DEFINE_PROP_UINT8("x-pixman", ATIVGAState, use_pixman, 3),
+     DEFINE_PROP_END_OF_LIST()
+ };
+ 
+@@ -1035,11 +1036,18 @@ static void ati_vga_class_init(ObjectClass *klass, void *data)
+     k->exit = ati_vga_exit;
+ }
+ 
++static void ati_vga_init(Object *o)
++{
++    object_property_set_description(o, "x-pixman", "Use pixman for: "
++                                    "1: fill, 2: blit");
++}
++
+ static const TypeInfo ati_vga_info = {
+     .name = TYPE_ATI_VGA,
+     .parent = TYPE_PCI_DEVICE,
+     .instance_size = sizeof(ATIVGAState),
+     .class_init = ati_vga_class_init,
++    .instance_init = ati_vga_init,
+     .interfaces = (InterfaceInfo[]) {
+           { INTERFACE_CONVENTIONAL_PCI_DEVICE },
+           { },
+diff --git a/hw/display/ati_2d.c b/hw/display/ati_2d.c
+index 7d786653e8..0e6b8e4367 100644
+--- a/hw/display/ati_2d.c
++++ b/hw/display/ati_2d.c
+@@ -92,6 +92,7 @@ void ati_2d_blt(ATIVGAState *s)
+     switch (s->regs.dp_mix & GMC_ROP3_MASK) {
+     case ROP3_SRCCOPY:
+     {
++        bool fallback = false;
+         unsigned src_x = (s->regs.dp_cntl & DST_X_LEFT_TO_RIGHT ?
+                        s->regs.src_x : s->regs.src_x + 1 - s->regs.dst_width);
+         unsigned src_y = (s->regs.dp_cntl & DST_Y_TOP_TO_BOTTOM ?
+@@ -122,27 +123,50 @@ void ati_2d_blt(ATIVGAState *s)
+                 src_bits, dst_bits, src_stride, dst_stride, bpp, bpp,
+                 src_x, src_y, dst_x, dst_y,
+                 s->regs.dst_width, s->regs.dst_height);
+-        if (s->regs.dp_cntl & DST_X_LEFT_TO_RIGHT &&
++        if ((s->use_pixman & BIT(1)) &&
++            s->regs.dp_cntl & DST_X_LEFT_TO_RIGHT &&
+             s->regs.dp_cntl & DST_Y_TOP_TO_BOTTOM) {
+-            pixman_blt((uint32_t *)src_bits, (uint32_t *)dst_bits,
+-                       src_stride, dst_stride, bpp, bpp,
+-                       src_x, src_y, dst_x, dst_y,
+-                       s->regs.dst_width, s->regs.dst_height);
+-        } else {
++            fallback = !pixman_blt((uint32_t *)src_bits, (uint32_t *)dst_bits,
++                                   src_stride, dst_stride, bpp, bpp,
++                                   src_x, src_y, dst_x, dst_y,
++                                   s->regs.dst_width, s->regs.dst_height);
++        } else if (s->use_pixman & BIT(1)) {
+             /* FIXME: We only really need a temporary if src and dst overlap */
+             int llb = s->regs.dst_width * (bpp / 8);
+             int tmp_stride = DIV_ROUND_UP(llb, sizeof(uint32_t));
+             uint32_t *tmp = g_malloc(tmp_stride * sizeof(uint32_t) *
+                                      s->regs.dst_height);
+-            pixman_blt((uint32_t *)src_bits, tmp,
+-                       src_stride, tmp_stride, bpp, bpp,
+-                       src_x, src_y, 0, 0,
+-                       s->regs.dst_width, s->regs.dst_height);
+-            pixman_blt(tmp, (uint32_t *)dst_bits,
+-                       tmp_stride, dst_stride, bpp, bpp,
+-                       0, 0, dst_x, dst_y,
+-                       s->regs.dst_width, s->regs.dst_height);
++            fallback = !pixman_blt((uint32_t *)src_bits, tmp,
++                                   src_stride, tmp_stride, bpp, bpp,
++                                   src_x, src_y, 0, 0,
++                                   s->regs.dst_width, s->regs.dst_height);
++            if (!fallback) {
++                fallback = !pixman_blt(tmp, (uint32_t *)dst_bits,
++                                       tmp_stride, dst_stride, bpp, bpp,
++                                       0, 0, dst_x, dst_y,
++                                       s->regs.dst_width, s->regs.dst_height);
++            }
+             g_free(tmp);
++        } else {
++            fallback = true;
++        }
++        if (fallback) {
++            unsigned int y, i, j, bypp = bpp / 8;
++            unsigned int src_pitch = src_stride * sizeof(uint32_t);
++            unsigned int dst_pitch = dst_stride * sizeof(uint32_t);
++
++            for (y = 0; y < s->regs.dst_height; y++) {
++                i = dst_x * bypp;
++                j = src_x * bypp;
++                if (s->regs.dp_cntl & DST_Y_TOP_TO_BOTTOM) {
++                    i += (dst_y + y) * dst_pitch;
++                    j += (src_y + y) * src_pitch;
++                } else {
++                    i += (dst_y + s->regs.dst_height - 1 - y) * dst_pitch;
++                    j += (src_y + s->regs.dst_height - 1 - y) * src_pitch;
++                }
++                memmove(&dst_bits[i], &src_bits[j], s->regs.dst_width * bypp);
++            }
+         }
+         if (dst_bits >= s->vga.vram_ptr + s->vga.vbe_start_addr &&
+             dst_bits < s->vga.vram_ptr + s->vga.vbe_start_addr +
+@@ -180,14 +204,21 @@ void ati_2d_blt(ATIVGAState *s)
+ 
+         dst_stride /= sizeof(uint32_t);
+         DPRINTF("pixman_fill(%p, %d, %d, %d, %d, %d, %d, %x)\n",
+-                dst_bits, dst_stride, bpp,
+-                dst_x, dst_y,
+-                s->regs.dst_width, s->regs.dst_height,
+-                filler);
+-        pixman_fill((uint32_t *)dst_bits, dst_stride, bpp,
+-                    dst_x, dst_y,
+-                    s->regs.dst_width, s->regs.dst_height,
+-                    filler);
++                dst_bits, dst_stride, bpp, dst_x, dst_y,
++                s->regs.dst_width, s->regs.dst_height, filler);
++        if (!(s->use_pixman & BIT(0)) ||
++            !pixman_fill((uint32_t *)dst_bits, dst_stride, bpp, dst_x, dst_y,
++                    s->regs.dst_width, s->regs.dst_height, filler)) {
++            /* fallback when pixman failed or we don't want to call it */
++            unsigned int x, y, i, bypp = bpp / 8;
++            unsigned int dst_pitch = dst_stride * sizeof(uint32_t);
++            for (y = 0; y < s->regs.dst_height; y++) {
++                i = dst_x * bypp + (dst_y + y) * dst_pitch;
++                for (x = 0; x < s->regs.dst_width; x++, i += bypp) {
++                    stn_he_p(&dst_bits[i], bypp, filler);
++                }
++            }
++        }
+         if (dst_bits >= s->vga.vram_ptr + s->vga.vbe_start_addr &&
+             dst_bits < s->vga.vram_ptr + s->vga.vbe_start_addr +
+             s->vga.vbe_regs[VBE_DISPI_INDEX_YRES] * s->vga.vbe_line_offset) {
+diff --git a/hw/display/ati_int.h b/hw/display/ati_int.h
+index 8acb9c7466..055aa2d140 100644
+--- a/hw/display/ati_int.h
++++ b/hw/display/ati_int.h
+@@ -89,6 +89,7 @@ struct ATIVGAState {
+     char *model;
+     uint16_t dev_id;
+     uint8_t mode;
++    uint8_t use_pixman;
+     bool cursor_guest_mode;
+     uint16_t cursor_size;
+     uint32_t cursor_offset;
+diff --git a/hw/display/ramfb.c b/hw/display/ramfb.c
+index 79b9754a58..c2b002d534 100644
+--- a/hw/display/ramfb.c
++++ b/hw/display/ramfb.c
+@@ -97,6 +97,7 @@ static void ramfb_fw_cfg_write(void *dev, off_t offset, size_t len)
+ 
+     s->width = width;
+     s->height = height;
++    qemu_free_displaysurface(s->ds);
+     s->ds = surface;
+ }
+ 
+diff --git a/hw/i386/amd_iommu.c b/hw/i386/amd_iommu.c
+index 725f69095b..a20f3e1d50 100644
+--- a/hw/i386/amd_iommu.c
++++ b/hw/i386/amd_iommu.c
+@@ -1246,13 +1246,8 @@ static int amdvi_int_remap_msi(AMDVIState *iommu,
+         return -AMDVI_IR_ERR;
+     }
+ 
+-    if (origin->address & AMDVI_MSI_ADDR_HI_MASK) {
+-        trace_amdvi_err("MSI address high 32 bits non-zero when "
+-                        "Interrupt Remapping enabled.");
+-        return -AMDVI_IR_ERR;
+-    }
+-
+-    if ((origin->address & AMDVI_MSI_ADDR_LO_MASK) != APIC_DEFAULT_ADDRESS) {
++    if (origin->address < AMDVI_INT_ADDR_FIRST ||
++        origin->address + sizeof(origin->data) > AMDVI_INT_ADDR_LAST + 1) {
+         trace_amdvi_err("MSI is not from IOAPIC.");
+         return -AMDVI_IR_ERR;
+     }
+diff --git a/hw/i386/amd_iommu.h b/hw/i386/amd_iommu.h
+index 79d38a3e41..210a37dfb1 100644
+--- a/hw/i386/amd_iommu.h
++++ b/hw/i386/amd_iommu.h
+@@ -210,8 +210,6 @@
+ #define AMDVI_INT_ADDR_FIRST    0xfee00000
+ #define AMDVI_INT_ADDR_LAST     0xfeefffff
+ #define AMDVI_INT_ADDR_SIZE     (AMDVI_INT_ADDR_LAST - AMDVI_INT_ADDR_FIRST + 1)
+-#define AMDVI_MSI_ADDR_HI_MASK  (0xffffffff00000000ULL)
+-#define AMDVI_MSI_ADDR_LO_MASK  (0x00000000ffffffffULL)
+ 
+ /* SB IOAPIC is always on this device in AMD systems */
+ #define AMDVI_IOAPIC_SB_DEVID   PCI_BUILD_BDF(0, PCI_DEVFN(0x14, 0))
+diff --git a/hw/ide/core.c b/hw/ide/core.c
+index 1477935270..3e97d665d9 100644
+--- a/hw/ide/core.c
++++ b/hw/ide/core.c
+@@ -2491,19 +2491,19 @@ static void ide_dummy_transfer_stop(IDEState *s)
+ 
+ void ide_bus_reset(IDEBus *bus)
+ {
+-    bus->unit = 0;
+-    bus->cmd = 0;
+-    ide_reset(&bus->ifs[0]);
+-    ide_reset(&bus->ifs[1]);
+-    ide_clear_hob(bus);
+-
+-    /* pending async DMA */
++    /* pending async DMA - needs the IDEState before it is reset */
+     if (bus->dma->aiocb) {
+         trace_ide_bus_reset_aio();
+         blk_aio_cancel(bus->dma->aiocb);
+         bus->dma->aiocb = NULL;
+     }
+ 
++    bus->unit = 0;
++    bus->cmd = 0;
++    ide_reset(&bus->ifs[0]);
++    ide_reset(&bus->ifs[1]);
++    ide_clear_hob(bus);
++
+     /* reset dma provider too */
+     if (bus->dma->ops->reset) {
+         bus->dma->ops->reset(bus->dma);
+diff --git a/hw/input/lasips2.c b/hw/input/lasips2.c
+index ea7c07a2ba..6075121b72 100644
+--- a/hw/input/lasips2.c
++++ b/hw/input/lasips2.c
+@@ -351,6 +351,11 @@ static void lasips2_port_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+ 
++    /*
++     * The PS/2 mouse port is integreal part of LASI and can not be
++     * created by users without LASI.
++     */
++    dc->user_creatable = false;
+     dc->realize = lasips2_port_realize;
+ }
+ 
+@@ -397,6 +402,11 @@ static void lasips2_kbd_port_class_init(ObjectClass *klass, void *data)
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     LASIPS2PortDeviceClass *lpdc = LASIPS2_PORT_CLASS(klass);
+ 
++    /*
++     * The PS/2 keyboard port is integreal part of LASI and can not be
++     * created by users without LASI.
++     */
++    dc->user_creatable = false;
+     device_class_set_parent_realize(dc, lasips2_kbd_port_realize,
+                                     &lpdc->parent_realize);
+ }
+diff --git a/hw/misc/led.c b/hw/misc/led.c
+index f6d6d68bce..42bb43a39a 100644
+--- a/hw/misc/led.c
++++ b/hw/misc/led.c
+@@ -63,7 +63,7 @@ static void led_set_state_gpio_handler(void *opaque, int line, int new_state)
+     LEDState *s = LED(opaque);
+ 
+     assert(line == 0);
+-    led_set_state(s, !!new_state != s->gpio_active_high);
++    led_set_state(s, !!new_state == s->gpio_active_high);
+ }
+ 
+ static void led_reset(DeviceState *dev)
+diff --git a/hw/ppc/ppc.c b/hw/ppc/ppc.c
+index fbdc48911e..b17804fc17 100644
+--- a/hw/ppc/ppc.c
++++ b/hw/ppc/ppc.c
+@@ -490,10 +490,32 @@ void ppce500_set_mpic_proxy(bool enabled)
+ /*****************************************************************************/
+ /* PowerPC time base and decrementer emulation */
+ 
++/*
++ * Conversion between QEMU_CLOCK_VIRTUAL ns and timebase (TB) ticks:
++ * TB ticks are arrived at by multiplying tb_freq then dividing by
++ * ns per second, and rounding down. TB ticks drive all clocks and
++ * timers in the target machine.
++ *
++ * Converting TB intervals to ns for the purpose of setting a
++ * QEMU_CLOCK_VIRTUAL timer should go the other way, but rounding
++ * up. Rounding down could cause the timer to fire before the TB
++ * value has been reached.
++ */
++static uint64_t ns_to_tb(uint32_t freq, int64_t clock)
++{
++    return muldiv64(clock, freq, NANOSECONDS_PER_SECOND);
++}
++
++/* virtual clock in TB ticks, not adjusted by TB offset */
++static int64_t tb_to_ns_round_up(uint32_t freq, uint64_t tb)
++{
++    return muldiv64_round_up(tb, NANOSECONDS_PER_SECOND, freq);
++}
++
+ uint64_t cpu_ppc_get_tb(ppc_tb_t *tb_env, uint64_t vmclk, int64_t tb_offset)
+ {
+     /* TB time in tb periods */
+-    return muldiv64(vmclk, tb_env->tb_freq, NANOSECONDS_PER_SECOND) + tb_offset;
++    return ns_to_tb(tb_env->tb_freq, vmclk) + tb_offset;
+ }
+ 
+ uint64_t cpu_ppc_load_tbl (CPUPPCState *env)
+@@ -534,8 +556,7 @@ uint32_t cpu_ppc_load_tbu (CPUPPCState *env)
+ static inline void cpu_ppc_store_tb(ppc_tb_t *tb_env, uint64_t vmclk,
+                                     int64_t *tb_offsetp, uint64_t value)
+ {
+-    *tb_offsetp = value -
+-        muldiv64(vmclk, tb_env->tb_freq, NANOSECONDS_PER_SECOND);
++    *tb_offsetp = value - ns_to_tb(tb_env->tb_freq, vmclk);
+ 
+     trace_ppc_tb_store(value, *tb_offsetp);
+ }
+@@ -693,16 +714,17 @@ bool ppc_decr_clear_on_delivery(CPUPPCState *env)
+ static inline int64_t _cpu_ppc_load_decr(CPUPPCState *env, uint64_t next)
+ {
+     ppc_tb_t *tb_env = env->tb_env;
+-    int64_t decr, diff;
++    uint64_t now, n;
++    int64_t decr;
+ 
+-    diff = next - qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+-    if (diff >= 0) {
+-        decr = muldiv64(diff, tb_env->decr_freq, NANOSECONDS_PER_SECOND);
+-    } else if (tb_env->flags & PPC_TIMER_BOOKE) {
++    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    n = ns_to_tb(tb_env->decr_freq, now);
++    if (next > n && tb_env->flags & PPC_TIMER_BOOKE) {
+         decr = 0;
+-    }  else {
+-        decr = -muldiv64(-diff, tb_env->decr_freq, NANOSECONDS_PER_SECOND);
++    } else {
++        decr = next - n;
+     }
++
+     trace_ppc_decr_load(decr);
+ 
+     return decr;
+@@ -724,7 +746,9 @@ target_ulong cpu_ppc_load_decr(CPUPPCState *env)
+      * to 64 bits, otherwise it is a 32 bit value.
+      */
+     if (env->spr[SPR_LPCR] & LPCR_LD) {
+-        return decr;
++        PowerPCCPU *cpu = env_archcpu(env);
++        PowerPCCPUClass *pcc = POWERPC_CPU_GET_CLASS(cpu);
++        return sextract64(decr, 0, pcc->lrg_decr_bits);
+     }
+     return (uint32_t) decr;
+ }
+@@ -743,7 +767,7 @@ target_ulong cpu_ppc_load_hdecr(CPUPPCState *env)
+      * extended to 64 bits, otherwise it is 32 bits.
+      */
+     if (pcc->lrg_decr_bits > 32) {
+-        return hdecr;
++        return sextract64(hdecr, 0, pcc->lrg_decr_bits);
+     }
+     return (uint32_t) hdecr;
+ }
+@@ -819,11 +843,17 @@ static void __cpu_ppc_store_decr(PowerPCCPU *cpu, uint64_t *nextp,
+     }
+ 
+     /*
+-     * Going from 2 -> 1, 1 -> 0 or 0 -> -1 is the event to generate a DEC
+-     * interrupt.
+-     *
+-     * If we get a really small DEC value, we can assume that by the time we
+-     * handled it we should inject an interrupt already.
++     * Calculate the next decrementer event and set a timer.
++     * decr_next is in timebase units to keep rounding simple. Note it is
++     * not adjusted by tb_offset because if TB changes via tb_offset changing,
++     * decrementer does not change, so not directly comparable with TB.
++     */
++    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    next = ns_to_tb(tb_env->decr_freq, now) + value;
++    *nextp = next; /* nextp is in timebase units */
++
++    /*
++     * Going from 1 -> 0 or 0 -> -1 is the event to generate a DEC interrupt.
+      *
+      * On MSB level based DEC implementations the MSB always means the interrupt
+      * is pending, so raise it on those.
+@@ -831,8 +861,7 @@ static void __cpu_ppc_store_decr(PowerPCCPU *cpu, uint64_t *nextp,
+      * On MSB edge based DEC implementations the MSB going from 0 -> 1 triggers
+      * an edge interrupt, so raise it here too.
+      */
+-    if ((value < 3) ||
+-        ((tb_env->flags & PPC_DECR_UNDERFLOW_LEVEL) && signed_value < 0) ||
++    if (((tb_env->flags & PPC_DECR_UNDERFLOW_LEVEL) && signed_value < 0) ||
+         ((tb_env->flags & PPC_DECR_UNDERFLOW_TRIGGERED) && signed_value < 0
+           && signed_decr >= 0)) {
+         (*raise_excp)(cpu);
+@@ -844,13 +873,8 @@ static void __cpu_ppc_store_decr(PowerPCCPU *cpu, uint64_t *nextp,
+         (*lower_excp)(cpu);
+     }
+ 
+-    /* Calculate the next timer event */
+-    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+-    next = now + muldiv64(value, NANOSECONDS_PER_SECOND, tb_env->decr_freq);
+-    *nextp = next;
+-
+     /* Adjust timer */
+-    timer_mod(timer, next);
++    timer_mod(timer, tb_to_ns_round_up(tb_env->decr_freq, next));
+ }
+ 
+ static inline void _cpu_ppc_store_decr(PowerPCCPU *cpu, target_ulong decr,
+@@ -1135,9 +1159,7 @@ static void cpu_4xx_fit_cb (void *opaque)
+         /* Cannot occur, but makes gcc happy */
+         return;
+     }
+-    next = now + muldiv64(next, NANOSECONDS_PER_SECOND, tb_env->tb_freq);
+-    if (next == now)
+-        next++;
++    next = now + tb_to_ns_round_up(tb_env->tb_freq, next);
+     timer_mod(ppc40x_timer->fit_timer, next);
+     env->spr[SPR_40x_TSR] |= 1 << 26;
+     if ((env->spr[SPR_40x_TCR] >> 23) & 0x1) {
+@@ -1163,14 +1185,15 @@ static void start_stop_pit (CPUPPCState *env, ppc_tb_t *tb_env, int is_excp)
+     } else {
+         trace_ppc4xx_pit_start(ppc40x_timer->pit_reload);
+         now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+-        next = now + muldiv64(ppc40x_timer->pit_reload,
+-                              NANOSECONDS_PER_SECOND, tb_env->decr_freq);
+-        if (is_excp)
+-            next += tb_env->decr_next - now;
+-        if (next == now)
+-            next++;
++
++        if (is_excp) {
++            tb_env->decr_next += ppc40x_timer->pit_reload;
++        } else {
++            tb_env->decr_next = ns_to_tb(tb_env->decr_freq, now)
++                                + ppc40x_timer->pit_reload;
++        }
++        next = tb_to_ns_round_up(tb_env->decr_freq, tb_env->decr_next);
+         timer_mod(tb_env->decr_timer, next);
+-        tb_env->decr_next = next;
+     }
+ }
+ 
+@@ -1223,9 +1246,7 @@ static void cpu_4xx_wdt_cb (void *opaque)
+         /* Cannot occur, but makes gcc happy */
+         return;
+     }
+-    next = now + muldiv64(next, NANOSECONDS_PER_SECOND, tb_env->decr_freq);
+-    if (next == now)
+-        next++;
++    next = now + tb_to_ns_round_up(tb_env->decr_freq, next);
+     trace_ppc4xx_wdt(env->spr[SPR_40x_TCR], env->spr[SPR_40x_TSR]);
+     switch ((env->spr[SPR_40x_TSR] >> 30) & 0x3) {
+     case 0x0:
+diff --git a/hw/rdma/vmw/pvrdma_main.c b/hw/rdma/vmw/pvrdma_main.c
+index 4fc6712025..55b338046e 100644
+--- a/hw/rdma/vmw/pvrdma_main.c
++++ b/hw/rdma/vmw/pvrdma_main.c
+@@ -91,19 +91,33 @@ static int init_dev_ring(PvrdmaRing *ring, PvrdmaRingState **ring_state,
+                          dma_addr_t dir_addr, uint32_t num_pages)
+ {
+     uint64_t *dir, *tbl;
+-    int rc = 0;
++    int max_pages, rc = 0;
+ 
+     if (!num_pages) {
+         rdma_error_report("Ring pages count must be strictly positive");
+         return -EINVAL;
+     }
+ 
++    /*
++     * Make sure we can satisfy the requested number of pages in a single
++     * TARGET_PAGE_SIZE sized page table (taking into account that first entry
++     * is reserved for ring-state)
++     */
++    max_pages = TARGET_PAGE_SIZE / sizeof(dma_addr_t) - 1;
++    if (num_pages > max_pages) {
++        rdma_error_report("Maximum pages on a single directory must not exceed %d\n",
++                          max_pages);
++        return -EINVAL;
++    }
++
+     dir = rdma_pci_dma_map(pci_dev, dir_addr, TARGET_PAGE_SIZE);
+     if (!dir) {
+         rdma_error_report("Failed to map to page directory (ring %s)", name);
+         rc = -ENOMEM;
+         goto out;
+     }
++
++    /* We support only one page table for a ring */
+     tbl = rdma_pci_dma_map(pci_dev, dir[0], TARGET_PAGE_SIZE);
+     if (!tbl) {
+         rdma_error_report("Failed to map to page table (ring %s)", name);
+diff --git a/hw/scsi/esp.c b/hw/scsi/esp.c
+index e52188d022..9b11d8c573 100644
+--- a/hw/scsi/esp.c
++++ b/hw/scsi/esp.c
+@@ -759,7 +759,8 @@ static void esp_do_nodma(ESPState *s)
+     }
+ 
+     if (to_device) {
+-        len = MIN(fifo8_num_used(&s->fifo), ESP_FIFO_SZ);
++        len = MIN(s->async_len, ESP_FIFO_SZ);
++        len = MIN(len, fifo8_num_used(&s->fifo));
+         esp_fifo_pop_buf(&s->fifo, s->async_buf, len);
+         s->async_buf += len;
+         s->async_len -= len;
+@@ -1395,7 +1396,7 @@ static void sysbus_esp_gpio_demux(void *opaque, int irq, int level)
+         parent_esp_reset(s, irq, level);
+         break;
+     case 1:
+-        esp_dma_enable(opaque, irq, level);
++        esp_dma_enable(s, irq, level);
+         break;
+     }
+ }
+diff --git a/hw/scsi/scsi-disk.c b/hw/scsi/scsi-disk.c
+index e493c28814..b884a6f135 100644
+--- a/hw/scsi/scsi-disk.c
++++ b/hw/scsi/scsi-disk.c
+@@ -1624,9 +1624,10 @@ static void scsi_disk_emulate_mode_select(SCSIDiskReq *r, uint8_t *inbuf)
+          * Since the existing code only checks/updates bits 8-15 of the block
+          * size, restrict ourselves to the same requirement for now to ensure
+          * that a block size set by a block descriptor and then read back by
+-         * a subsequent SCSI command will be the same
++         * a subsequent SCSI command will be the same. Also disallow a block
++         * size of 256 since we cannot handle anything below BDRV_SECTOR_SIZE.
+          */
+-        if (bs && !(bs & ~0xff00) && bs != s->qdev.blocksize) {
++        if (bs && !(bs & ~0xfe00) && bs != s->qdev.blocksize) {
+             s->qdev.blocksize = bs;
+             trace_scsi_disk_mode_select_set_blocksize(s->qdev.blocksize);
+         }
+@@ -1951,6 +1952,10 @@ static void scsi_disk_emulate_write_data(SCSIRequest *req)
+         scsi_disk_emulate_write_same(r, r->iov.iov_base);
+         break;
+ 
++    case FORMAT_UNIT:
++        scsi_req_complete(&r->req, GOOD);
++        break;
++
+     default:
+         abort();
+     }
+diff --git a/hw/sd/sdhci.c b/hw/sd/sdhci.c
+index 306070c872..ef60badc6b 100644
+--- a/hw/sd/sdhci.c
++++ b/hw/sd/sdhci.c
+@@ -321,6 +321,8 @@ static void sdhci_poweron_reset(DeviceState *dev)
+ 
+ static void sdhci_data_transfer(void *opaque);
+ 
++#define BLOCK_SIZE_MASK (4 * KiB - 1)
++
+ static void sdhci_send_command(SDHCIState *s)
+ {
+     SDRequest request;
+@@ -371,7 +373,8 @@ static void sdhci_send_command(SDHCIState *s)
+ 
+     sdhci_update_irq(s);
+ 
+-    if (!timeout && s->blksize && (s->cmdreg & SDHC_CMD_DATA_PRESENT)) {
++    if (!timeout && (s->blksize & BLOCK_SIZE_MASK) &&
++        (s->cmdreg & SDHC_CMD_DATA_PRESENT)) {
+         s->data_count = 0;
+         sdhci_data_transfer(s);
+     }
+@@ -406,7 +409,6 @@ static void sdhci_end_transfer(SDHCIState *s)
+ /*
+  * Programmed i/o data transfer
+  */
+-#define BLOCK_SIZE_MASK (4 * KiB - 1)
+ 
+ /* Fill host controller's read buffer with BLKSIZE bytes of data from card */
+ static void sdhci_read_block_from_card(SDHCIState *s)
+@@ -1154,7 +1156,8 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
+             s->sdmasysad = (s->sdmasysad & mask) | value;
+             MASKED_WRITE(s->sdmasysad, mask, value);
+             /* Writing to last byte of sdmasysad might trigger transfer */
+-            if (!(mask & 0xFF000000) && s->blkcnt && s->blksize &&
++            if (!(mask & 0xFF000000) && s->blkcnt &&
++                (s->blksize & BLOCK_SIZE_MASK) &&
+                 SDHC_DMA_TYPE(s->hostctl1) == SDHC_CTRL_SDMA) {
+                 if (s->trnmod & SDHC_TRNS_MULTI) {
+                     sdhci_sdma_transfer_multi_blocks(s);
+@@ -1168,7 +1171,11 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
+         if (!TRANSFERRING_DATA(s->prnsts)) {
+             uint16_t blksize = s->blksize;
+ 
+-            MASKED_WRITE(s->blksize, mask, extract32(value, 0, 12));
++            /*
++             * [14:12] SDMA Buffer Boundary
++             * [11:00] Transfer Block Size
++             */
++            MASKED_WRITE(s->blksize, mask, extract32(value, 0, 15));
+             MASKED_WRITE(s->blkcnt, mask >> 16, value >> 16);
+ 
+             /* Limit block size to the maximum buffer size */
+diff --git a/include/qemu/host-utils.h b/include/qemu/host-utils.h
+index b3434ec0bc..09daf58787 100644
+--- a/include/qemu/host-utils.h
++++ b/include/qemu/host-utils.h
+@@ -57,6 +57,11 @@ static inline uint64_t muldiv64(uint64_t a, uint32_t b, uint32_t c)
+     return (__int128_t)a * b / c;
+ }
+ 
++static inline uint64_t muldiv64_round_up(uint64_t a, uint32_t b, uint32_t c)
++{
++    return ((__int128_t)a * b + c - 1) / c;
++}
++
+ static inline uint64_t divu128(uint64_t *plow, uint64_t *phigh,
+                                uint64_t divisor)
+ {
+@@ -84,7 +89,8 @@ void mulu64(uint64_t *plow, uint64_t *phigh, uint64_t a, uint64_t b);
+ uint64_t divu128(uint64_t *plow, uint64_t *phigh, uint64_t divisor);
+ int64_t divs128(uint64_t *plow, int64_t *phigh, int64_t divisor);
+ 
+-static inline uint64_t muldiv64(uint64_t a, uint32_t b, uint32_t c)
++static inline uint64_t muldiv64_rounding(uint64_t a, uint32_t b, uint32_t c,
++                                  bool round_up)
+ {
+     union {
+         uint64_t ll;
+@@ -100,12 +106,25 @@ static inline uint64_t muldiv64(uint64_t a, uint32_t b, uint32_t c)
+ 
+     u.ll = a;
+     rl = (uint64_t)u.l.low * (uint64_t)b;
++    if (round_up) {
++        rl += c - 1;
++    }
+     rh = (uint64_t)u.l.high * (uint64_t)b;
+     rh += (rl >> 32);
+     res.l.high = rh / c;
+     res.l.low = (((rh % c) << 32) + (rl & 0xffffffff)) / c;
+     return res.ll;
+ }
++
++static inline uint64_t muldiv64(uint64_t a, uint32_t b, uint32_t c)
++{
++    return muldiv64_rounding(a, b, c, false);
++}
++
++static inline uint64_t muldiv64_round_up(uint64_t a, uint32_t b, uint32_t c)
++{
++    return muldiv64_rounding(a, b, c, true);
++}
+ #endif
+ 
+ /**
+diff --git a/linux-user/hppa/signal.c b/linux-user/hppa/signal.c
+index f253a15864..ec5f5412d1 100644
+--- a/linux-user/hppa/signal.c
++++ b/linux-user/hppa/signal.c
+@@ -25,7 +25,7 @@
+ struct target_sigcontext {
+     abi_ulong sc_flags;
+     abi_ulong sc_gr[32];
+-    uint64_t sc_fr[32];
++    abi_ullong sc_fr[32];
+     abi_ulong sc_iasq[2];
+     abi_ulong sc_iaoq[2];
+     abi_ulong sc_sar;
+@@ -149,16 +149,18 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
+         target_ulong *fdesc, dest;
+ 
+         haddr &= -4;
+-        if (!lock_user_struct(VERIFY_READ, fdesc, haddr, 1)) {
++        fdesc = lock_user(VERIFY_READ, haddr, 2 * sizeof(target_ulong), 1);
++        if (!fdesc) {
+             goto give_sigsegv;
+         }
+         __get_user(dest, fdesc);
+         __get_user(env->gr[19], fdesc + 1);
+-        unlock_user_struct(fdesc, haddr, 1);
++        unlock_user(fdesc, haddr, 0);
+         haddr = dest;
+     }
+     env->iaoq_f = haddr;
+     env->iaoq_b = haddr + 4;
++    env->psw_n = 0;
+     return;
+ 
+  give_sigsegv:
+diff --git a/linux-user/mips/cpu_loop.c b/linux-user/mips/cpu_loop.c
+index 8735e58bad..990b03e727 100644
+--- a/linux-user/mips/cpu_loop.c
++++ b/linux-user/mips/cpu_loop.c
+@@ -180,7 +180,9 @@ done_syscall:
+             }
+             force_sig_fault(TARGET_SIGFPE, si_code, env->active_tc.PC);
+             break;
+-
++	case EXCP_OVERFLOW:
++            force_sig_fault(TARGET_SIGFPE, TARGET_FPE_INTOVF, env->active_tc.PC);
++            break;
+         /* The code below was inspired by the MIPS Linux kernel trap
+          * handling code in arch/mips/kernel/traps.c.
+          */
+diff --git a/linux-user/sh4/signal.c b/linux-user/sh4/signal.c
+index c4ba962708..c16c2c2d57 100644
+--- a/linux-user/sh4/signal.c
++++ b/linux-user/sh4/signal.c
+@@ -104,6 +104,14 @@ static void unwind_gusa(CPUSH4State *regs)
+ 
+         /* Reset the SP to the saved version in R1.  */
+         regs->gregs[15] = regs->gregs[1];
++    } else if (regs->gregs[15] >= -128u && regs->pc == regs->gregs[0]) {
++        /* If we are on the last instruction of a gUSA region, we must reset
++           the SP, otherwise we would be pushing the signal context to
++           invalid memory.  */
++        regs->gregs[15] = regs->gregs[1];
++    } else if (regs->flags & TB_FLAG_DELAY_SLOT) {
++        /* If we are in a delay slot, push the previous instruction.  */
++        regs->pc -= 2;
+     }
+ }
+ 
+diff --git a/linux-user/syscall.c b/linux-user/syscall.c
+index cedf22c5b5..aead0f6ac9 100644
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -95,50 +95,7 @@
+ #include <linux/soundcard.h>
+ #include <linux/kd.h>
+ #include <linux/mtio.h>
+-
+-#ifdef HAVE_SYS_MOUNT_FSCONFIG
+-/*
+- * glibc >= 2.36 linux/mount.h conflicts with sys/mount.h,
+- * which in turn prevents use of linux/fs.h. So we have to
+- * define the constants ourselves for now.
+- */
+-#define FS_IOC_GETFLAGS                _IOR('f', 1, long)
+-#define FS_IOC_SETFLAGS                _IOW('f', 2, long)
+-#define FS_IOC_GETVERSION              _IOR('v', 1, long)
+-#define FS_IOC_SETVERSION              _IOW('v', 2, long)
+-#define FS_IOC_FIEMAP                  _IOWR('f', 11, struct fiemap)
+-#define FS_IOC32_GETFLAGS              _IOR('f', 1, int)
+-#define FS_IOC32_SETFLAGS              _IOW('f', 2, int)
+-#define FS_IOC32_GETVERSION            _IOR('v', 1, int)
+-#define FS_IOC32_SETVERSION            _IOW('v', 2, int)
+-
+-#define BLKGETSIZE64 _IOR(0x12,114,size_t)
+-#define BLKDISCARD _IO(0x12,119)
+-#define BLKIOMIN _IO(0x12,120)
+-#define BLKIOOPT _IO(0x12,121)
+-#define BLKALIGNOFF _IO(0x12,122)
+-#define BLKPBSZGET _IO(0x12,123)
+-#define BLKDISCARDZEROES _IO(0x12,124)
+-#define BLKSECDISCARD _IO(0x12,125)
+-#define BLKROTATIONAL _IO(0x12,126)
+-#define BLKZEROOUT _IO(0x12,127)
+-
+-#define FIBMAP     _IO(0x00,1)
+-#define FIGETBSZ   _IO(0x00,2)
+-
+-struct file_clone_range {
+-        __s64 src_fd;
+-        __u64 src_offset;
+-        __u64 src_length;
+-        __u64 dest_offset;
+-};
+-
+-#define FICLONE         _IOW(0x94, 9, int)
+-#define FICLONERANGE    _IOW(0x94, 13, struct file_clone_range)
+-
+-#else
+ #include <linux/fs.h>
+-#endif
+ #include <linux/fd.h>
+ #if defined(CONFIG_FIEMAP)
+ #include <linux/fiemap.h>
+diff --git a/meson.build b/meson.build
+index 450c48a9f0..787f91855e 100644
+--- a/meson.build
++++ b/meson.build
+@@ -2032,8 +2032,6 @@ config_host_data.set('HAVE_OPTRESET',
+                      cc.has_header_symbol('getopt.h', 'optreset'))
+ config_host_data.set('HAVE_IPPROTO_MPTCP',
+                      cc.has_header_symbol('netinet/in.h', 'IPPROTO_MPTCP'))
+-config_host_data.set('HAVE_SYS_MOUNT_FSCONFIG',
+-                     cc.has_header_symbol('sys/mount.h', 'FSCONFIG_SET_FLAG'))
+ 
+ # has_member
+ config_host_data.set('HAVE_SIGEV_NOTIFY_THREAD_ID',
+diff --git a/migration/migration.c b/migration/migration.c
+index c19fb5cb3e..c8ca7927b4 100644
+--- a/migration/migration.c
++++ b/migration/migration.c
+@@ -1809,20 +1809,25 @@ void qmp_migrate_set_parameters(MigrateSetParameters *params, Error **errp)
+ {
+     MigrationParameters tmp;
+ 
+-    /* TODO Rewrite "" to null instead */
++    /* TODO Rewrite "" to null instead for all three tls_* parameters */
+     if (params->has_tls_creds
+         && params->tls_creds->type == QTYPE_QNULL) {
+         qobject_unref(params->tls_creds->u.n);
+         params->tls_creds->type = QTYPE_QSTRING;
+         params->tls_creds->u.s = strdup("");
+     }
+-    /* TODO Rewrite "" to null instead */
+     if (params->has_tls_hostname
+         && params->tls_hostname->type == QTYPE_QNULL) {
+         qobject_unref(params->tls_hostname->u.n);
+         params->tls_hostname->type = QTYPE_QSTRING;
+         params->tls_hostname->u.s = strdup("");
+     }
++    if (params->tls_authz
++        && params->tls_authz->type == QTYPE_QNULL) {
++        qobject_unref(params->tls_authz->u.n);
++        params->tls_authz->type = QTYPE_QSTRING;
++        params->tls_authz->u.s = strdup("");
++    }
+ 
+     migrate_params_test_apply(params, &tmp);
+ 
+diff --git a/pc-bios/optionrom/Makefile b/pc-bios/optionrom/Makefile
+index b1fff0ba6c..30d07026c7 100644
+--- a/pc-bios/optionrom/Makefile
++++ b/pc-bios/optionrom/Makefile
+@@ -36,7 +36,7 @@ config-cc.mak: Makefile
+ 	    $(call cc-option,-Wno-array-bounds)) 3> config-cc.mak
+ -include config-cc.mak
+ 
+-override LDFLAGS = -nostdlib -Wl,-T,$(SRC_DIR)/flat.lds
++override LDFLAGS = -nostdlib -Wl,--build-id=none,-T,$(SRC_DIR)/flat.lds
+ 
+ pvh.img: pvh.o pvh_main.o
+ 
+diff --git a/qemu-img.c b/qemu-img.c
+index a9b3a8103c..2c32d9da4e 100644
+--- a/qemu-img.c
++++ b/qemu-img.c
+@@ -3753,6 +3753,8 @@ static int img_rebase(int argc, char **argv)
+             }
+ 
+             if (prefix_chain_bs) {
++                uint64_t bytes = n;
++
+                 /*
+                  * If cluster wasn't changed since prefix_chain, we don't need
+                  * to take action
+@@ -3765,9 +3767,18 @@ static int img_rebase(int argc, char **argv)
+                                  strerror(-ret));
+                     goto out;
+                 }
+-                if (!ret) {
++                if (!ret && n) {
+                     continue;
+                 }
++                if (!n) {
++                    /*
++                     * If we've reached EOF of the old backing, it means that
++                     * offsets beyond the old backing size were read as zeroes.
++                     * Now we will need to explicitly zero the cluster in
++                     * order to preserve that state after the rebase.
++                     */
++                    n = bytes;
++                }
+             }
+ 
+             /*
+diff --git a/scripts/analyze-migration.py b/scripts/analyze-migration.py
+index b82a1b0c58..44d306aedc 100755
+--- a/scripts/analyze-migration.py
++++ b/scripts/analyze-migration.py
+@@ -38,13 +38,13 @@ def __init__(self, filename):
+         self.file = open(self.filename, "rb")
+ 
+     def read64(self):
+-        return int.from_bytes(self.file.read(8), byteorder='big', signed=True)
++        return int.from_bytes(self.file.read(8), byteorder='big', signed=False)
+ 
+     def read32(self):
+-        return int.from_bytes(self.file.read(4), byteorder='big', signed=True)
++        return int.from_bytes(self.file.read(4), byteorder='big', signed=False)
+ 
+     def read16(self):
+-        return int.from_bytes(self.file.read(2), byteorder='big', signed=True)
++        return int.from_bytes(self.file.read(2), byteorder='big', signed=False)
+ 
+     def read8(self):
+         return int.from_bytes(self.file.read(1), byteorder='big', signed=True)
+diff --git a/scripts/tracetool/__init__.py b/scripts/tracetool/__init__.py
+index 5393c7fc5c..cd46e7597c 100644
+--- a/scripts/tracetool/__init__.py
++++ b/scripts/tracetool/__init__.py
+@@ -92,7 +92,7 @@ def out(*lines, **kwargs):
+ def validate_type(name):
+     bits = name.split(" ")
+     for bit in bits:
+-        bit = re.sub("\*", "", bit)
++        bit = re.sub(r"\*", "", bit)
+         if bit == "":
+             continue
+         if bit == "const":
+diff --git a/target/arm/helper.c b/target/arm/helper.c
+index 22bc935242..a52ef3dfe4 100644
+--- a/target/arm/helper.c
++++ b/target/arm/helper.c
+@@ -11301,6 +11301,15 @@ static CPUARMTBFlags rebuild_hflags_a64(CPUARMState *env, int el, int fp_el,
+                 && !(env->pstate & PSTATE_TCO)
+                 && (sctlr & (el == 0 ? SCTLR_TCF0 : SCTLR_TCF))) {
+                 DP_TBFLAG_A64(flags, MTE_ACTIVE, 1);
++                if (!EX_TBFLAG_A64(flags, UNPRIV)) {
++                    /*
++                     * In non-unpriv contexts (eg EL0), unpriv load/stores
++                     * act like normal ones; duplicate the MTE info to
++                     * avoid translate-a64.c having to check UNPRIV to see
++                     * whether it is OK to index into MTE_ACTIVE[].
++                     */
++                    DP_TBFLAG_A64(flags, MTE0_ACTIVE, 1);
++                }
+             }
+         }
+         /* And again for unprivileged accesses, if required.  */
+diff --git a/target/arm/internals.h b/target/arm/internals.h
+index 161e42d50f..3c7ff51c99 100644
+--- a/target/arm/internals.h
++++ b/target/arm/internals.h
+@@ -1129,7 +1129,6 @@ typedef struct ARMCacheAttrs {
+     unsigned int attrs:8;
+     unsigned int shareability:2; /* as in the SH field of the VMSAv8-64 PTEs */
+     bool is_s2_format:1;
+-    bool guarded:1;              /* guarded bit of the v8-64 PTE */
+ } ARMCacheAttrs;
+ 
+ /* Fields that are valid upon success. */
+diff --git a/target/arm/ptw.c b/target/arm/ptw.c
+index 0b16068557..be0cc3e347 100644
+--- a/target/arm/ptw.c
++++ b/target/arm/ptw.c
+@@ -103,6 +103,37 @@ ARMMMUIdx arm_stage1_mmu_idx(CPUARMState *env)
+     return stage_1_mmu_idx(arm_mmu_idx(env));
+ }
+ 
++/*
++ * Return where we should do ptw loads from for a stage 2 walk.
++ * This depends on whether the address we are looking up is a
++ * Secure IPA or a NonSecure IPA, which we know from whether this is
++ * Stage2 or Stage2_S.
++ * If this is the Secure EL1&0 regime we need to check the NSW and SW bits.
++ */
++static ARMMMUIdx ptw_idx_for_stage_2(CPUARMState *env, ARMMMUIdx stage2idx)
++{
++    bool s2walk_secure;
++
++    /*
++     * We're OK to check the current state of the CPU here because
++     * (1) we always invalidate all TLBs when the SCR_EL3.NS bit changes
++     * (2) there's no way to do a lookup that cares about Stage 2 for a
++     * different security state to the current one for AArch64, and AArch32
++     * never has a secure EL2. (AArch32 ATS12NSO[UP][RW] allow EL3 to do
++     * an NS stage 1+2 lookup while the NS bit is 0.)
++     */
++    if (!arm_is_secure_below_el3(env) || !arm_el_is_aa64(env, 3)) {
++        return ARMMMUIdx_Phys_NS;
++    }
++    if (stage2idx == ARMMMUIdx_Stage2_S) {
++        s2walk_secure = !(env->cp15.vstcr_el2 & VSTCR_SW);
++    } else {
++        s2walk_secure = !(env->cp15.vtcr_el2 & VTCR_NSW);
++    }
++    return s2walk_secure ? ARMMMUIdx_Phys_S : ARMMMUIdx_Phys_NS;
++
++}
++
+ static bool regime_translation_big_endian(CPUARMState *env, ARMMMUIdx mmu_idx)
+ {
+     return (regime_sctlr(env, mmu_idx) & SCTLR_EE) != 0;
+@@ -220,7 +251,6 @@ static bool S1_ptw_translate(CPUARMState *env, S1Translate *ptw,
+     ARMMMUIdx mmu_idx = ptw->in_mmu_idx;
+     ARMMMUIdx s2_mmu_idx = ptw->in_ptw_idx;
+     uint8_t pte_attrs;
+-    bool pte_secure;
+ 
+     ptw->out_virt = addr;
+ 
+@@ -232,8 +262,8 @@ static bool S1_ptw_translate(CPUARMState *env, S1Translate *ptw,
+         if (regime_is_stage2(s2_mmu_idx)) {
+             S1Translate s2ptw = {
+                 .in_mmu_idx = s2_mmu_idx,
+-                .in_ptw_idx = is_secure ? ARMMMUIdx_Phys_S : ARMMMUIdx_Phys_NS,
+-                .in_secure = is_secure,
++                .in_ptw_idx = ptw_idx_for_stage_2(env, s2_mmu_idx),
++                .in_secure = s2_mmu_idx == ARMMMUIdx_Stage2_S,
+                 .in_debug = true,
+             };
+             GetPhysAddrResult s2 = { };
+@@ -244,16 +274,17 @@ static bool S1_ptw_translate(CPUARMState *env, S1Translate *ptw,
+             }
+             ptw->out_phys = s2.f.phys_addr;
+             pte_attrs = s2.cacheattrs.attrs;
+-            pte_secure = s2.f.attrs.secure;
++            ptw->out_secure = s2.f.attrs.secure;
+         } else {
+             /* Regime is physical. */
+             ptw->out_phys = addr;
+             pte_attrs = 0;
+-            pte_secure = is_secure;
++            ptw->out_secure = s2_mmu_idx == ARMMMUIdx_Phys_S;
+         }
+         ptw->out_host = NULL;
+         ptw->out_rw = false;
+     } else {
++#ifdef CONFIG_TCG
+         CPUTLBEntryFull *full;
+         int flags;
+ 
+@@ -269,7 +300,10 @@ static bool S1_ptw_translate(CPUARMState *env, S1Translate *ptw,
+         ptw->out_phys = full->phys_addr | (addr & ~TARGET_PAGE_MASK);
+         ptw->out_rw = full->prot & PAGE_WRITE;
+         pte_attrs = full->pte_attrs;
+-        pte_secure = full->attrs.secure;
++        ptw->out_secure = full->attrs.secure;
++#else
++        g_assert_not_reached();
++#endif
+     }
+ 
+     if (regime_is_stage2(s2_mmu_idx)) {
+@@ -289,11 +323,6 @@ static bool S1_ptw_translate(CPUARMState *env, S1Translate *ptw,
+         }
+     }
+ 
+-    /* Check if page table walk is to secure or non-secure PA space. */
+-    ptw->out_secure = (is_secure
+-                       && !(pte_secure
+-                            ? env->cp15.vstcr_el2 & VSTCR_SW
+-                            : env->cp15.vtcr_el2 & VTCR_NSW));
+     ptw->out_be = regime_translation_big_endian(env, mmu_idx);
+     return true;
+ 
+@@ -1378,17 +1407,18 @@ static bool get_phys_addr_lpae(CPUARMState *env, S1Translate *ptw,
+     descaddrmask &= ~indexmask_grainsize;
+ 
+     /*
+-     * Secure accesses start with the page table in secure memory and
++     * Secure stage 1 accesses start with the page table in secure memory and
+      * can be downgraded to non-secure at any step. Non-secure accesses
+      * remain non-secure. We implement this by just ORing in the NSTable/NS
+      * bits at each step.
++     * Stage 2 never gets this kind of downgrade.
+      */
+     tableattrs = is_secure ? 0 : (1 << 4);
+ 
+  next_level:
+     descaddr |= (address >> (stride * (4 - level))) & indexmask;
+     descaddr &= ~7ULL;
+-    nstable = extract32(tableattrs, 4, 1);
++    nstable = !regime_is_stage2(mmu_idx) && extract32(tableattrs, 4, 1);
+     if (nstable) {
+         /*
+          * Stage2_S -> Stage2 or Phys_S -> Phys_NS
+@@ -2605,7 +2635,7 @@ static bool get_phys_addr_twostage(CPUARMState *env, S1Translate *ptw,
+     hwaddr ipa;
+     int s1_prot, s1_lgpgsz;
+     bool is_secure = ptw->in_secure;
+-    bool ret, ipa_secure, s2walk_secure;
++    bool ret, ipa_secure, s1_guarded;
+     ARMCacheAttrs cacheattrs1;
+     bool is_el0;
+     uint64_t hcr;
+@@ -2619,20 +2649,11 @@ static bool get_phys_addr_twostage(CPUARMState *env, S1Translate *ptw,
+ 
+     ipa = result->f.phys_addr;
+     ipa_secure = result->f.attrs.secure;
+-    if (is_secure) {
+-        /* Select TCR based on the NS bit from the S1 walk. */
+-        s2walk_secure = !(ipa_secure
+-                          ? env->cp15.vstcr_el2 & VSTCR_SW
+-                          : env->cp15.vtcr_el2 & VTCR_NSW);
+-    } else {
+-        assert(!ipa_secure);
+-        s2walk_secure = false;
+-    }
+ 
+     is_el0 = ptw->in_mmu_idx == ARMMMUIdx_Stage1_E0;
+-    ptw->in_mmu_idx = s2walk_secure ? ARMMMUIdx_Stage2_S : ARMMMUIdx_Stage2;
+-    ptw->in_ptw_idx = s2walk_secure ? ARMMMUIdx_Phys_S : ARMMMUIdx_Phys_NS;
+-    ptw->in_secure = s2walk_secure;
++    ptw->in_mmu_idx = ipa_secure ? ARMMMUIdx_Stage2_S : ARMMMUIdx_Stage2;
++    ptw->in_secure = ipa_secure;
++    ptw->in_ptw_idx = ptw_idx_for_stage_2(env, ptw->in_mmu_idx);
+ 
+     /*
+      * S1 is done, now do S2 translation.
+@@ -2640,6 +2661,7 @@ static bool get_phys_addr_twostage(CPUARMState *env, S1Translate *ptw,
+      */
+     s1_prot = result->f.prot;
+     s1_lgpgsz = result->f.lg_page_size;
++    s1_guarded = result->f.guarded;
+     cacheattrs1 = result->cacheattrs;
+     memset(result, 0, sizeof(*result));
+ 
+@@ -2680,6 +2702,9 @@ static bool get_phys_addr_twostage(CPUARMState *env, S1Translate *ptw,
+     result->cacheattrs = combine_cacheattrs(hcr, cacheattrs1,
+                                             result->cacheattrs);
+ 
++    /* No BTI GP information in stage 2, we just use the S1 value */
++    result->f.guarded = s1_guarded;
++
+     /*
+      * Check if IPA translates to secure or non-secure PA space.
+      * Note that VSTCR overrides VTCR and {N}SW overrides {N}SA.
+@@ -2724,6 +2749,16 @@ static bool get_phys_addr_with_struct(CPUARMState *env, S1Translate *ptw,
+         ptw->in_ptw_idx = is_secure ? ARMMMUIdx_Stage2_S : ARMMMUIdx_Stage2;
+         break;
+ 
++    case ARMMMUIdx_Stage2:
++    case ARMMMUIdx_Stage2_S:
++        /*
++         * Second stage lookup uses physical for ptw; whether this is S or
++         * NS may depend on the SW/NSW bits if this is a stage 2 lookup for
++         * the Secure EL2&0 regime.
++         */
++        ptw->in_ptw_idx = ptw_idx_for_stage_2(env, mmu_idx);
++        break;
++
+     case ARMMMUIdx_E10_0:
+         s1_mmu_idx = ARMMMUIdx_Stage1_E0;
+         goto do_twostage;
+@@ -2747,7 +2782,7 @@ static bool get_phys_addr_with_struct(CPUARMState *env, S1Translate *ptw,
+         /* fall through */
+ 
+     default:
+-        /* Single stage and second stage uses physical for ptw. */
++        /* Single stage uses physical for ptw. */
+         ptw->in_ptw_idx = is_secure ? ARMMMUIdx_Phys_S : ARMMMUIdx_Phys_NS;
+         break;
+     }
+diff --git a/target/i386/tcg/decode-new.c.inc b/target/i386/tcg/decode-new.c.inc
+index ee4f4a899f..528e2fdfbb 100644
+--- a/target/i386/tcg/decode-new.c.inc
++++ b/target/i386/tcg/decode-new.c.inc
+@@ -105,6 +105,7 @@
+ #define vex3 .vex_class = 3,
+ #define vex4 .vex_class = 4,
+ #define vex4_unal .vex_class = 4, .vex_special = X86_VEX_SSEUnaligned,
++#define vex4_rep5 .vex_class = 4, .vex_special = X86_VEX_REPScalar,
+ #define vex5 .vex_class = 5,
+ #define vex6 .vex_class = 6,
+ #define vex7 .vex_class = 7,
+@@ -236,7 +237,7 @@ static void decode_group14(DisasContext *s, CPUX86State *env, X86OpEntry *entry,
+ static void decode_0F6F(DisasContext *s, CPUX86State *env, X86OpEntry *entry, uint8_t *b)
+ {
+     static const X86OpEntry opcodes_0F6F[4] = {
+-        X86_OP_ENTRY3(MOVDQ,       P,q, None,None, Q,q, vex1 mmx),  /* movq */
++        X86_OP_ENTRY3(MOVDQ,       P,q, None,None, Q,q, vex5 mmx),  /* movq */
+         X86_OP_ENTRY3(MOVDQ,       V,x, None,None, W,x, vex1),      /* movdqa */
+         X86_OP_ENTRY3(MOVDQ,       V,x, None,None, W,x, vex4_unal), /* movdqu */
+         {},
+@@ -273,9 +274,9 @@ static void decode_0F78(DisasContext *s, CPUX86State *env, X86OpEntry *entry, ui
+ {
+     static const X86OpEntry opcodes_0F78[4] = {
+         {},
+-        X86_OP_ENTRY3(EXTRQ_i,       V,x, None,None, I,w,  cpuid(SSE4A)),
++        X86_OP_ENTRY3(EXTRQ_i,       V,x, None,None, I,w,  cpuid(SSE4A)), /* AMD extension */
+         {},
+-        X86_OP_ENTRY3(INSERTQ_i,     V,x, U,x, I,w,        cpuid(SSE4A)),
++        X86_OP_ENTRY3(INSERTQ_i,     V,x, U,x, I,w,        cpuid(SSE4A)), /* AMD extension */
+     };
+     *entry = *decode_by_prefix(s, opcodes_0F78);
+ }
+@@ -283,9 +284,9 @@ static void decode_0F78(DisasContext *s, CPUX86State *env, X86OpEntry *entry, ui
+ static void decode_0F79(DisasContext *s, CPUX86State *env, X86OpEntry *entry, uint8_t *b)
+ {
+     if (s->prefix & PREFIX_REPNZ) {
+-        entry->gen = gen_INSERTQ_r;
++        entry->gen = gen_INSERTQ_r; /* AMD extension */
+     } else if (s->prefix & PREFIX_DATA) {
+-        entry->gen = gen_EXTRQ_r;
++        entry->gen = gen_EXTRQ_r; /* AMD extension */
+     } else {
+         entry->gen = NULL;
+     };
+@@ -305,7 +306,7 @@ static void decode_0F7E(DisasContext *s, CPUX86State *env, X86OpEntry *entry, ui
+ static void decode_0F7F(DisasContext *s, CPUX86State *env, X86OpEntry *entry, uint8_t *b)
+ {
+     static const X86OpEntry opcodes_0F7F[4] = {
+-        X86_OP_ENTRY3(MOVDQ,       W,x, None,None, V,x, vex1 mmx), /* movq */
++        X86_OP_ENTRY3(MOVDQ,       W,x, None,None, V,x, vex5 mmx), /* movq */
+         X86_OP_ENTRY3(MOVDQ,       W,x, None,None, V,x, vex1), /* movdqa */
+         X86_OP_ENTRY3(MOVDQ,       W,x, None,None, V,x, vex4_unal), /* movdqu */
+         {},
+@@ -336,7 +337,7 @@ static const X86OpEntry opcodes_0F38_00toEF[240] = {
+     [0x07] = X86_OP_ENTRY3(PHSUBSW,   V,x,  H,x,   W,x,  vex4 cpuid(SSSE3) mmx avx2_256 p_00_66),
+ 
+     [0x10] = X86_OP_ENTRY2(PBLENDVB,  V,x,         W,x,  vex4 cpuid(SSE41) avx2_256 p_66),
+-    [0x13] = X86_OP_ENTRY2(VCVTPH2PS, V,x,         W,ph, vex11 cpuid(F16C) p_66),
++    [0x13] = X86_OP_ENTRY2(VCVTPH2PS, V,x,         W,xh, vex11 cpuid(F16C) p_66),
+     [0x14] = X86_OP_ENTRY2(BLENDVPS,  V,x,         W,x,  vex4 cpuid(SSE41) p_66),
+     [0x15] = X86_OP_ENTRY2(BLENDVPD,  V,x,         W,x,  vex4 cpuid(SSE41) p_66),
+     /* Listed incorrectly as type 4 */
+@@ -564,7 +565,7 @@ static const X86OpEntry opcodes_0F3A[256] = {
+     [0x15] = X86_OP_ENTRY3(PEXTRW,     E,w,  V,dq, I,b,  vex5 cpuid(SSE41) zext0 p_66),
+     [0x16] = X86_OP_ENTRY3(PEXTR,      E,y,  V,dq, I,b,  vex5 cpuid(SSE41) p_66),
+     [0x17] = X86_OP_ENTRY3(VEXTRACTPS, E,d,  V,dq, I,b,  vex5 cpuid(SSE41) p_66),
+-    [0x1d] = X86_OP_ENTRY3(VCVTPS2PH,  W,ph, V,x,  I,b,  vex11 cpuid(F16C) p_66),
++    [0x1d] = X86_OP_ENTRY3(VCVTPS2PH,  W,xh, V,x,  I,b,  vex11 cpuid(F16C) p_66),
+ 
+     [0x20] = X86_OP_ENTRY4(PINSRB,     V,dq, H,dq, E,b,  vex5 cpuid(SSE41) zext2 p_66),
+     [0x21] = X86_OP_GROUP0(VINSERTPS),
+@@ -638,15 +639,15 @@ static void decode_0F10(DisasContext *s, CPUX86State *env, X86OpEntry *entry, ui
+     static const X86OpEntry opcodes_0F10_reg[4] = {
+         X86_OP_ENTRY3(MOVDQ,   V,x,  None,None, W,x, vex4_unal), /* MOVUPS */
+         X86_OP_ENTRY3(MOVDQ,   V,x,  None,None, W,x, vex4_unal), /* MOVUPD */
+-        X86_OP_ENTRY3(VMOVSS,  V,x,  H,x,       W,x, vex4),
+-        X86_OP_ENTRY3(VMOVLPx, V,x,  H,x,       W,x, vex4), /* MOVSD */
++        X86_OP_ENTRY3(VMOVSS,  V,x,  H,x,       W,x, vex5),
++        X86_OP_ENTRY3(VMOVLPx, V,x,  H,x,       W,x, vex5), /* MOVSD */
+     };
+ 
+     static const X86OpEntry opcodes_0F10_mem[4] = {
+         X86_OP_ENTRY3(MOVDQ,      V,x,  None,None, W,x,  vex4_unal), /* MOVUPS */
+         X86_OP_ENTRY3(MOVDQ,      V,x,  None,None, W,x,  vex4_unal), /* MOVUPD */
+-        X86_OP_ENTRY3(VMOVSS_ld,  V,x,  H,x,       M,ss, vex4),
+-        X86_OP_ENTRY3(VMOVSD_ld,  V,x,  H,x,       M,sd, vex4),
++        X86_OP_ENTRY3(VMOVSS_ld,  V,x,  H,x,       M,ss, vex5),
++        X86_OP_ENTRY3(VMOVSD_ld,  V,x,  H,x,       M,sd, vex5),
+     };
+ 
+     if ((get_modrm(s, env) >> 6) == 3) {
+@@ -659,17 +660,17 @@ static void decode_0F10(DisasContext *s, CPUX86State *env, X86OpEntry *entry, ui
+ static void decode_0F11(DisasContext *s, CPUX86State *env, X86OpEntry *entry, uint8_t *b)
+ {
+     static const X86OpEntry opcodes_0F11_reg[4] = {
+-        X86_OP_ENTRY3(MOVDQ,   W,x,  None,None, V,x, vex4), /* MOVPS */
+-        X86_OP_ENTRY3(MOVDQ,   W,x,  None,None, V,x, vex4), /* MOVPD */
+-        X86_OP_ENTRY3(VMOVSS,  W,x,  H,x,       V,x, vex4),
+-        X86_OP_ENTRY3(VMOVLPx, W,x,  H,x,       V,q, vex4), /* MOVSD */
++        X86_OP_ENTRY3(MOVDQ,   W,x,  None,None, V,x, vex4), /* MOVUPS */
++        X86_OP_ENTRY3(MOVDQ,   W,x,  None,None, V,x, vex4), /* MOVUPD */
++        X86_OP_ENTRY3(VMOVSS,  W,x,  H,x,       V,x, vex5),
++        X86_OP_ENTRY3(VMOVLPx, W,x,  H,x,       V,q, vex5), /* MOVSD */
+     };
+ 
+     static const X86OpEntry opcodes_0F11_mem[4] = {
+-        X86_OP_ENTRY3(MOVDQ,      W,x,  None,None, V,x, vex4), /* MOVPS */
+-        X86_OP_ENTRY3(MOVDQ,      W,x,  None,None, V,x, vex4), /* MOVPD */
+-        X86_OP_ENTRY3(VMOVSS_st,  M,ss, None,None, V,x, vex4),
+-        X86_OP_ENTRY3(VMOVLPx_st, M,sd, None,None, V,x, vex4), /* MOVSD */
++        X86_OP_ENTRY3(MOVDQ,      W,x,  None,None, V,x, vex4), /* MOVUPS */
++        X86_OP_ENTRY3(MOVDQ,      W,x,  None,None, V,x, vex4), /* MOVUPD */
++        X86_OP_ENTRY3(VMOVSS_st,  M,ss, None,None, V,x, vex5),
++        X86_OP_ENTRY3(VMOVLPx_st, M,sd, None,None, V,x, vex5), /* MOVSD */
+     };
+ 
+     if ((get_modrm(s, env) >> 6) == 3) {
+@@ -686,16 +687,16 @@ static void decode_0F12(DisasContext *s, CPUX86State *env, X86OpEntry *entry, ui
+          * Use dq for operand for compatibility with gen_MOVSD and
+          * to allow VEX128 only.
+          */
+-        X86_OP_ENTRY3(VMOVLPx_ld, V,dq, H,dq,      M,q, vex4), /* MOVLPS */
+-        X86_OP_ENTRY3(VMOVLPx_ld, V,dq, H,dq,      M,q, vex4), /* MOVLPD */
++        X86_OP_ENTRY3(VMOVLPx_ld, V,dq, H,dq,      M,q, vex5), /* MOVLPS */
++        X86_OP_ENTRY3(VMOVLPx_ld, V,dq, H,dq,      M,q, vex5), /* MOVLPD */
+         X86_OP_ENTRY3(VMOVSLDUP,  V,x,  None,None, W,x, vex4 cpuid(SSE3)),
+-        X86_OP_ENTRY3(VMOVDDUP,   V,x,  None,None, WM,q, vex4 cpuid(SSE3)), /* qq if VEX.256 */
++        X86_OP_ENTRY3(VMOVDDUP,   V,x,  None,None, WM,q, vex5 cpuid(SSE3)), /* qq if VEX.256 */
+     };
+     static const X86OpEntry opcodes_0F12_reg[4] = {
+-        X86_OP_ENTRY3(VMOVHLPS,  V,dq, H,dq,       U,dq, vex4),
+-        X86_OP_ENTRY3(VMOVLPx,   W,x,  H,x,        U,q,  vex4), /* MOVLPD */
++        X86_OP_ENTRY3(VMOVHLPS,  V,dq, H,dq,       U,dq, vex7),
++        X86_OP_ENTRY3(VMOVLPx,   W,x,  H,x,        U,q,  vex5), /* MOVLPD */
+         X86_OP_ENTRY3(VMOVSLDUP, V,x,  None,None,  U,x,  vex4 cpuid(SSE3)),
+-        X86_OP_ENTRY3(VMOVDDUP,  V,x,  None,None,  U,x,  vex4 cpuid(SSE3)),
++        X86_OP_ENTRY3(VMOVDDUP,  V,x,  None,None,  U,x,  vex5 cpuid(SSE3)),
+     };
+ 
+     if ((get_modrm(s, env) >> 6) == 3) {
+@@ -715,15 +716,15 @@ static void decode_0F16(DisasContext *s, CPUX86State *env, X86OpEntry *entry, ui
+          * Operand 1 technically only reads the low 64 bits, but uses dq so that
+          * it is easier to check for op0 == op1 in an endianness-neutral manner.
+          */
+-        X86_OP_ENTRY3(VMOVHPx_ld, V,dq, H,dq,      M,q, vex4), /* MOVHPS */
+-        X86_OP_ENTRY3(VMOVHPx_ld, V,dq, H,dq,      M,q, vex4), /* MOVHPD */
++        X86_OP_ENTRY3(VMOVHPx_ld, V,dq, H,dq,      M,q, vex5), /* MOVHPS */
++        X86_OP_ENTRY3(VMOVHPx_ld, V,dq, H,dq,      M,q, vex5), /* MOVHPD */
+         X86_OP_ENTRY3(VMOVSHDUP,  V,x,  None,None, W,x, vex4 cpuid(SSE3)),
+         {},
+     };
+     static const X86OpEntry opcodes_0F16_reg[4] = {
+         /* Same as above, operand 1 could be Hq if it wasn't for big-endian.  */
+-        X86_OP_ENTRY3(VMOVLHPS,  V,dq, H,dq,      U,q, vex4),
+-        X86_OP_ENTRY3(VMOVHPx,   V,x,  H,x,       U,x, vex4), /* MOVHPD */
++        X86_OP_ENTRY3(VMOVLHPS,  V,dq, H,dq,      U,q, vex7),
++        X86_OP_ENTRY3(VMOVHPx,   V,x,  H,x,       U,x, vex5), /* MOVHPD */
+         X86_OP_ENTRY3(VMOVSHDUP, V,x,  None,None, U,x, vex4 cpuid(SSE3)),
+         {},
+     };
+@@ -749,8 +750,9 @@ static void decode_0F2A(DisasContext *s, CPUX86State *env, X86OpEntry *entry, ui
+ static void decode_0F2B(DisasContext *s, CPUX86State *env, X86OpEntry *entry, uint8_t *b)
+ {
+     static const X86OpEntry opcodes_0F2B[4] = {
+-        X86_OP_ENTRY3(MOVDQ,      M,x,  None,None, V,x, vex4), /* MOVNTPS */
+-        X86_OP_ENTRY3(MOVDQ,      M,x,  None,None, V,x, vex4), /* MOVNTPD */
++        X86_OP_ENTRY3(MOVDQ,      M,x,  None,None, V,x, vex1), /* MOVNTPS */
++        X86_OP_ENTRY3(MOVDQ,      M,x,  None,None, V,x, vex1), /* MOVNTPD */
++        /* AMD extensions */
+         X86_OP_ENTRY3(VMOVSS_st,  M,ss, None,None, V,x, vex4 cpuid(SSE4A)), /* MOVNTSS */
+         X86_OP_ENTRY3(VMOVLPx_st, M,sd, None,None, V,x, vex4 cpuid(SSE4A)), /* MOVNTSD */
+     };
+@@ -803,10 +805,20 @@ static void decode_sse_unary(DisasContext *s, CPUX86State *env, X86OpEntry *entr
+     case 0x51: entry->gen = gen_VSQRT; break;
+     case 0x52: entry->gen = gen_VRSQRT; break;
+     case 0x53: entry->gen = gen_VRCP; break;
+-    case 0x5A: entry->gen = gen_VCVTfp2fp; break;
+     }
+ }
+ 
++static void decode_0F5A(DisasContext *s, CPUX86State *env, X86OpEntry *entry, uint8_t *b)
++{
++    static const X86OpEntry opcodes_0F5A[4] = {
++        X86_OP_ENTRY2(VCVTPS2PD,  V,x,       W,xh, vex2),      /* VCVTPS2PD */
++        X86_OP_ENTRY2(VCVTPD2PS,  V,x,       W,x,  vex2),      /* VCVTPD2PS */
++        X86_OP_ENTRY3(VCVTSS2SD,  V,x,  H,x, W,x,  vex2_rep3), /* VCVTSS2SD */
++        X86_OP_ENTRY3(VCVTSD2SS,  V,x,  H,x, W,x,  vex2_rep3), /* VCVTSD2SS */
++    };
++    *entry = *decode_by_prefix(s, opcodes_0F5A);
++}
++
+ static void decode_0F5B(DisasContext *s, CPUX86State *env, X86OpEntry *entry, uint8_t *b)
+ {
+     static const X86OpEntry opcodes_0F5B[4] = {
+@@ -823,7 +835,7 @@ static void decode_0FE6(DisasContext *s, CPUX86State *env, X86OpEntry *entry, ui
+     static const X86OpEntry opcodes_0FE6[4] = {
+         {},
+         X86_OP_ENTRY2(VCVTTPD2DQ,  V,x, W,x,      vex2),
+-        X86_OP_ENTRY2(VCVTDQ2PD,   V,x, W,x,      vex2),
++        X86_OP_ENTRY2(VCVTDQ2PD,   V,x, W,x,      vex5),
+         X86_OP_ENTRY2(VCVTPD2DQ,   V,x, W,x,      vex2),
+     };
+     *entry = *decode_by_prefix(s, opcodes_0FE6);
+@@ -841,17 +853,17 @@ static const X86OpEntry opcodes_0F[256] = {
+     [0x10] = X86_OP_GROUP0(0F10),
+     [0x11] = X86_OP_GROUP0(0F11),
+     [0x12] = X86_OP_GROUP0(0F12),
+-    [0x13] = X86_OP_ENTRY3(VMOVLPx_st,  M,q, None,None, V,q,  vex4 p_00_66),
++    [0x13] = X86_OP_ENTRY3(VMOVLPx_st,  M,q, None,None, V,q,  vex5 p_00_66),
+     [0x14] = X86_OP_ENTRY3(VUNPCKLPx,   V,x, H,x, W,x,        vex4 p_00_66),
+     [0x15] = X86_OP_ENTRY3(VUNPCKHPx,   V,x, H,x, W,x,        vex4 p_00_66),
+     [0x16] = X86_OP_GROUP0(0F16),
+     /* Incorrectly listed as Mq,Vq in the manual */
+-    [0x17] = X86_OP_ENTRY3(VMOVHPx_st,  M,q, None,None, V,dq, vex4 p_00_66),
++    [0x17] = X86_OP_ENTRY3(VMOVHPx_st,  M,q, None,None, V,dq, vex5 p_00_66),
+ 
+     [0x50] = X86_OP_ENTRY3(MOVMSK,     G,y, None,None, U,x, vex7 p_00_66),
+-    [0x51] = X86_OP_GROUP3(sse_unary,  V,x, H,x, W,x, vex2_rep3 p_00_66_f3_f2),
+-    [0x52] = X86_OP_GROUP3(sse_unary,  V,x, H,x, W,x, vex5 p_00_f3),
+-    [0x53] = X86_OP_GROUP3(sse_unary,  V,x, H,x, W,x, vex5 p_00_f3),
++    [0x51] = X86_OP_GROUP3(sse_unary,  V,x, H,x, W,x, vex2_rep3 p_00_66_f3_f2), /* sqrtps */
++    [0x52] = X86_OP_GROUP3(sse_unary,  V,x, H,x, W,x, vex4_rep5 p_00_f3), /* rsqrtps */
++    [0x53] = X86_OP_GROUP3(sse_unary,  V,x, H,x, W,x, vex4_rep5 p_00_f3), /* rcpps */
+     [0x54] = X86_OP_ENTRY3(PAND,       V,x, H,x, W,x,  vex4 p_00_66), /* vand */
+     [0x55] = X86_OP_ENTRY3(PANDN,      V,x, H,x, W,x,  vex4 p_00_66), /* vandn */
+     [0x56] = X86_OP_ENTRY3(POR,        V,x, H,x, W,x,  vex4 p_00_66), /* vor */
+@@ -889,7 +901,7 @@ static const X86OpEntry opcodes_0F[256] = {
+ 
+     [0x58] = X86_OP_ENTRY3(VADD,       V,x, H,x, W,x, vex2_rep3 p_00_66_f3_f2),
+     [0x59] = X86_OP_ENTRY3(VMUL,       V,x, H,x, W,x, vex2_rep3 p_00_66_f3_f2),
+-    [0x5a] = X86_OP_GROUP3(sse_unary,  V,x, H,x, W,x, vex3 p_00_66_f3_f2),
++    [0x5a] = X86_OP_GROUP0(0F5A),
+     [0x5b] = X86_OP_GROUP0(0F5B),
+     [0x5c] = X86_OP_ENTRY3(VSUB,       V,x, H,x, W,x, vex2_rep3 p_00_66_f3_f2),
+     [0x5d] = X86_OP_ENTRY3(VMIN,       V,x, H,x, W,x, vex2_rep3 p_00_66_f3_f2),
+@@ -1102,7 +1114,7 @@ static bool decode_op_size(DisasContext *s, X86OpEntry *e, X86OpSize size, MemOp
+         *ot = s->vex_l ? MO_256 : MO_128;
+         return true;
+ 
+-    case X86_SIZE_ph: /* SSE/AVX packed half precision */
++    case X86_SIZE_xh: /* SSE/AVX packed half register */
+         *ot = s->vex_l ? MO_128 : MO_64;
+         return true;
+ 
+@@ -1458,9 +1470,9 @@ static bool validate_vex(DisasContext *s, X86DecodedInsn *decode)
+          * Instructions which differ between 00/66 and F2/F3 in the
+          * exception classification and the size of the memory operand.
+          */
+-        assert(e->vex_class == 1 || e->vex_class == 2);
++        assert(e->vex_class == 1 || e->vex_class == 2 || e->vex_class == 4);
+         if (s->prefix & (PREFIX_REPZ | PREFIX_REPNZ)) {
+-            e->vex_class = 3;
++            e->vex_class = e->vex_class < 4 ? 3 : 5;
+             if (s->vex_l) {
+                 goto illegal;
+             }
+diff --git a/target/i386/tcg/decode-new.h b/target/i386/tcg/decode-new.h
+index cb6b8bcf67..a542ec1681 100644
+--- a/target/i386/tcg/decode-new.h
++++ b/target/i386/tcg/decode-new.h
+@@ -92,7 +92,7 @@ typedef enum X86OpSize {
+     /* Custom */
+     X86_SIZE_d64,
+     X86_SIZE_f64,
+-    X86_SIZE_ph, /* SSE/AVX packed half precision */
++    X86_SIZE_xh, /* SSE/AVX packed half register */
+ } X86OpSize;
+ 
+ typedef enum X86CPUIDFeature {
+diff --git a/target/i386/tcg/emit.c.inc b/target/i386/tcg/emit.c.inc
+index 5d31fce65d..d6a9de8b3d 100644
+--- a/target/i386/tcg/emit.c.inc
++++ b/target/i386/tcg/emit.c.inc
+@@ -1917,12 +1917,22 @@ static void gen_VCOMI(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+     set_cc_op(s, CC_OP_EFLAGS);
+ }
+ 
+-static void gen_VCVTfp2fp(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
++static void gen_VCVTPD2PS(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+ {
+-    gen_unary_fp_sse(s, env, decode,
+-                     gen_helper_cvtpd2ps_xmm, gen_helper_cvtps2pd_xmm,
+-                     gen_helper_cvtpd2ps_ymm, gen_helper_cvtps2pd_ymm,
+-                     gen_helper_cvtsd2ss, gen_helper_cvtss2sd);
++    if (s->vex_l) {
++        gen_helper_cvtpd2ps_ymm(cpu_env, OP_PTR0, OP_PTR2);
++    } else {
++        gen_helper_cvtpd2ps_xmm(cpu_env, OP_PTR0, OP_PTR2);
++    }
++}
++
++static void gen_VCVTPS2PD(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
++{
++    if (s->vex_l) {
++        gen_helper_cvtps2pd_ymm(cpu_env, OP_PTR0, OP_PTR2);
++    } else {
++        gen_helper_cvtps2pd_xmm(cpu_env, OP_PTR0, OP_PTR2);
++    }
+ }
+ 
+ static void gen_VCVTPS2PH(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+@@ -1939,6 +1949,16 @@ static void gen_VCVTPS2PH(DisasContext *s, CPUX86State *env, X86DecodedInsn *dec
+     }
+ }
+ 
++static void gen_VCVTSD2SS(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
++{
++    gen_helper_cvtsd2ss(cpu_env, OP_PTR0, OP_PTR1, OP_PTR2);
++}
++
++static void gen_VCVTSS2SD(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
++{
++    gen_helper_cvtss2sd(cpu_env, OP_PTR0, OP_PTR1, OP_PTR2);
++}
++
+ static void gen_VCVTSI2Sx(DisasContext *s, CPUX86State *env, X86DecodedInsn *decode)
+ {
+     int vec_len = vector_len(s, decode);
+diff --git a/target/mips/tcg/msa.decode b/target/mips/tcg/msa.decode
+index 9575289195..4410e2a02e 100644
+--- a/target/mips/tcg/msa.decode
++++ b/target/mips/tcg/msa.decode
+@@ -31,8 +31,8 @@
+ 
+ @lsa                ...... rs:5 rt:5 rd:5 ... sa:2 ......   &r
+ @ldst               ...... sa:s10 ws:5 wd:5 .... df:2       &msa_i
+-@bz_v               ...... ... ..    wt:5 sa:16             &msa_bz df=3
+-@bz                 ...... ...  df:2 wt:5 sa:16             &msa_bz
++@bz_v               ...... ... ..    wt:5 sa:s16            &msa_bz df=3
++@bz                 ...... ...  df:2 wt:5 sa:s16            &msa_bz
+ @elm_df             ...... .... ......    ws:5 wd:5 ......  &msa_elm_df df=%elm_df n=%elm_n
+ @elm                ...... ..........     ws:5 wd:5 ......  &msa_elm
+ @vec                ...... .....     wt:5 ws:5 wd:5 ......  &msa_r df=0
+diff --git a/target/mips/tcg/tx79.decode b/target/mips/tcg/tx79.decode
+index 57d87a2076..578b8c54c0 100644
+--- a/target/mips/tcg/tx79.decode
++++ b/target/mips/tcg/tx79.decode
+@@ -24,7 +24,7 @@
+ @rs             ...... rs:5  ..... ..........  ......   &r sa=0      rt=0 rd=0
+ @rd             ...... ..........  rd:5  ..... ......   &r sa=0 rs=0 rt=0
+ 
+-@ldst            ...... base:5 rt:5 offset:16           &i
++@ldst            ...... base:5 rt:5 offset:s16          &i
+ 
+ ###########################################################################
+ 
+diff --git a/target/s390x/tcg/insn-data.h.inc b/target/s390x/tcg/insn-data.h.inc
+index 0e328ea0fd..7c3362d2e7 100644
+--- a/target/s390x/tcg/insn-data.h.inc
++++ b/target/s390x/tcg/insn-data.h.inc
+@@ -442,7 +442,7 @@
+     D(0xebe8, LAAG,    RSY_a, ILA, r3, a2, new, in2_r1, laa, adds64, MO_TEUQ)
+ /* LOAD AND ADD LOGICAL */
+     D(0xebfa, LAAL,    RSY_a, ILA, r3_32u, a2, new, in2_r1_32, laa, addu32, MO_TEUL)
+-    D(0xebea, LAALG,   RSY_a, ILA, r3, a2, new, in2_r1, laa, addu64, MO_TEUQ)
++    D(0xebea, LAALG,   RSY_a, ILA, r3, a2, new, in2_r1, laa_addu64, addu64, MO_TEUQ)
+ /* LOAD AND AND */
+     D(0xebf4, LAN,     RSY_a, ILA, r3_32s, a2, new, in2_r1_32, lan, nz32, MO_TESL)
+     D(0xebe4, LANG,    RSY_a, ILA, r3, a2, new, in2_r1, lan, nz64, MO_TEUQ)
+diff --git a/target/s390x/tcg/translate.c b/target/s390x/tcg/translate.c
+index ff64d6c28f..b0173e968e 100644
+--- a/target/s390x/tcg/translate.c
++++ b/target/s390x/tcg/translate.c
+@@ -2809,17 +2809,32 @@ static DisasJumpType op_kxb(DisasContext *s, DisasOps *o)
+     return DISAS_NEXT;
+ }
+ 
+-static DisasJumpType op_laa(DisasContext *s, DisasOps *o)
++static DisasJumpType help_laa(DisasContext *s, DisasOps *o, bool addu64)
+ {
+     /* The real output is indeed the original value in memory;
+        recompute the addition for the computation of CC.  */
+     tcg_gen_atomic_fetch_add_i64(o->in2, o->in2, o->in1, get_mem_index(s),
+                                  s->insn->data | MO_ALIGN);
+     /* However, we need to recompute the addition for setting CC.  */
+-    tcg_gen_add_i64(o->out, o->in1, o->in2);
++    if (addu64) {
++        tcg_gen_movi_i64(cc_src, 0);
++        tcg_gen_add2_i64(o->out, cc_src, o->in1, cc_src, o->in2, cc_src);
++    } else {
++        tcg_gen_add_i64(o->out, o->in1, o->in2);
++    }
+     return DISAS_NEXT;
+ }
+ 
++static DisasJumpType op_laa(DisasContext *s, DisasOps *o)
++{
++    return help_laa(s, o, false);
++}
++
++static DisasJumpType op_laa_addu64(DisasContext *s, DisasOps *o)
++{
++    return help_laa(s, o, true);
++}
++
+ static DisasJumpType op_lan(DisasContext *s, DisasOps *o)
+ {
+     /* The real output is indeed the original value in memory;
+diff --git a/target/tricore/cpu.c b/target/tricore/cpu.c
+index 2c54a2825f..0594d3843b 100644
+--- a/target/tricore/cpu.c
++++ b/target/tricore/cpu.c
+@@ -100,14 +100,14 @@ static void tricore_cpu_realizefn(DeviceState *dev, Error **errp)
+     }
+ 
+     /* Some features automatically imply others */
+-    if (tricore_feature(env, TRICORE_FEATURE_161)) {
++    if (tricore_has_feature(env, TRICORE_FEATURE_161)) {
+         set_feature(env, TRICORE_FEATURE_16);
+     }
+ 
+-    if (tricore_feature(env, TRICORE_FEATURE_16)) {
++    if (tricore_has_feature(env, TRICORE_FEATURE_16)) {
+         set_feature(env, TRICORE_FEATURE_131);
+     }
+-    if (tricore_feature(env, TRICORE_FEATURE_131)) {
++    if (tricore_has_feature(env, TRICORE_FEATURE_131)) {
+         set_feature(env, TRICORE_FEATURE_13);
+     }
+     cpu_reset(cs);
+diff --git a/target/tricore/cpu.h b/target/tricore/cpu.h
+index 3b9c533a7c..2e122b44a7 100644
+--- a/target/tricore/cpu.h
++++ b/target/tricore/cpu.h
+@@ -269,7 +269,7 @@ enum tricore_features {
+     TRICORE_FEATURE_161,
+ };
+ 
+-static inline int tricore_feature(CPUTriCoreState *env, int feature)
++static inline int tricore_has_feature(CPUTriCoreState *env, int feature)
+ {
+     return (env->features & (1ULL << feature)) != 0;
+ }
+diff --git a/target/tricore/op_helper.c b/target/tricore/op_helper.c
+index 532ae6b74c..676529f754 100644
+--- a/target/tricore/op_helper.c
++++ b/target/tricore/op_helper.c
+@@ -2528,7 +2528,7 @@ void helper_ret(CPUTriCoreState *env)
+     /* PCXI = new_PCXI; */
+     env->PCXI = new_PCXI;
+ 
+-    if (tricore_feature(env, TRICORE_FEATURE_13)) {
++    if (tricore_has_feature(env, TRICORE_FEATURE_13)) {
+         /* PSW = new_PSW */
+         psw_write(env, new_PSW);
+     } else {
+@@ -2639,7 +2639,7 @@ void helper_rfm(CPUTriCoreState *env)
+     env->gpr_a[10] = cpu_ldl_data(env, env->DCX+8);
+     env->gpr_a[11] = cpu_ldl_data(env, env->DCX+12);
+ 
+-    if (tricore_feature(env, TRICORE_FEATURE_131)) {
++    if (tricore_has_feature(env, TRICORE_FEATURE_131)) {
+         env->DBGTCR = 0;
+     }
+ }
+diff --git a/tests/migration/s390x/Makefile b/tests/migration/s390x/Makefile
+index 6393c3e5b9..6671de2efc 100644
+--- a/tests/migration/s390x/Makefile
++++ b/tests/migration/s390x/Makefile
+@@ -6,8 +6,8 @@ all: a-b-bios.h
+ fwdir=../../../pc-bios/s390-ccw
+ 
+ CFLAGS+=-ffreestanding -fno-delete-null-pointer-checks -fPIE -Os \
+-	-msoft-float -march=z900 -fno-asynchronous-unwind-tables -Wl,-pie \
+-	-Wl,--build-id=none -nostdlib
++	-msoft-float -march=z900 -fno-asynchronous-unwind-tables \
++	-fno-stack-protector -Wl,-pie -Wl,--build-id=none -nostdlib
+ 
+ a-b-bios.h: s390x.elf
+ 	echo "$$__note" > header.tmp
+diff --git a/tests/qemu-iotests/024 b/tests/qemu-iotests/024
+index 25a564a150..98a7c8fd65 100755
+--- a/tests/qemu-iotests/024
++++ b/tests/qemu-iotests/024
+@@ -199,6 +199,63 @@ echo
+ # $BASE_OLD and $BASE_NEW)
+ $QEMU_IMG map "$OVERLAY" | _filter_qemu_img_map
+ 
++# Check that rebase within the chain is working when
++# overlay_size > old_backing_size
++#
++# base_new <-- base_old <-- overlay
++#
++# Backing (new): 11 11 11 11 11
++# Backing (old): 22 22 22 22
++# Overlay:       -- -- -- -- --
++#
++# As a result, overlay should contain data identical to base_old, with the
++# last cluster remaining unallocated.
++
++echo
++echo "=== Test rebase within one backing chain ==="
++echo
++
++echo "Creating backing chain"
++echo
++
++TEST_IMG=$BASE_NEW _make_test_img $(( CLUSTER_SIZE * 5 ))
++TEST_IMG=$BASE_OLD _make_test_img -b "$BASE_NEW" -F $IMGFMT \
++    $(( CLUSTER_SIZE * 4 ))
++TEST_IMG=$OVERLAY _make_test_img -b "$BASE_OLD" -F $IMGFMT \
++    $(( CLUSTER_SIZE * 5 ))
++
++echo
++echo "Fill backing files with data"
++echo
++
++$QEMU_IO "$BASE_NEW" -c "write -P 0x11 0 $(( CLUSTER_SIZE * 5 ))" \
++    | _filter_qemu_io
++$QEMU_IO "$BASE_OLD" -c "write -P 0x22 0 $(( CLUSTER_SIZE * 4 ))" \
++    | _filter_qemu_io
++
++echo
++echo "Check the last cluster is zeroed in overlay before the rebase"
++echo
++$QEMU_IO "$OVERLAY" -c "read -P 0x00 $(( CLUSTER_SIZE * 4 )) $CLUSTER_SIZE" \
++    | _filter_qemu_io
++
++echo
++echo "Rebase onto another image in the same chain"
++echo
++
++$QEMU_IMG rebase -b "$BASE_NEW" -F $IMGFMT "$OVERLAY"
++
++echo "Verify that data is read the same before and after rebase"
++echo
++
++# Verify the first 4 clusters are still read the same as in the old base
++$QEMU_IO "$OVERLAY" -c "read -P 0x22 0 $(( CLUSTER_SIZE * 4 ))" \
++    | _filter_qemu_io
++# Verify the last cluster still reads as zeroes
++$QEMU_IO "$OVERLAY" -c "read -P 0x00 $(( CLUSTER_SIZE * 4 )) $CLUSTER_SIZE" \
++    | _filter_qemu_io
++
++echo
+ 
+ # success, all done
+ echo "*** done"
+diff --git a/tests/qemu-iotests/024.out b/tests/qemu-iotests/024.out
+index 973a5a3711..245fe8b1d1 100644
+--- a/tests/qemu-iotests/024.out
++++ b/tests/qemu-iotests/024.out
+@@ -171,4 +171,34 @@ read 65536/65536 bytes at offset 196608
+ Offset          Length          File
+ 0               0x30000         TEST_DIR/subdir/t.IMGFMT
+ 0x30000         0x10000         TEST_DIR/subdir/t.IMGFMT.base_new
++
++=== Test rebase within one backing chain ===
++
++Creating backing chain
++
++Formatting 'TEST_DIR/subdir/t.IMGFMT.base_new', fmt=IMGFMT size=327680
++Formatting 'TEST_DIR/subdir/t.IMGFMT.base_old', fmt=IMGFMT size=262144 backing_file=TEST_DIR/subdir/t.IMGFMT.base_new backing_fmt=IMGFMT
++Formatting 'TEST_DIR/subdir/t.IMGFMT', fmt=IMGFMT size=327680 backing_file=TEST_DIR/subdir/t.IMGFMT.base_old backing_fmt=IMGFMT
++
++Fill backing files with data
++
++wrote 327680/327680 bytes at offset 0
++320 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++wrote 262144/262144 bytes at offset 0
++256 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++Check the last cluster is zeroed in overlay before the rebase
++
++read 65536/65536 bytes at offset 262144
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
++Rebase onto another image in the same chain
++
++Verify that data is read the same before and after rebase
++
++read 262144/262144 bytes at offset 0
++256 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 65536/65536 bytes at offset 262144
++64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++
+ *** done
+diff --git a/tests/qtest/ahci-test.c b/tests/qtest/ahci-test.c
+index 66652fed04..388223291f 100644
+--- a/tests/qtest/ahci-test.c
++++ b/tests/qtest/ahci-test.c
+@@ -1424,6 +1424,89 @@ static void test_reset(void)
+     ahci_shutdown(ahci);
+ }
+ 
++static void test_reset_pending_callback(void)
++{
++    AHCIQState *ahci;
++    AHCICommand *cmd;
++    uint8_t port;
++    uint64_t ptr1;
++    uint64_t ptr2;
++
++    int bufsize = 4 * 1024;
++    int speed = bufsize + (bufsize / 2);
++    int offset1 = 0;
++    int offset2 = bufsize / AHCI_SECTOR_SIZE;
++
++    g_autofree unsigned char *tx1 = g_malloc(bufsize);
++    g_autofree unsigned char *tx2 = g_malloc(bufsize);
++    g_autofree unsigned char *rx1 = g_malloc0(bufsize);
++    g_autofree unsigned char *rx2 = g_malloc0(bufsize);
++
++    /* Uses throttling to make test independent of specific environment. */
++    ahci = ahci_boot_and_enable("-drive if=none,id=drive0,file=%s,"
++                                "cache=writeback,format=%s,"
++                                "throttling.bps-write=%d "
++                                "-M q35 "
++                                "-device ide-hd,drive=drive0 ",
++                                tmp_path, imgfmt, speed);
++
++    port = ahci_port_select(ahci);
++    ahci_port_clear(ahci, port);
++
++    ptr1 = ahci_alloc(ahci, bufsize);
++    ptr2 = ahci_alloc(ahci, bufsize);
++
++    g_assert(ptr1 && ptr2);
++
++    /* Need two different patterns. */
++    do {
++        generate_pattern(tx1, bufsize, AHCI_SECTOR_SIZE);
++        generate_pattern(tx2, bufsize, AHCI_SECTOR_SIZE);
++    } while (memcmp(tx1, tx2, bufsize) == 0);
++
++    qtest_bufwrite(ahci->parent->qts, ptr1, tx1, bufsize);
++    qtest_bufwrite(ahci->parent->qts, ptr2, tx2, bufsize);
++
++    /* Write to beginning of disk to check it wasn't overwritten later. */
++    ahci_guest_io(ahci, port, CMD_WRITE_DMA_EXT, ptr1, bufsize, offset1);
++
++    /* Issue asynchronously to get a pending callback during reset. */
++    cmd = ahci_command_create(CMD_WRITE_DMA_EXT);
++    ahci_command_adjust(cmd, offset2, ptr2, bufsize, 0);
++    ahci_command_commit(ahci, cmd, port);
++    ahci_command_issue_async(ahci, cmd);
++
++    ahci_set(ahci, AHCI_GHC, AHCI_GHC_HR);
++
++    ahci_command_free(cmd);
++
++    /* Wait for throttled write to finish. */
++    sleep(1);
++
++    /* Start again. */
++    ahci_clean_mem(ahci);
++    ahci_pci_enable(ahci);
++    ahci_hba_enable(ahci);
++    port = ahci_port_select(ahci);
++    ahci_port_clear(ahci, port);
++
++    /* Read and verify. */
++    ahci_guest_io(ahci, port, CMD_READ_DMA_EXT, ptr1, bufsize, offset1);
++    qtest_bufread(ahci->parent->qts, ptr1, rx1, bufsize);
++    g_assert_cmphex(memcmp(tx1, rx1, bufsize), ==, 0);
++
++    ahci_guest_io(ahci, port, CMD_READ_DMA_EXT, ptr2, bufsize, offset2);
++    qtest_bufread(ahci->parent->qts, ptr2, rx2, bufsize);
++    g_assert_cmphex(memcmp(tx2, rx2, bufsize), ==, 0);
++
++    ahci_free(ahci, ptr1);
++    ahci_free(ahci, ptr2);
++
++    ahci_clean_mem(ahci);
++
++    ahci_shutdown(ahci);
++}
++
+ static void test_ncq_simple(void)
+ {
+     AHCIQState *ahci;
+@@ -1943,7 +2026,8 @@ int main(int argc, char **argv)
+     qtest_add_func("/ahci/migrate/dma/halted", test_migrate_halted_dma);
+ 
+     qtest_add_func("/ahci/max", test_max);
+-    qtest_add_func("/ahci/reset", test_reset);
++    qtest_add_func("/ahci/reset/simple", test_reset);
++    qtest_add_func("/ahci/reset/pending_callback", test_reset_pending_callback);
+ 
+     qtest_add_func("/ahci/io/ncq/simple", test_ncq_simple);
+     qtest_add_func("/ahci/migrate/ncq/simple", test_migrate_ncq);
+diff --git a/tests/tcg/Makefile.target b/tests/tcg/Makefile.target
+index 14bc013181..368a053392 100644
+--- a/tests/tcg/Makefile.target
++++ b/tests/tcg/Makefile.target
+@@ -123,7 +123,7 @@ else
+ # For softmmu targets we include a different Makefile fragement as the
+ # build options for bare programs are usually pretty different. They
+ # are expected to provide their own build recipes.
+-EXTRA_CFLAGS += -ffreestanding
++EXTRA_CFLAGS += -ffreestanding -fno-stack-protector
+ -include $(SRC_PATH)/tests/tcg/minilib/Makefile.target
+ -include $(SRC_PATH)/tests/tcg/multiarch/system/Makefile.softmmu-target
+ -include $(SRC_PATH)/tests/tcg/$(TARGET_NAME)/Makefile.softmmu-target
+diff --git a/tests/tcg/aarch64/Makefile.target b/tests/tcg/aarch64/Makefile.target
+index fc8d90ed69..a72578fccb 100644
+--- a/tests/tcg/aarch64/Makefile.target
++++ b/tests/tcg/aarch64/Makefile.target
+@@ -38,7 +38,7 @@ endif
+ # bti-1 tests the elf notes, so we require special compiler support.
+ ifneq ($(CROSS_CC_HAS_ARMV8_BTI),)
+ AARCH64_TESTS += bti-1 bti-3
+-bti-1 bti-3: CFLAGS += -mbranch-protection=standard
++bti-1 bti-3: CFLAGS += -fno-stack-protector -mbranch-protection=standard
+ bti-1 bti-3: LDFLAGS += -nostdlib
+ endif
+ # bti-2 tests PROT_BTI, so no special compiler support required.
+diff --git a/tests/tcg/arm/Makefile.target b/tests/tcg/arm/Makefile.target
+index b3b1504a1c..6b69672fcf 100644
+--- a/tests/tcg/arm/Makefile.target
++++ b/tests/tcg/arm/Makefile.target
+@@ -12,7 +12,7 @@ float_madds: CFLAGS+=-mfpu=neon-vfpv4
+ 
+ # Basic Hello World
+ ARM_TESTS = hello-arm
+-hello-arm: CFLAGS+=-marm -ffreestanding
++hello-arm: CFLAGS+=-marm -ffreestanding -fno-stack-protector
+ hello-arm: LDFLAGS+=-nostdlib
+ 
+ # IWMXT floating point extensions
+diff --git a/tests/tcg/cris/Makefile.target b/tests/tcg/cris/Makefile.target
+index 372287bd03..ea1053236f 100644
+--- a/tests/tcg/cris/Makefile.target
++++ b/tests/tcg/cris/Makefile.target
+@@ -30,7 +30,7 @@ AS	= $(CC) -x assembler-with-cpp
+ LD      = $(CC)
+ 
+ # we rely on GCC inline:ing the stuff we tell it to in many places here.
+-CFLAGS  = -Winline -Wall -g -O2 -static
++CFLAGS  = -Winline -Wall -g -O2 -static -fno-stack-protector
+ NOSTDFLAGS = -nostartfiles -nostdlib
+ ASFLAGS += -mcpu=v10 -g -Wa,-I,$(SRC_PATH)/tests/tcg/cris/bare
+ CRT_FILES = crt.o sys.o
+diff --git a/tests/tcg/hexagon/Makefile.target b/tests/tcg/hexagon/Makefile.target
+index 96a4d7a614..1b2b26e843 100644
+--- a/tests/tcg/hexagon/Makefile.target
++++ b/tests/tcg/hexagon/Makefile.target
+@@ -19,7 +19,7 @@
+ EXTRA_RUNS =
+ 
+ CFLAGS += -Wno-incompatible-pointer-types -Wno-undefined-internal
+-CFLAGS += -fno-unroll-loops
++CFLAGS += -fno-unroll-loops -fno-stack-protector
+ 
+ HEX_SRC=$(SRC_PATH)/tests/tcg/hexagon
+ VPATH += $(HEX_SRC)
+diff --git a/tests/tcg/i386/Makefile.target b/tests/tcg/i386/Makefile.target
+index bafd8c2180..3aec3bba77 100644
+--- a/tests/tcg/i386/Makefile.target
++++ b/tests/tcg/i386/Makefile.target
+@@ -35,7 +35,7 @@ run-plugin-test-i386-adcox-%: QEMU_OPTS += -cpu max
+ #
+ # hello-i386 is a barebones app
+ #
+-hello-i386: CFLAGS+=-ffreestanding
++hello-i386: CFLAGS+=-ffreestanding -fno-stack-protector
+ hello-i386: LDFLAGS+=-nostdlib
+ 
+ # test-386 includes a couple of additional objects that need to be
+diff --git a/tests/tcg/i386/test-avx.py b/tests/tcg/i386/test-avx.py
+index d9ca00a49e..641a2ef69e 100755
+--- a/tests/tcg/i386/test-avx.py
++++ b/tests/tcg/i386/test-avx.py
+@@ -49,7 +49,7 @@
+     'VEXTRACT[FI]128': 0x01,
+     'VINSERT[FI]128': 0x01,
+     'VPBLENDD': 0xff,
+-    'VPERM2[FI]128': 0x33,
++    'VPERM2[FI]128': 0xbb,
+     'VPERMPD': 0xff,
+     'VPERMQ': 0xff,
+     'VPERMILPS': 0xff,
+diff --git a/tests/tcg/minilib/Makefile.target b/tests/tcg/minilib/Makefile.target
+index c821d2806a..af0bf54be9 100644
+--- a/tests/tcg/minilib/Makefile.target
++++ b/tests/tcg/minilib/Makefile.target
+@@ -12,7 +12,7 @@ SYSTEM_MINILIB_SRC=$(SRC_PATH)/tests/tcg/minilib
+ MINILIB_SRCS=$(wildcard $(SYSTEM_MINILIB_SRC)/*.c)
+ MINILIB_OBJS=$(patsubst $(SYSTEM_MINILIB_SRC)/%.c, %.o, $(MINILIB_SRCS))
+ 
+-MINILIB_CFLAGS+=-nostdlib -ggdb -O0
++MINILIB_CFLAGS+=-nostdlib -fno-stack-protector -ggdb -O0
+ MINILIB_INC=-isystem $(SYSTEM_MINILIB_SRC)
+ 
+ .PRECIOUS: $(MINILIB_OBJS)
+diff --git a/tests/tcg/mips/Makefile.target b/tests/tcg/mips/Makefile.target
+index 1a994d5525..5d17c1706e 100644
+--- a/tests/tcg/mips/Makefile.target
++++ b/tests/tcg/mips/Makefile.target
+@@ -14,6 +14,6 @@ MIPS_TESTS=hello-mips
+ 
+ TESTS += $(MIPS_TESTS)
+ 
+-hello-mips: CFLAGS+=-mno-abicalls -fno-PIC -mabi=32
++hello-mips: CFLAGS+=-mno-abicalls -fno-PIC -fno-stack-protector -mabi=32
+ hello-mips: LDFLAGS+=-nostdlib
+ endif
+diff --git a/tests/tcg/mips/hello-mips.c b/tests/tcg/mips/hello-mips.c
+index 4e1cf501af..38e22d00e3 100644
+--- a/tests/tcg/mips/hello-mips.c
++++ b/tests/tcg/mips/hello-mips.c
+@@ -5,8 +5,8 @@
+ * http://www.linux-mips.org/wiki/MIPSABIHistory
+ * http://www.linux.com/howtos/Assembly-HOWTO/mips.shtml
+ *
+-* mipsel-linux-gcc -nostdlib -mno-abicalls -fno-PIC -mabi=32 \
+-*                  -O2 -static -o hello-mips hello-mips.c
++* mipsel-linux-gcc -nostdlib -mno-abicalls -fno-PIC -fno-stack-protector \
++*                  -mabi=32 -O2 -static -o hello-mips hello-mips.c
+ *
+ */
+ #define __NR_SYSCALL_BASE	4000
+diff --git a/tests/tcg/s390x/Makefile.target b/tests/tcg/s390x/Makefile.target
+index cb90d4183d..ea9fa67152 100644
+--- a/tests/tcg/s390x/Makefile.target
++++ b/tests/tcg/s390x/Makefile.target
+@@ -24,6 +24,7 @@ TESTS+=trap
+ TESTS+=signals-s390x
+ TESTS+=branch-relative-long
+ TESTS+=noexec
++TESTS+=laalg
+ 
+ Z13_TESTS=vistr
+ Z13_TESTS+=lcbb
+diff --git a/tests/tcg/s390x/laalg.c b/tests/tcg/s390x/laalg.c
+new file mode 100644
+index 0000000000..797d168bb1
+--- /dev/null
++++ b/tests/tcg/s390x/laalg.c
+@@ -0,0 +1,27 @@
++/*
++ * Test the LAALG instruction.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#include <assert.h>
++#include <stdlib.h>
++
++int main(void)
++{
++    unsigned long cc = 0, op1, op2 = 40, op3 = 2;
++
++    asm("slgfi %[cc],1\n"  /* Set cc_src = -1. */
++        "laalg %[op1],%[op3],%[op2]\n"
++        "ipm %[cc]"
++        : [cc] "+r" (cc)
++        , [op1] "=r" (op1)
++        , [op2] "+T" (op2)
++        : [op3] "r" (op3)
++        : "cc");
++
++    assert(cc == 0xffffffff10ffffff);
++    assert(op1 == 40);
++    assert(op2 == 42);
++
++    return EXIT_SUCCESS;
++}
+diff --git a/ui/gtk-egl.c b/ui/gtk-egl.c
+index e99e3b0d8c..52c6246a33 100644
+--- a/ui/gtk-egl.c
++++ b/ui/gtk-egl.c
+@@ -66,15 +66,16 @@ void gd_egl_draw(VirtualConsole *vc)
+ #ifdef CONFIG_GBM
+     QemuDmaBuf *dmabuf = vc->gfx.guest_fb.dmabuf;
+ #endif
+-    int ww, wh;
++    int ww, wh, ws;
+ 
+     if (!vc->gfx.gls) {
+         return;
+     }
+ 
+     window = gtk_widget_get_window(vc->gfx.drawing_area);
+-    ww = gdk_window_get_width(window);
+-    wh = gdk_window_get_height(window);
++    ws = gdk_window_get_scale_factor(window);
++    ww = gdk_window_get_width(window) * ws;
++    wh = gdk_window_get_height(window) * ws;
+ 
+     if (vc->gfx.scanout_mode) {
+ #ifdef CONFIG_GBM
+@@ -300,7 +301,7 @@ void gd_egl_scanout_flush(DisplayChangeListener *dcl,
+ {
+     VirtualConsole *vc = container_of(dcl, VirtualConsole, gfx.dcl);
+     GdkWindow *window;
+-    int ww, wh;
++    int ww, wh, ws;
+ 
+     if (!vc->gfx.scanout_mode) {
+         return;
+@@ -313,8 +314,9 @@ void gd_egl_scanout_flush(DisplayChangeListener *dcl,
+                    vc->gfx.esurface, vc->gfx.ectx);
+ 
+     window = gtk_widget_get_window(vc->gfx.drawing_area);
+-    ww = gdk_window_get_width(window);
+-    wh = gdk_window_get_height(window);
++    ws = gdk_window_get_scale_factor(window);
++    ww = gdk_window_get_width(window) * ws;
++    wh = gdk_window_get_height(window) * ws;
+     egl_fb_setup_default(&vc->gfx.win_fb, ww, wh);
+     if (vc->gfx.cursor_fb.texture) {
+         egl_texture_blit(vc->gfx.gls, &vc->gfx.win_fb, &vc->gfx.guest_fb,
+diff --git a/ui/gtk.c b/ui/gtk.c
+index e681e8c319..283c41a1a1 100644
+--- a/ui/gtk.c
++++ b/ui/gtk.c
+@@ -2317,6 +2317,7 @@ static void gtk_display_init(DisplayState *ds, DisplayOptions *opts)
+     GdkDisplay *window_display;
+     GtkIconTheme *theme;
+     char *dir;
++    int idx;
+ 
+     if (!gtkinit) {
+         fprintf(stderr, "gtk initialization failed\n");
+@@ -2379,6 +2380,15 @@ static void gtk_display_init(DisplayState *ds, DisplayOptions *opts)
+     gtk_container_add(GTK_CONTAINER(s->window), s->vbox);
+ 
+     gtk_widget_show_all(s->window);
++
++    for (idx = 0;; idx++) {
++        QemuConsole *con = qemu_console_lookup_by_index(idx);
++        if (!con) {
++            break;
++        }
++        gtk_widget_realize(s->vc[idx].gfx.drawing_area);
++    }
++
+     if (opts->u.gtk.has_show_menubar &&
+         !opts->u.gtk.show_menubar) {
+         gtk_widget_hide(s->menu_bar);
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 1856d57380..1ca16c0ff6 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -2219,7 +2219,7 @@ static void set_encodings(VncState *vs, int32_t *encodings, size_t n_encodings)
+             break;
+         case VNC_ENCODING_XVP:
+             if (vs->vd->power_control) {
+-                vs->features |= VNC_FEATURE_XVP;
++                vs->features |= VNC_FEATURE_XVP_MASK;
+                 send_xvp_message(vs, VNC_XVP_CODE_INIT);
+             }
+             break;
+@@ -2468,7 +2468,7 @@ static int protocol_client_msg(VncState *vs, uint8_t *data, size_t len)
+         vnc_client_cut_text(vs, read_u32(data, 4), data + 8);
+         break;
+     case VNC_MSG_CLIENT_XVP:
+-        if (!(vs->features & VNC_FEATURE_XVP)) {
++        if (!vnc_has_feature(vs, VNC_FEATURE_XVP)) {
+             error_report("vnc: xvp client message while disabled");
+             vnc_client_error(vs);
+             break;
+@@ -2565,7 +2565,7 @@ static int protocol_client_msg(VncState *vs, uint8_t *data, size_t len)
+                     vs, vs->ioc, vs->as.fmt, vs->as.nchannels, vs->as.freq);
+                 break;
+             default:
+-                VNC_DEBUG("Invalid audio message %d\n", read_u8(data, 4));
++                VNC_DEBUG("Invalid audio message %d\n", read_u8(data, 2));
+                 vnc_client_error(vs);
+                 break;
+             }

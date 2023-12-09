@@ -1,0 +1,3085 @@
+Subject: v7.2.6
+Date: Thu Sep 21 19:23:47 2023 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.5
+and upstream qemu v7.2.6.
+--
+ .gitlab-ci.d/check-dco.py              |   6 +-
+ .gitlab-ci.d/static_checks.yml         |   4 +-
+ VERSION                                |   2 +-
+ accel/kvm/kvm-all.c                    |   4 +-
+ backends/tpm/tpm_util.c                |  11 +-
+ docs/about/license.rst                 |   2 +-
+ docs/devel/multiple-iothreads.txt      |   7 +
+ docs/multi-thread-compression.txt      |  12 +-
+ docs/rdma.txt                          |   2 +-
+ dump/dump.c                            |   4 +-
+ hw/9pfs/xen-9p-backend.c               |   5 +-
+ hw/block/dataplane/virtio-blk.c        |   3 +-
+ hw/block/dataplane/xen-block.c         |   5 +-
+ hw/char/riscv_htif.c                   |   3 +-
+ hw/char/virtio-serial-bus.c            |   3 +-
+ hw/core/machine-smp.c                  |  10 +
+ hw/display/qxl.c                       |  14 +-
+ hw/display/virtio-gpu.c                |   6 +-
+ hw/i2c/aspeed_i2c.c                    |  36 +---
+ hw/ide/ahci.c                          | 113 ++++++++---
+ hw/ide/ahci_internal.h                 |   1 +
+ hw/ide/core.c                          |   6 +-
+ hw/intc/apic.c                         |   7 +
+ hw/intc/loongarch_ipi.c                |   4 +
+ hw/intc/riscv_aclint.c                 |  11 +-
+ hw/mips/loongson3_virt.c               |   2 -
+ hw/misc/bcm2835_property.c             |   7 +
+ hw/misc/imx_rngc.c                     |   6 +-
+ hw/misc/macio/mac_dbdma.c              |   2 +-
+ hw/net/virtio-net.c                    |   3 +-
+ hw/net/vmxnet3.c                       |   5 +-
+ hw/nvme/ctrl.c                         |   6 +-
+ hw/nvme/dif.c                          |   4 +-
+ hw/pci-host/raven.c                    |   7 +
+ hw/ppc/e500.c                          |   2 +-
+ hw/ppc/pnv_lpc.c                       |   3 +
+ hw/ppc/vof.c                           |   2 +
+ hw/riscv/virt.c                        |   2 +-
+ hw/s390x/s390-virtio-ccw.c             |   1 +
+ hw/scsi/lsi53c895a.c                   |   7 +
+ hw/scsi/mptsas.c                       |   3 +-
+ hw/scsi/scsi-bus.c                     |   3 +-
+ hw/scsi/vmw_pvscsi.c                   |   3 +-
+ hw/smbios/smbios.c                     |  16 +-
+ hw/tpm/tpm_tis_sysbus.c                |   1 -
+ hw/usb/dev-uas.c                       |   3 +-
+ hw/usb/hcd-dwc2.c                      |   3 +-
+ hw/usb/hcd-ehci.c                      |   3 +-
+ hw/usb/hcd-uhci.c                      |   2 +-
+ hw/usb/host-libusb.c                   |   6 +-
+ hw/usb/redirect.c                      |   6 +-
+ hw/usb/xen-usb.c                       |   3 +-
+ hw/virtio/virtio-balloon.c             |   5 +-
+ hw/virtio/virtio-crypto.c              |   3 +-
+ hw/virtio/virtio.c                     |  37 +++-
+ include/block/aio.h                    |  18 +-
+ include/exec/memory.h                  |   5 +
+ include/exec/user/abitypes.h           |  13 +-
+ include/hw/boards.h                    |   2 +
+ include/hw/i2c/aspeed_i2c.h            |   4 +-
+ include/hw/qdev-core.h                 |   7 +
+ include/hw/virtio/virtio-gpu-bswap.h   |   3 +
+ include/qemu/main-loop.h               |   7 +-
+ include/sysemu/kvm.h                   |   2 +
+ linux-user/elfload.c                   |   3 +-
+ linux-user/riscv/signal.c              |   4 +-
+ migration/block.c                      |  11 +-
+ python/.gitignore                      |   4 +-
+ python/Makefile                        |  53 +++--
+ python/Pipfile                         |  13 --
+ python/Pipfile.lock                    | 347 ---------------------------------
+ python/README.rst                      |   3 -
+ python/setup.cfg                       |   4 +-
+ python/tests/minreqs.txt               |  45 +++++
+ qemu-options.hx                        |  20 +-
+ scripts/checkpatch.pl                  |   8 +
+ softmmu/memory.c                       |  16 ++
+ target/arm/kvm.c                       |   7 +
+ target/arm/kvm64.c                     |   1 +
+ target/arm/sme_helper.c                |   2 +-
+ target/arm/translate.c                 |   2 +-
+ target/i386/kvm/kvm.c                  |   5 +
+ target/mips/kvm.c                      |   2 +-
+ target/mips/kvm_mips.h                 |   9 -
+ target/ppc/cpu.c                       |   1 +
+ target/ppc/kvm.c                       |   5 +
+ target/riscv/kvm.c                     |   5 +
+ target/riscv/pmp.c                     |   4 +
+ target/s390x/kvm/kvm.c                 |   5 +
+ target/s390x/tcg/translate_vx.c.inc    |   6 +-
+ target/s390x/tcg/vec_helper.c          |   2 +-
+ target/s390x/tcg/vec_string_helper.c   |  54 ++---
+ tests/docker/dockerfiles/python.docker |   1 -
+ tests/qemu-iotests/181                 |   2 +-
+ tests/qtest/libqos/ahci.c              | 106 +++++++---
+ tests/qtest/libqos/ahci.h              |   8 +-
+ tests/qtest/test-hmp.c                 |   6 +-
+ tests/unit/ptimer-test-stubs.c         |   3 +-
+ ui/console.c                           |   3 +
+ util/async.c                           |  20 +-
+ util/main-loop.c                       |   6 +-
+ util/trace-events                      |   1 +
+ 102 files changed, 656 insertions(+), 639 deletions(-)
+
+diff --git a/.gitlab-ci.d/check-dco.py b/.gitlab-ci.d/check-dco.py
+index 632c8bcce8..b929571eed 100755
+--- a/.gitlab-ci.d/check-dco.py
++++ b/.gitlab-ci.d/check-dco.py
+@@ -20,12 +20,12 @@
+ repourl = "https://gitlab.com/%s/%s.git" % (namespace, reponame)
+ 
+ subprocess.check_call(["git", "remote", "add", "check-dco", repourl])
+-subprocess.check_call(["git", "fetch", "check-dco", "master"],
++subprocess.check_call(["git", "fetch", "check-dco", "stable-7.2"],
+                       stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+ 
+ ancestor = subprocess.check_output(["git", "merge-base",
+-                                    "check-dco/master", "HEAD"],
++                                    "check-dco/stable-7.2", "HEAD"],
+                                    universal_newlines=True)
+ 
+ ancestor = ancestor.strip()
+@@ -85,7 +85,7 @@
+ 
+ To bulk update all commits on current branch "git rebase" can be used:
+ 
+-  git rebase -i master -x 'git commit --amend --no-edit -s'
++  git rebase -i stable-7.2 -x 'git commit --amend --no-edit -s'
+ 
+ """)
+ 
+diff --git a/.gitlab-ci.d/static_checks.yml b/.gitlab-ci.d/static_checks.yml
+index 289ad1359e..b4cbdbce2a 100644
+--- a/.gitlab-ci.d/static_checks.yml
++++ b/.gitlab-ci.d/static_checks.yml
+@@ -23,12 +23,12 @@ check-dco:
+   before_script:
+     - apk -U add git
+ 
+-check-python-pipenv:
++check-python-minreqs:
+   extends: .base_job_template
+   stage: test
+   image: $CI_REGISTRY_IMAGE/qemu/python:latest
+   script:
+-    - make -C python check-pipenv
++    - make -C python check-minreqs
+   variables:
+     GIT_DEPTH: 1
+   needs:
+diff --git a/VERSION b/VERSION
+index 8aea167e72..ba6a7620d4 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.5
++7.2.6
+diff --git a/accel/kvm/kvm-all.c b/accel/kvm/kvm-all.c
+index f99b0becd8..0a127ece11 100644
+--- a/accel/kvm/kvm-all.c
++++ b/accel/kvm/kvm-all.c
+@@ -2294,7 +2294,7 @@ static int kvm_init(MachineState *ms)
+     KVMState *s;
+     const KVMCapabilityInfo *missing_cap;
+     int ret;
+-    int type = 0;
++    int type;
+     uint64_t dirty_log_manual_caps;
+ 
+     qemu_mutex_init(&kml_slots_lock);
+@@ -2358,6 +2358,8 @@ static int kvm_init(MachineState *ms)
+         type = mc->kvm_type(ms, kvm_type);
+     } else if (mc->kvm_type) {
+         type = mc->kvm_type(ms, NULL);
++    } else {
++        type = kvm_arch_get_default_type(ms);
+     }
+ 
+     do {
+diff --git a/backends/tpm/tpm_util.c b/backends/tpm/tpm_util.c
+index a6e6d3e72f..a9d6f7a1c4 100644
+--- a/backends/tpm/tpm_util.c
++++ b/backends/tpm/tpm_util.c
+@@ -112,12 +112,8 @@ static int tpm_util_request(int fd,
+                             void *response,
+                             size_t responselen)
+ {
+-    fd_set readfds;
++    GPollFD fds[1] = { {.fd = fd, .events = G_IO_IN } };
+     int n;
+-    struct timeval tv = {
+-        .tv_sec = 1,
+-        .tv_usec = 0,
+-    };
+ 
+     n = write(fd, request, requestlen);
+     if (n < 0) {
+@@ -127,11 +123,8 @@ static int tpm_util_request(int fd,
+         return -EFAULT;
+     }
+ 
+-    FD_ZERO(&readfds);
+-    FD_SET(fd, &readfds);
+-
+     /* wait for a second */
+-    n = select(fd + 1, &readfds, NULL, NULL, &tv);
++    TFR(n = g_poll(fds, 1, 1000));
+     if (n != 1) {
+         return -errno;
+     }
+diff --git a/docs/about/license.rst b/docs/about/license.rst
+index cde3d2d25d..303c55d61b 100644
+--- a/docs/about/license.rst
++++ b/docs/about/license.rst
+@@ -8,4 +8,4 @@ QEMU is a trademark of Fabrice Bellard.
+ QEMU is released under the `GNU General Public
+ License <https://www.gnu.org/licenses/gpl-2.0.txt>`__, version 2. Parts
+ of QEMU have specific licenses, see file
+-`LICENSE <https://git.qemu.org/?p=qemu.git;a=blob_plain;f=LICENSE>`__.
++`LICENSE <https://gitlab.com/qemu-project/qemu/-/raw/master/LICENSE>`__.
+diff --git a/docs/devel/multiple-iothreads.txt b/docs/devel/multiple-iothreads.txt
+index 343120f2ef..a3e949f6b3 100644
+--- a/docs/devel/multiple-iothreads.txt
++++ b/docs/devel/multiple-iothreads.txt
+@@ -61,6 +61,7 @@ There are several old APIs that use the main loop AioContext:
+  * LEGACY qemu_aio_set_event_notifier() - monitor an event notifier
+  * LEGACY timer_new_ms() - create a timer
+  * LEGACY qemu_bh_new() - create a BH
++ * LEGACY qemu_bh_new_guarded() - create a BH with a device re-entrancy guard
+  * LEGACY qemu_aio_wait() - run an event loop iteration
+ 
+ Since they implicitly work on the main loop they cannot be used in code that
+@@ -72,8 +73,14 @@ Instead, use the AioContext functions directly (see include/block/aio.h):
+  * aio_set_event_notifier() - monitor an event notifier
+  * aio_timer_new() - create a timer
+  * aio_bh_new() - create a BH
++ * aio_bh_new_guarded() - create a BH with a device re-entrancy guard
+  * aio_poll() - run an event loop iteration
+ 
++The qemu_bh_new_guarded/aio_bh_new_guarded APIs accept a "MemReentrancyGuard"
++argument, which is used to check for and prevent re-entrancy problems. For
++BHs associated with devices, the reentrancy-guard is contained in the
++corresponding DeviceState and named "mem_reentrancy_guard".
++
+ The AioContext can be obtained from the IOThread using
+ iothread_get_aio_context() or for the main loop using qemu_get_aio_context().
+ Code that takes an AioContext argument works both in IOThreads or the main
+diff --git a/docs/multi-thread-compression.txt b/docs/multi-thread-compression.txt
+index bb88c6bdf1..95b1556f67 100644
+--- a/docs/multi-thread-compression.txt
++++ b/docs/multi-thread-compression.txt
+@@ -117,13 +117,13 @@ to support the multiple thread compression migration:
+     {qemu} migrate_set_capability compress on
+ 
+ 3. Set the compression thread count on source:
+-    {qemu} migrate_set_parameter compress_threads 12
++    {qemu} migrate_set_parameter compress-threads 12
+ 
+ 4. Set the compression level on the source:
+-    {qemu} migrate_set_parameter compress_level 1
++    {qemu} migrate_set_parameter compress-level 1
+ 
+ 5. Set the decompression thread count on destination:
+-    {qemu} migrate_set_parameter decompress_threads 3
++    {qemu} migrate_set_parameter decompress-threads 3
+ 
+ 6. Start outgoing migration:
+     {qemu} migrate -d tcp:destination.host:4444
+@@ -133,9 +133,9 @@ to support the multiple thread compression migration:
+ 
+ The following are the default settings:
+     compress: off
+-    compress_threads: 8
+-    decompress_threads: 2
+-    compress_level: 1 (which means best speed)
++    compress-threads: 8
++    decompress-threads: 2
++    compress-level: 1 (which means best speed)
+ 
+ So, only the first two steps are required to use the multiple
+ thread compression in migration. You can do more if the default
+diff --git a/docs/rdma.txt b/docs/rdma.txt
+index 2b4cdea1d8..bd8dd799a9 100644
+--- a/docs/rdma.txt
++++ b/docs/rdma.txt
+@@ -89,7 +89,7 @@ RUNNING:
+ First, set the migration speed to match your hardware's capabilities:
+ 
+ QEMU Monitor Command:
+-$ migrate_set_parameter max_bandwidth 40g # or whatever is the MAX of your RDMA device
++$ migrate_set_parameter max-bandwidth 40g # or whatever is the MAX of your RDMA device
+ 
+ Next, on the destination machine, add the following to the QEMU command line:
+ 
+diff --git a/dump/dump.c b/dump/dump.c
+index df117c847f..0f3b6a58d5 100644
+--- a/dump/dump.c
++++ b/dump/dump.c
+@@ -1298,8 +1298,8 @@ static bool get_next_page(GuestPhysBlock **blockptr, uint64_t *pfnptr,
+ 
+             memcpy(buf + addr % page_size, hbuf, n);
+             addr += n;
+-            if (addr % page_size == 0) {
+-                /* we filled up the page */
++            if (addr % page_size == 0 || addr >= block->target_end) {
++                /* we filled up the page or the current block is finished */
+                 break;
+             }
+         } else {
+diff --git a/hw/9pfs/xen-9p-backend.c b/hw/9pfs/xen-9p-backend.c
+index ab1df8dd2f..8459736f2d 100644
+--- a/hw/9pfs/xen-9p-backend.c
++++ b/hw/9pfs/xen-9p-backend.c
+@@ -62,6 +62,7 @@ typedef struct Xen9pfsDev {
+ 
+     int num_rings;
+     Xen9pfsRing *rings;
++    MemReentrancyGuard mem_reentrancy_guard;
+ } Xen9pfsDev;
+ 
+ static void xen_9pfs_disconnect(struct XenLegacyDevice *xendev);
+@@ -448,7 +449,9 @@ static int xen_9pfs_connect(struct XenLegacyDevice *xendev)
+         xen_9pdev->rings[i].ring.out = xen_9pdev->rings[i].data +
+                                        XEN_FLEX_RING_SIZE(ring_order);
+ 
+-        xen_9pdev->rings[i].bh = qemu_bh_new(xen_9pfs_bh, &xen_9pdev->rings[i]);
++        xen_9pdev->rings[i].bh = qemu_bh_new_guarded(xen_9pfs_bh,
++                                                     &xen_9pdev->rings[i],
++                                                     &xen_9pdev->mem_reentrancy_guard);
+         xen_9pdev->rings[i].out_cons = 0;
+         xen_9pdev->rings[i].out_size = 0;
+         xen_9pdev->rings[i].inprogress = false;
+diff --git a/hw/block/dataplane/virtio-blk.c b/hw/block/dataplane/virtio-blk.c
+index 26f965cabc..49e59cef8a 100644
+--- a/hw/block/dataplane/virtio-blk.c
++++ b/hw/block/dataplane/virtio-blk.c
+@@ -127,7 +127,8 @@ bool virtio_blk_data_plane_create(VirtIODevice *vdev, VirtIOBlkConf *conf,
+     } else {
+         s->ctx = qemu_get_aio_context();
+     }
+-    s->bh = aio_bh_new(s->ctx, notify_guest_bh, s);
++    s->bh = aio_bh_new_guarded(s->ctx, notify_guest_bh, s,
++                               &DEVICE(vdev)->mem_reentrancy_guard);
+     s->batch_notify_vqs = bitmap_new(conf->num_queues);
+ 
+     *dataplane = s;
+diff --git a/hw/block/dataplane/xen-block.c b/hw/block/dataplane/xen-block.c
+index 2785b9e849..e31806b317 100644
+--- a/hw/block/dataplane/xen-block.c
++++ b/hw/block/dataplane/xen-block.c
+@@ -632,8 +632,9 @@ XenBlockDataPlane *xen_block_dataplane_create(XenDevice *xendev,
+     } else {
+         dataplane->ctx = qemu_get_aio_context();
+     }
+-    dataplane->bh = aio_bh_new(dataplane->ctx, xen_block_dataplane_bh,
+-                               dataplane);
++    dataplane->bh = aio_bh_new_guarded(dataplane->ctx, xen_block_dataplane_bh,
++                                       dataplane,
++                                       &DEVICE(xendev)->mem_reentrancy_guard);
+ 
+     return dataplane;
+ }
+diff --git a/hw/char/riscv_htif.c b/hw/char/riscv_htif.c
+index 6577f0e640..c76d333cfc 100644
+--- a/hw/char/riscv_htif.c
++++ b/hw/char/riscv_htif.c
+@@ -146,7 +146,8 @@ static void htif_handle_tohost_write(HTIFState *htifstate, uint64_t val_written)
+             htifstate->env->mtohost = 0; /* clear to indicate we read */
+             return;
+         } else if (cmd == 0x1) {
+-            qemu_chr_fe_write(&htifstate->chr, (uint8_t *)&payload, 1);
++            uint8_t ch = (uint8_t)payload;
++            qemu_chr_fe_write(&htifstate->chr, &ch, 1);
+             resp = 0x100 | (uint8_t)payload;
+         } else {
+             qemu_log("HTIF device %d: unknown command\n", device);
+diff --git a/hw/char/virtio-serial-bus.c b/hw/char/virtio-serial-bus.c
+index 7d4601cb5d..dd619f0731 100644
+--- a/hw/char/virtio-serial-bus.c
++++ b/hw/char/virtio-serial-bus.c
+@@ -985,7 +985,8 @@ static void virtser_port_device_realize(DeviceState *dev, Error **errp)
+         return;
+     }
+ 
+-    port->bh = qemu_bh_new(flush_queued_data_bh, port);
++    port->bh = qemu_bh_new_guarded(flush_queued_data_bh, port,
++                                   &dev->mem_reentrancy_guard);
+     port->elem = NULL;
+ }
+ 
+diff --git a/hw/core/machine-smp.c b/hw/core/machine-smp.c
+index b39ed21e65..903834c0db 100644
+--- a/hw/core/machine-smp.c
++++ b/hw/core/machine-smp.c
+@@ -193,3 +193,13 @@ void machine_parse_smp_config(MachineState *ms,
+         return;
+     }
+ }
++
++unsigned int machine_topo_get_cores_per_socket(const MachineState *ms)
++{
++    return ms->smp.cores * ms->smp.clusters * ms->smp.dies;
++}
++
++unsigned int machine_topo_get_threads_per_socket(const MachineState *ms)
++{
++    return ms->smp.threads * machine_topo_get_cores_per_socket(ms);
++}
+diff --git a/hw/display/qxl.c b/hw/display/qxl.c
+index 6772849dec..6b38e55a21 100644
+--- a/hw/display/qxl.c
++++ b/hw/display/qxl.c
+@@ -1613,7 +1613,10 @@ static void qxl_set_mode(PCIQXLDevice *d, unsigned int modenr, int loadvm)
+     }
+ 
+     d->guest_slots[0].slot = slot;
+-    assert(qxl_add_memslot(d, 0, devmem, QXL_SYNC) == 0);
++    if (qxl_add_memslot(d, 0, devmem, QXL_SYNC) != 0) {
++        qxl_set_guest_bug(d, "device isn't initialized yet");
++        return;
++    }
+ 
+     d->guest_primary.surface = surface;
+     qxl_create_guest_primary(d, 0, QXL_SYNC);
+@@ -2223,11 +2226,14 @@ static void qxl_realize_common(PCIQXLDevice *qxl, Error **errp)
+ 
+     qemu_add_vm_change_state_handler(qxl_vm_change_state_handler, qxl);
+ 
+-    qxl->update_irq = qemu_bh_new(qxl_update_irq_bh, qxl);
++    qxl->update_irq = qemu_bh_new_guarded(qxl_update_irq_bh, qxl,
++                                          &DEVICE(qxl)->mem_reentrancy_guard);
+     qxl_reset_state(qxl);
+ 
+-    qxl->update_area_bh = qemu_bh_new(qxl_render_update_area_bh, qxl);
+-    qxl->ssd.cursor_bh = qemu_bh_new(qemu_spice_cursor_refresh_bh, &qxl->ssd);
++    qxl->update_area_bh = qemu_bh_new_guarded(qxl_render_update_area_bh, qxl,
++                                              &DEVICE(qxl)->mem_reentrancy_guard);
++    qxl->ssd.cursor_bh = qemu_bh_new_guarded(qemu_spice_cursor_refresh_bh, &qxl->ssd,
++                                             &DEVICE(qxl)->mem_reentrancy_guard);
+ }
+ 
+ static void qxl_realize_primary(PCIDevice *dev, Error **errp)
+diff --git a/hw/display/virtio-gpu.c b/hw/display/virtio-gpu.c
+index 4e2e0dd53a..7c13b056b9 100644
+--- a/hw/display/virtio-gpu.c
++++ b/hw/display/virtio-gpu.c
+@@ -1356,8 +1356,10 @@ void virtio_gpu_device_realize(DeviceState *qdev, Error **errp)
+ 
+     g->ctrl_vq = virtio_get_queue(vdev, 0);
+     g->cursor_vq = virtio_get_queue(vdev, 1);
+-    g->ctrl_bh = qemu_bh_new(virtio_gpu_ctrl_bh, g);
+-    g->cursor_bh = qemu_bh_new(virtio_gpu_cursor_bh, g);
++    g->ctrl_bh = qemu_bh_new_guarded(virtio_gpu_ctrl_bh, g,
++                                     &qdev->mem_reentrancy_guard);
++    g->cursor_bh = qemu_bh_new_guarded(virtio_gpu_cursor_bh, g,
++                                       &qdev->mem_reentrancy_guard);
+     QTAILQ_INIT(&g->reslist);
+     QTAILQ_INIT(&g->cmdq);
+     QTAILQ_INIT(&g->fenceq);
+diff --git a/hw/i2c/aspeed_i2c.c b/hw/i2c/aspeed_i2c.c
+index c166fd20fa..41d5f84a77 100644
+--- a/hw/i2c/aspeed_i2c.c
++++ b/hw/i2c/aspeed_i2c.c
+@@ -226,7 +226,7 @@ static int aspeed_i2c_dma_read(AspeedI2CBus *bus, uint8_t *data)
+     return 0;
+ }
+ 
+-static int aspeed_i2c_bus_send(AspeedI2CBus *bus, uint8_t pool_start)
++static int aspeed_i2c_bus_send(AspeedI2CBus *bus)
+ {
+     AspeedI2CClass *aic = ASPEED_I2C_GET_CLASS(bus->controller);
+     int ret = -1;
+@@ -236,10 +236,10 @@ static int aspeed_i2c_bus_send(AspeedI2CBus *bus, uint8_t pool_start)
+     uint32_t reg_byte_buf = aspeed_i2c_bus_byte_buf_offset(bus);
+     uint32_t reg_dma_len = aspeed_i2c_bus_dma_len_offset(bus);
+     int pool_tx_count = SHARED_ARRAY_FIELD_EX32(bus->regs, reg_pool_ctrl,
+-                                                TX_COUNT);
++                                                TX_COUNT) + 1;
+ 
+     if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, TX_BUFF_EN)) {
+-        for (i = pool_start; i < pool_tx_count; i++) {
++        for (i = 0; i < pool_tx_count; i++) {
+             uint8_t *pool_base = aic->bus_pool_base(bus);
+ 
+             trace_aspeed_i2c_bus_send("BUF", i + 1, pool_tx_count,
+@@ -273,7 +273,7 @@ static int aspeed_i2c_bus_send(AspeedI2CBus *bus, uint8_t pool_start)
+         }
+         SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, TX_DMA_EN, 0);
+     } else {
+-        trace_aspeed_i2c_bus_send("BYTE", pool_start, 1,
++        trace_aspeed_i2c_bus_send("BYTE", 0, 1,
+                                   bus->regs[reg_byte_buf]);
+         ret = i2c_send(bus->bus, bus->regs[reg_byte_buf]);
+     }
+@@ -293,7 +293,7 @@ static void aspeed_i2c_bus_recv(AspeedI2CBus *bus)
+     uint32_t reg_dma_len = aspeed_i2c_bus_dma_len_offset(bus);
+     uint32_t reg_dma_addr = aspeed_i2c_bus_dma_addr_offset(bus);
+     int pool_rx_count = SHARED_ARRAY_FIELD_EX32(bus->regs, reg_pool_ctrl,
+-                                                RX_COUNT);
++                                                RX_SIZE) + 1;
+ 
+     if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, RX_BUFF_EN)) {
+         uint8_t *pool_base = aic->bus_pool_base(bus);
+@@ -418,7 +418,7 @@ static void aspeed_i2c_bus_cmd_dump(AspeedI2CBus *bus)
+     uint32_t reg_intr_sts = aspeed_i2c_bus_intr_sts_offset(bus);
+     uint32_t reg_dma_len = aspeed_i2c_bus_dma_len_offset(bus);
+     if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, RX_BUFF_EN)) {
+-        count = SHARED_ARRAY_FIELD_EX32(bus->regs, reg_pool_ctrl, TX_COUNT);
++        count = SHARED_ARRAY_FIELD_EX32(bus->regs, reg_pool_ctrl, TX_COUNT) + 1;
+     } else if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, RX_DMA_EN)) {
+         count = bus->regs[reg_dma_len];
+     } else { /* BYTE mode */
+@@ -446,10 +446,8 @@ static void aspeed_i2c_bus_cmd_dump(AspeedI2CBus *bus)
+  */
+ static void aspeed_i2c_bus_handle_cmd(AspeedI2CBus *bus, uint64_t value)
+ {
+-    uint8_t pool_start = 0;
+     uint32_t reg_intr_sts = aspeed_i2c_bus_intr_sts_offset(bus);
+     uint32_t reg_cmd = aspeed_i2c_bus_cmd_offset(bus);
+-    uint32_t reg_pool_ctrl = aspeed_i2c_bus_pool_ctrl_offset(bus);
+     uint32_t reg_dma_len = aspeed_i2c_bus_dma_len_offset(bus);
+ 
+     if (!aspeed_i2c_check_sram(bus)) {
+@@ -483,27 +481,11 @@ static void aspeed_i2c_bus_handle_cmd(AspeedI2CBus *bus, uint64_t value)
+ 
+         SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, M_START_CMD, 0);
+ 
+-        /*
+-         * The START command is also a TX command, as the slave
+-         * address is sent on the bus. Drop the TX flag if nothing
+-         * else needs to be sent in this sequence.
+-         */
+-        if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, TX_BUFF_EN)) {
+-            if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_pool_ctrl, TX_COUNT)
+-                == 1) {
+-                SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, M_TX_CMD, 0);
+-            } else {
+-                /*
+-                 * Increase the start index in the TX pool buffer to
+-                 * skip the address byte.
+-                 */
+-                pool_start++;
+-            }
+-        } else if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, TX_DMA_EN)) {
++        if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, TX_DMA_EN)) {
+             if (bus->regs[reg_dma_len] == 0) {
+                 SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, M_TX_CMD, 0);
+             }
+-        } else {
++        } else if (!SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, TX_BUFF_EN)) {
+             SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, M_TX_CMD, 0);
+         }
+ 
+@@ -520,7 +502,7 @@ static void aspeed_i2c_bus_handle_cmd(AspeedI2CBus *bus, uint64_t value)
+ 
+     if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, M_TX_CMD)) {
+         aspeed_i2c_set_state(bus, I2CD_MTXD);
+-        if (aspeed_i2c_bus_send(bus, pool_start)) {
++        if (aspeed_i2c_bus_send(bus)) {
+             SHARED_ARRAY_FIELD_DP32(bus->regs, reg_intr_sts, TX_NAK, 1);
+             i2c_end_transfer(bus->bus);
+         } else {
+diff --git a/hw/ide/ahci.c b/hw/ide/ahci.c
+index 7ce001cacd..c5e79b6e6d 100644
+--- a/hw/ide/ahci.c
++++ b/hw/ide/ahci.c
+@@ -40,9 +40,10 @@
+ #include "trace.h"
+ 
+ static void check_cmd(AHCIState *s, int port);
+-static int handle_cmd(AHCIState *s, int port, uint8_t slot);
++static void handle_cmd(AHCIState *s, int port, uint8_t slot);
+ static void ahci_reset_port(AHCIState *s, int port);
+-static bool ahci_write_fis_d2h(AHCIDevice *ad);
++static bool ahci_write_fis_d2h(AHCIDevice *ad, bool d2h_fis_i);
++static void ahci_clear_cmd_issue(AHCIDevice *ad, uint8_t slot);
+ static void ahci_init_d2h(AHCIDevice *ad);
+ static int ahci_dma_prepare_buf(const IDEDMA *dma, int32_t limit);
+ static bool ahci_map_clb_address(AHCIDevice *ad);
+@@ -327,6 +328,11 @@ static void ahci_port_write(AHCIState *s, int port, int offset, uint32_t val)
+         ahci_check_irq(s);
+         break;
+     case AHCI_PORT_REG_CMD:
++        if ((pr->cmd & PORT_CMD_START) && !(val & PORT_CMD_START)) {
++            pr->scr_act = 0;
++            pr->cmd_issue = 0;
++        }
++
+         /* Block any Read-only fields from being set;
+          * including LIST_ON and FIS_ON.
+          * The spec requires to set ICC bits to zero after the ICC change
+@@ -590,9 +596,8 @@ static void check_cmd(AHCIState *s, int port)
+ 
+     if ((pr->cmd & PORT_CMD_START) && pr->cmd_issue) {
+         for (slot = 0; (slot < 32) && pr->cmd_issue; slot++) {
+-            if ((pr->cmd_issue & (1U << slot)) &&
+-                !handle_cmd(s, port, slot)) {
+-                pr->cmd_issue &= ~(1U << slot);
++            if (pr->cmd_issue & (1U << slot)) {
++                handle_cmd(s, port, slot);
+             }
+         }
+     }
+@@ -617,7 +622,7 @@ static void ahci_init_d2h(AHCIDevice *ad)
+         return;
+     }
+ 
+-    if (ahci_write_fis_d2h(ad)) {
++    if (ahci_write_fis_d2h(ad, true)) {
+         ad->init_d2h_sent = true;
+         /* We're emulating receiving the first Reg H2D Fis from the device;
+          * Update the SIG register, but otherwise proceed as normal. */
+@@ -800,8 +805,14 @@ static void ahci_write_fis_sdb(AHCIState *s, NCQTransferState *ncq_tfs)
+     pr->scr_act &= ~ad->finished;
+     ad->finished = 0;
+ 
+-    /* Trigger IRQ if interrupt bit is set (which currently, it always is) */
+-    if (sdb_fis->flags & 0x40) {
++    /*
++     * TFES IRQ is always raised if ERR_STAT is set, regardless of I bit.
++     * If ERR_STAT is not set, trigger SDBS IRQ if interrupt bit is set
++     * (which currently, it always is).
++     */
++    if (sdb_fis->status & ERR_STAT) {
++        ahci_trigger_irq(s, ad, AHCI_PORT_IRQ_BIT_TFES);
++    } else if (sdb_fis->flags & 0x40) {
+         ahci_trigger_irq(s, ad, AHCI_PORT_IRQ_BIT_SDBS);
+     }
+ }
+@@ -849,7 +860,7 @@ static void ahci_write_fis_pio(AHCIDevice *ad, uint16_t len, bool pio_fis_i)
+     }
+ }
+ 
+-static bool ahci_write_fis_d2h(AHCIDevice *ad)
++static bool ahci_write_fis_d2h(AHCIDevice *ad, bool d2h_fis_i)
+ {
+     AHCIPortRegs *pr = &ad->port_regs;
+     uint8_t *d2h_fis;
+@@ -863,7 +874,7 @@ static bool ahci_write_fis_d2h(AHCIDevice *ad)
+     d2h_fis = &ad->res_fis[RES_FIS_RFIS];
+ 
+     d2h_fis[0] = SATA_FIS_TYPE_REGISTER_D2H;
+-    d2h_fis[1] = (1 << 6); /* interrupt bit */
++    d2h_fis[1] = d2h_fis_i ? (1 << 6) : 0; /* interrupt bit */
+     d2h_fis[2] = s->status;
+     d2h_fis[3] = s->error;
+ 
+@@ -889,7 +900,10 @@ static bool ahci_write_fis_d2h(AHCIDevice *ad)
+         ahci_trigger_irq(ad->hba, ad, AHCI_PORT_IRQ_BIT_TFES);
+     }
+ 
+-    ahci_trigger_irq(ad->hba, ad, AHCI_PORT_IRQ_BIT_DHRS);
++    if (d2h_fis_i) {
++        ahci_trigger_irq(ad->hba, ad, AHCI_PORT_IRQ_BIT_DHRS);
++    }
++
+     return true;
+ }
+ 
+@@ -997,7 +1011,6 @@ static void ncq_err(NCQTransferState *ncq_tfs)
+ 
+     ide_state->error = ABRT_ERR;
+     ide_state->status = READY_STAT | ERR_STAT;
+-    ncq_tfs->drive->port_regs.scr_err |= (1 << ncq_tfs->tag);
+     qemu_sglist_destroy(&ncq_tfs->sglist);
+     ncq_tfs->used = 0;
+ }
+@@ -1007,7 +1020,7 @@ static void ncq_finish(NCQTransferState *ncq_tfs)
+     /* If we didn't error out, set our finished bit. Errored commands
+      * do not get a bit set for the SDB FIS ACT register, nor do they
+      * clear the outstanding bit in scr_act (PxSACT). */
+-    if (!(ncq_tfs->drive->port_regs.scr_err & (1 << ncq_tfs->tag))) {
++    if (ncq_tfs->used) {
+         ncq_tfs->drive->finished |= (1 << ncq_tfs->tag);
+     }
+ 
+@@ -1119,6 +1132,24 @@ static void process_ncq_command(AHCIState *s, int port, const uint8_t *cmd_fis,
+         return;
+     }
+ 
++    /*
++     * A NCQ command clears the bit in PxCI after the command has been QUEUED
++     * successfully (ERROR not set, BUSY and DRQ cleared).
++     *
++     * For NCQ commands, PxCI will always be cleared here.
++     *
++     * (Once the NCQ command is COMPLETED, the device will send a SDB FIS with
++     * the interrupt bit set, which will clear PxSACT and raise an interrupt.)
++     */
++    ahci_clear_cmd_issue(ad, slot);
++
++    /*
++     * In reality, for NCQ commands, PxCI is cleared after receiving a D2H FIS
++     * without the interrupt bit set, but since ahci_write_fis_d2h() can raise
++     * an IRQ on error, we need to call them in reverse order.
++     */
++    ahci_write_fis_d2h(ad, false);
++
+     ncq_tfs->used = 1;
+     ncq_tfs->drive = ad;
+     ncq_tfs->slot = slot;
+@@ -1191,6 +1222,7 @@ static void handle_reg_h2d_fis(AHCIState *s, int port,
+ {
+     IDEState *ide_state = &s->dev[port].port.ifs[0];
+     AHCICmdHdr *cmd = get_cmd_header(s, port, slot);
++    AHCIDevice *ad = &s->dev[port];
+     uint16_t opts = le16_to_cpu(cmd->opts);
+ 
+     if (cmd_fis[1] & 0x0F) {
+@@ -1267,11 +1299,19 @@ static void handle_reg_h2d_fis(AHCIState *s, int port,
+     /* Reset transferred byte counter */
+     cmd->status = 0;
+ 
++    /*
++     * A non-NCQ command clears the bit in PxCI after the command has COMPLETED
++     * successfully (ERROR not set, BUSY and DRQ cleared).
++     *
++     * For non-NCQ commands, PxCI will always be cleared by ahci_cmd_done().
++     */
++    ad->busy_slot = slot;
++
+     /* We're ready to process the command in FIS byte 2. */
+     ide_exec_cmd(&s->dev[port].port, cmd_fis[2]);
+ }
+ 
+-static int handle_cmd(AHCIState *s, int port, uint8_t slot)
++static void handle_cmd(AHCIState *s, int port, uint8_t slot)
+ {
+     IDEState *ide_state;
+     uint64_t tbl_addr;
+@@ -1282,12 +1322,12 @@ static int handle_cmd(AHCIState *s, int port, uint8_t slot)
+     if (s->dev[port].port.ifs[0].status & (BUSY_STAT|DRQ_STAT)) {
+         /* Engine currently busy, try again later */
+         trace_handle_cmd_busy(s, port);
+-        return -1;
++        return;
+     }
+ 
+     if (!s->dev[port].lst) {
+         trace_handle_cmd_nolist(s, port);
+-        return -1;
++        return;
+     }
+     cmd = get_cmd_header(s, port, slot);
+     /* remember current slot handle for later */
+@@ -1297,7 +1337,7 @@ static int handle_cmd(AHCIState *s, int port, uint8_t slot)
+     ide_state = &s->dev[port].port.ifs[0];
+     if (!ide_state->blk) {
+         trace_handle_cmd_badport(s, port);
+-        return -1;
++        return;
+     }
+ 
+     tbl_addr = le64_to_cpu(cmd->tbl_addr);
+@@ -1306,7 +1346,7 @@ static int handle_cmd(AHCIState *s, int port, uint8_t slot)
+                              DMA_DIRECTION_TO_DEVICE, MEMTXATTRS_UNSPECIFIED);
+     if (!cmd_fis) {
+         trace_handle_cmd_badfis(s, port);
+-        return -1;
++        return;
+     } else if (cmd_len != 0x80) {
+         ahci_trigger_irq(s, &s->dev[port], AHCI_PORT_IRQ_BIT_HBFS);
+         trace_handle_cmd_badmap(s, port, cmd_len);
+@@ -1330,15 +1370,6 @@ static int handle_cmd(AHCIState *s, int port, uint8_t slot)
+ out:
+     dma_memory_unmap(s->as, cmd_fis, cmd_len, DMA_DIRECTION_TO_DEVICE,
+                      cmd_len);
+-
+-    if (s->dev[port].port.ifs[0].status & (BUSY_STAT|DRQ_STAT)) {
+-        /* async command, complete later */
+-        s->dev[port].busy_slot = slot;
+-        return -1;
+-    }
+-
+-    /* done handling the command */
+-    return 0;
+ }
+ 
+ /* Transfer PIO data between RAM and device */
+@@ -1492,23 +1523,41 @@ static int ahci_dma_rw_buf(const IDEDMA *dma, bool is_write)
+     return 1;
+ }
+ 
++static void ahci_clear_cmd_issue(AHCIDevice *ad, uint8_t slot)
++{
++    IDEState *ide_state = &ad->port.ifs[0];
++
++    if (!(ide_state->status & ERR_STAT) &&
++        !(ide_state->status & (BUSY_STAT | DRQ_STAT))) {
++        ad->port_regs.cmd_issue &= ~(1 << slot);
++    }
++}
++
++/* Non-NCQ command is done - This function is never called for NCQ commands. */
+ static void ahci_cmd_done(const IDEDMA *dma)
+ {
+     AHCIDevice *ad = DO_UPCAST(AHCIDevice, dma, dma);
++    IDEState *ide_state = &ad->port.ifs[0];
+ 
+     trace_ahci_cmd_done(ad->hba, ad->port_no);
+ 
+     /* no longer busy */
+     if (ad->busy_slot != -1) {
+-        ad->port_regs.cmd_issue &= ~(1 << ad->busy_slot);
++        ahci_clear_cmd_issue(ad, ad->busy_slot);
+         ad->busy_slot = -1;
+     }
+ 
+-    /* update d2h status */
+-    ahci_write_fis_d2h(ad);
++    /*
++     * In reality, for non-NCQ commands, PxCI is cleared after receiving a D2H
++     * FIS with the interrupt bit set, but since ahci_write_fis_d2h() will raise
++     * an IRQ, we need to call them in reverse order.
++     */
++    ahci_write_fis_d2h(ad, true);
+ 
+-    if (ad->port_regs.cmd_issue && !ad->check_bh) {
+-        ad->check_bh = qemu_bh_new(ahci_check_cmd_bh, ad);
++    if (!(ide_state->status & ERR_STAT) &&
++        ad->port_regs.cmd_issue && !ad->check_bh) {
++        ad->check_bh = qemu_bh_new_guarded(ahci_check_cmd_bh, ad,
++                                           &ad->mem_reentrancy_guard);
+         qemu_bh_schedule(ad->check_bh);
+     }
+ }
+diff --git a/hw/ide/ahci_internal.h b/hw/ide/ahci_internal.h
+index 109de9e2d1..a7768dd69e 100644
+--- a/hw/ide/ahci_internal.h
++++ b/hw/ide/ahci_internal.h
+@@ -321,6 +321,7 @@ struct AHCIDevice {
+     bool init_d2h_sent;
+     AHCICmdHdr *cur_cmd;
+     NCQTransferState ncq_tfs[AHCI_MAX_CMDS];
++    MemReentrancyGuard mem_reentrancy_guard;
+ };
+ 
+ struct AHCIPCIState {
+diff --git a/hw/ide/core.c b/hw/ide/core.c
+index 39afdc0006..1477935270 100644
+--- a/hw/ide/core.c
++++ b/hw/ide/core.c
+@@ -512,6 +512,7 @@ BlockAIOCB *ide_issue_trim(
+         BlockCompletionFunc *cb, void *cb_opaque, void *opaque)
+ {
+     IDEState *s = opaque;
++    IDEDevice *dev = s->unit ? s->bus->slave : s->bus->master;
+     TrimAIOCB *iocb;
+ 
+     /* Paired with a decrement in ide_trim_bh_cb() */
+@@ -519,7 +520,8 @@ BlockAIOCB *ide_issue_trim(
+ 
+     iocb = blk_aio_get(&trim_aiocb_info, s->blk, cb, cb_opaque);
+     iocb->s = s;
+-    iocb->bh = qemu_bh_new(ide_trim_bh_cb, iocb);
++    iocb->bh = qemu_bh_new_guarded(ide_trim_bh_cb, iocb,
++                                   &DEVICE(dev)->mem_reentrancy_guard);
+     iocb->ret = 0;
+     iocb->qiov = qiov;
+     iocb->i = -1;
+@@ -530,9 +532,9 @@ BlockAIOCB *ide_issue_trim(
+ 
+ void ide_abort_command(IDEState *s)
+ {
+-    ide_transfer_stop(s);
+     s->status = READY_STAT | ERR_STAT;
+     s->error = ABRT_ERR;
++    ide_transfer_stop(s);
+ }
+ 
+ static void ide_set_retry(IDEState *s)
+diff --git a/hw/intc/apic.c b/hw/intc/apic.c
+index 3df11c34d6..a7c2b301a8 100644
+--- a/hw/intc/apic.c
++++ b/hw/intc/apic.c
+@@ -883,6 +883,13 @@ static void apic_realize(DeviceState *dev, Error **errp)
+     memory_region_init_io(&s->io_memory, OBJECT(s), &apic_io_ops, s, "apic-msi",
+                           APIC_SPACE_SIZE);
+ 
++    /*
++     * apic-msi's apic_mem_write can call into ioapic_eoi_broadcast, which can
++     * write back to apic-msi. As such mark the apic-msi region re-entrancy
++     * safe.
++     */
++    s->io_memory.disable_reentrancy_guard = true;
++
+     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, apic_timer, s);
+     local_apics[s->id] = s;
+ 
+diff --git a/hw/intc/loongarch_ipi.c b/hw/intc/loongarch_ipi.c
+index aa4bf9eb74..40e98af2ce 100644
+--- a/hw/intc/loongarch_ipi.c
++++ b/hw/intc/loongarch_ipi.c
+@@ -215,6 +215,10 @@ static void loongarch_ipi_init(Object *obj)
+     for (cpu = 0; cpu < MAX_IPI_CORE_NUM; cpu++) {
+         memory_region_init_io(&s->ipi_iocsr_mem[cpu], obj, &loongarch_ipi_ops,
+                             &lams->ipi_core[cpu], "loongarch_ipi_iocsr", 0x48);
++
++        /* loongarch_ipi_iocsr performs re-entrant IO through ipi_send */
++        s->ipi_iocsr_mem[cpu].disable_reentrancy_guard = true;
++
+         sysbus_init_mmio(sbd, &s->ipi_iocsr_mem[cpu]);
+ 
+         memory_region_init_io(&s->ipi64_iocsr_mem[cpu], obj, &loongarch_ipi64_ops,
+diff --git a/hw/intc/riscv_aclint.c b/hw/intc/riscv_aclint.c
+index eee04643cb..908edcbb80 100644
+--- a/hw/intc/riscv_aclint.c
++++ b/hw/intc/riscv_aclint.c
+@@ -64,13 +64,13 @@ static void riscv_aclint_mtimer_write_timecmp(RISCVAclintMTimerState *mtimer,
+     uint64_t next;
+     uint64_t diff;
+ 
+-    uint64_t rtc_r = cpu_riscv_read_rtc(mtimer);
++    uint64_t rtc = cpu_riscv_read_rtc(mtimer);
+ 
+     /* Compute the relative hartid w.r.t the socket */
+     hartid = hartid - mtimer->hartid_base;
+ 
+     mtimer->timecmp[hartid] = value;
+-    if (mtimer->timecmp[hartid] <= rtc_r) {
++    if (mtimer->timecmp[hartid] <= rtc) {
+         /*
+          * If we're setting an MTIMECMP value in the "past",
+          * immediately raise the timer interrupt
+@@ -81,7 +81,7 @@ static void riscv_aclint_mtimer_write_timecmp(RISCVAclintMTimerState *mtimer,
+ 
+     /* otherwise, set up the future timer interrupt */
+     qemu_irq_lower(mtimer->timer_irqs[hartid]);
+-    diff = mtimer->timecmp[hartid] - rtc_r;
++    diff = mtimer->timecmp[hartid] - rtc;
+     /* back to ns (note args switched in muldiv64) */
+     uint64_t ns_diff = muldiv64(diff, NANOSECONDS_PER_SECOND, timebase_freq);
+ 
+@@ -208,11 +208,12 @@ static void riscv_aclint_mtimer_write(void *opaque, hwaddr addr,
+         return;
+     } else if (addr == mtimer->time_base || addr == mtimer->time_base + 4) {
+         uint64_t rtc_r = cpu_riscv_read_rtc_raw(mtimer->timebase_freq);
++        uint64_t rtc = cpu_riscv_read_rtc(mtimer);
+ 
+         if (addr == mtimer->time_base) {
+             if (size == 4) {
+                 /* time_lo for RV32/RV64 */
+-                mtimer->time_delta = ((rtc_r & ~0xFFFFFFFFULL) | value) - rtc_r;
++                mtimer->time_delta = ((rtc & ~0xFFFFFFFFULL) | value) - rtc_r;
+             } else {
+                 /* time for RV64 */
+                 mtimer->time_delta = value - rtc_r;
+@@ -220,7 +221,7 @@ static void riscv_aclint_mtimer_write(void *opaque, hwaddr addr,
+         } else {
+             if (size == 4) {
+                 /* time_hi for RV32/RV64 */
+-                mtimer->time_delta = (value << 32 | (rtc_r & 0xFFFFFFFF)) - rtc_r;
++                mtimer->time_delta = (value << 32 | (rtc & 0xFFFFFFFF)) - rtc_r;
+             } else {
+                 qemu_log_mask(LOG_GUEST_ERROR,
+                               "aclint-mtimer: invalid time_hi write: %08x",
+diff --git a/hw/mips/loongson3_virt.c b/hw/mips/loongson3_virt.c
+index 25534288dd..b4f6bff1b8 100644
+--- a/hw/mips/loongson3_virt.c
++++ b/hw/mips/loongson3_virt.c
+@@ -29,7 +29,6 @@
+ #include "qemu/datadir.h"
+ #include "qapi/error.h"
+ #include "elf.h"
+-#include "kvm_mips.h"
+ #include "hw/char/serial.h"
+ #include "hw/intc/loongson_liointc.h"
+ #include "hw/mips/mips.h"
+@@ -617,7 +616,6 @@ static void loongson3v_machine_class_init(ObjectClass *oc, void *data)
+     mc->max_cpus = LOONGSON_MAX_VCPUS;
+     mc->default_ram_id = "loongson3.highram";
+     mc->default_ram_size = 1600 * MiB;
+-    mc->kvm_type = mips_kvm_type;
+     mc->minimum_page_bits = 14;
+ }
+ 
+diff --git a/hw/misc/bcm2835_property.c b/hw/misc/bcm2835_property.c
+index 890ae7bae5..de056ea2df 100644
+--- a/hw/misc/bcm2835_property.c
++++ b/hw/misc/bcm2835_property.c
+@@ -382,6 +382,13 @@ static void bcm2835_property_init(Object *obj)
+ 
+     memory_region_init_io(&s->iomem, OBJECT(s), &bcm2835_property_ops, s,
+                           TYPE_BCM2835_PROPERTY, 0x10);
++
++    /*
++     * bcm2835_property_ops call into bcm2835_mbox, which in-turn reads from
++     * iomem. As such, mark iomem as re-entracy safe.
++     */
++    s->iomem.disable_reentrancy_guard = true;
++
+     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->iomem);
+     sysbus_init_irq(SYS_BUS_DEVICE(s), &s->mbox_irq);
+ }
+diff --git a/hw/misc/imx_rngc.c b/hw/misc/imx_rngc.c
+index 632c03779c..082c6980ad 100644
+--- a/hw/misc/imx_rngc.c
++++ b/hw/misc/imx_rngc.c
+@@ -228,8 +228,10 @@ static void imx_rngc_realize(DeviceState *dev, Error **errp)
+     sysbus_init_mmio(sbd, &s->iomem);
+ 
+     sysbus_init_irq(sbd, &s->irq);
+-    s->self_test_bh = qemu_bh_new(imx_rngc_self_test, s);
+-    s->seed_bh = qemu_bh_new(imx_rngc_seed, s);
++    s->self_test_bh = qemu_bh_new_guarded(imx_rngc_self_test, s,
++                                          &dev->mem_reentrancy_guard);
++    s->seed_bh = qemu_bh_new_guarded(imx_rngc_seed, s,
++                                     &dev->mem_reentrancy_guard);
+ }
+ 
+ static void imx_rngc_reset(DeviceState *dev)
+diff --git a/hw/misc/macio/mac_dbdma.c b/hw/misc/macio/mac_dbdma.c
+index efcc02609f..cc7e02203d 100644
+--- a/hw/misc/macio/mac_dbdma.c
++++ b/hw/misc/macio/mac_dbdma.c
+@@ -914,7 +914,7 @@ static void mac_dbdma_realize(DeviceState *dev, Error **errp)
+ {
+     DBDMAState *s = MAC_DBDMA(dev);
+ 
+-    s->bh = qemu_bh_new(DBDMA_run_bh, s);
++    s->bh = qemu_bh_new_guarded(DBDMA_run_bh, s, &dev->mem_reentrancy_guard);
+ }
+ 
+ static void mac_dbdma_class_init(ObjectClass *oc, void *data)
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 8cd7a400a0..1b10cdc127 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -2875,7 +2875,8 @@ static void virtio_net_add_queue(VirtIONet *n, int index)
+         n->vqs[index].tx_vq =
+             virtio_add_queue(vdev, n->net_conf.tx_queue_size,
+                              virtio_net_handle_tx_bh);
+-        n->vqs[index].tx_bh = qemu_bh_new(virtio_net_tx_bh, &n->vqs[index]);
++        n->vqs[index].tx_bh = qemu_bh_new_guarded(virtio_net_tx_bh, &n->vqs[index],
++                                                  &DEVICE(vdev)->mem_reentrancy_guard);
+     }
+ 
+     n->vqs[index].tx_waiting = 0;
+diff --git a/hw/net/vmxnet3.c b/hw/net/vmxnet3.c
+index 56559cda24..399fc14129 100644
+--- a/hw/net/vmxnet3.c
++++ b/hw/net/vmxnet3.c
+@@ -1441,7 +1441,10 @@ static void vmxnet3_activate_device(VMXNET3State *s)
+     vmxnet3_setup_rx_filtering(s);
+     /* Cache fields from shared memory */
+     s->mtu = VMXNET3_READ_DRV_SHARED32(d, s->drv_shmem, devRead.misc.mtu);
+-    assert(VMXNET3_MIN_MTU <= s->mtu && s->mtu <= VMXNET3_MAX_MTU);
++    if (s->mtu < VMXNET3_MIN_MTU || s->mtu > VMXNET3_MAX_MTU) {
++        qemu_log_mask(LOG_GUEST_ERROR, "vmxnet3: Bad MTU size: %u\n", s->mtu);
++        return;
++    }
+     VMW_CFPRN("MTU is %u", s->mtu);
+ 
+     s->max_rx_frags =
+diff --git a/hw/nvme/ctrl.c b/hw/nvme/ctrl.c
+index 749a6938dd..4d29033556 100644
+--- a/hw/nvme/ctrl.c
++++ b/hw/nvme/ctrl.c
+@@ -4318,7 +4318,8 @@ static void nvme_init_sq(NvmeSQueue *sq, NvmeCtrl *n, uint64_t dma_addr,
+         QTAILQ_INSERT_TAIL(&(sq->req_list), &sq->io_req[i], entry);
+     }
+ 
+-    sq->bh = qemu_bh_new(nvme_process_sq, sq);
++    sq->bh = qemu_bh_new_guarded(nvme_process_sq, sq,
++                                 &DEVICE(sq->ctrl)->mem_reentrancy_guard);
+ 
+     if (n->dbbuf_enabled) {
+         sq->db_addr = n->dbbuf_dbs + (sqid << 3);
+@@ -4705,7 +4706,8 @@ static void nvme_init_cq(NvmeCQueue *cq, NvmeCtrl *n, uint64_t dma_addr,
+         }
+     }
+     n->cq[cqid] = cq;
+-    cq->bh = qemu_bh_new(nvme_post_cqes, cq);
++    cq->bh = qemu_bh_new_guarded(nvme_post_cqes, cq,
++                                 &DEVICE(cq->ctrl)->mem_reentrancy_guard);
+ }
+ 
+ static uint16_t nvme_create_cq(NvmeCtrl *n, NvmeRequest *req)
+diff --git a/hw/nvme/dif.c b/hw/nvme/dif.c
+index 63c44c86ab..01b19c3373 100644
+--- a/hw/nvme/dif.c
++++ b/hw/nvme/dif.c
+@@ -115,7 +115,7 @@ static void nvme_dif_pract_generate_dif_crc64(NvmeNamespace *ns, uint8_t *buf,
+         uint64_t crc = crc64_nvme(~0ULL, buf, ns->lbasz);
+ 
+         if (pil) {
+-            crc = crc64_nvme(crc, mbuf, pil);
++            crc = crc64_nvme(~crc, mbuf, pil);
+         }
+ 
+         dif->g64.guard = cpu_to_be64(crc);
+@@ -246,7 +246,7 @@ static uint16_t nvme_dif_prchk_crc64(NvmeNamespace *ns, NvmeDifTuple *dif,
+         uint64_t crc = crc64_nvme(~0ULL, buf, ns->lbasz);
+ 
+         if (pil) {
+-            crc = crc64_nvme(crc, mbuf, pil);
++            crc = crc64_nvme(~crc, mbuf, pil);
+         }
+ 
+         trace_pci_nvme_dif_prchk_guard_crc64(be64_to_cpu(dif->g64.guard), crc);
+diff --git a/hw/pci-host/raven.c b/hw/pci-host/raven.c
+index 7a105e4a63..42fb02b7e6 100644
+--- a/hw/pci-host/raven.c
++++ b/hw/pci-host/raven.c
+@@ -293,6 +293,13 @@ static void raven_pcihost_initfn(Object *obj)
+     memory_region_init(&s->pci_memory, obj, "pci-memory", 0x3f000000);
+     address_space_init(&s->pci_io_as, &s->pci_io, "raven-io");
+ 
++    /*
++     * Raven's raven_io_ops use the address-space API to access pci-conf-idx
++     * (which is also owned by the raven device). As such, mark the
++     * pci_io_non_contiguous as re-entrancy safe.
++     */
++    s->pci_io_non_contiguous.disable_reentrancy_guard = true;
++
+     /* CPU address space */
+     memory_region_add_subregion(address_space_mem, PCI_IO_BASE_ADDR,
+                                 &s->pci_io);
+diff --git a/hw/ppc/e500.c b/hw/ppc/e500.c
+index 2fe496677c..8d5eb08381 100644
+--- a/hw/ppc/e500.c
++++ b/hw/ppc/e500.c
+@@ -683,7 +683,7 @@ static int ppce500_prep_device_tree(PPCE500MachineState *machine,
+     p->kernel_base = kernel_base;
+     p->kernel_size = kernel_size;
+ 
+-    qemu_register_reset(ppce500_reset_device_tree, p);
++    qemu_register_reset_nosnapshotload(ppce500_reset_device_tree, p);
+     p->notifier.notify = ppce500_init_notify;
+     qemu_add_machine_init_done_notifier(&p->notifier);
+ 
+diff --git a/hw/ppc/pnv_lpc.c b/hw/ppc/pnv_lpc.c
+index ee890e7ab4..ef29314891 100644
+--- a/hw/ppc/pnv_lpc.c
++++ b/hw/ppc/pnv_lpc.c
+@@ -733,10 +733,13 @@ static void pnv_lpc_realize(DeviceState *dev, Error **errp)
+     /* Create MMIO regions for LPC HC and OPB registers */
+     memory_region_init_io(&lpc->opb_master_regs, OBJECT(dev), &opb_master_ops,
+                           lpc, "lpc-opb-master", LPC_OPB_REGS_OPB_SIZE);
++    lpc->opb_master_regs.disable_reentrancy_guard = true;
+     memory_region_add_subregion(&lpc->opb_mr, LPC_OPB_REGS_OPB_ADDR,
+                                 &lpc->opb_master_regs);
+     memory_region_init_io(&lpc->lpc_hc_regs, OBJECT(dev), &lpc_hc_ops, lpc,
+                           "lpc-hc", LPC_HC_REGS_OPB_SIZE);
++    /* xscom writes to lpc-hc. As such mark lpc-hc re-entrancy safe */
++    lpc->lpc_hc_regs.disable_reentrancy_guard = true;
+     memory_region_add_subregion(&lpc->opb_mr, LPC_HC_REGS_OPB_ADDR,
+                                 &lpc->lpc_hc_regs);
+ 
+diff --git a/hw/ppc/vof.c b/hw/ppc/vof.c
+index 18c3f92317..e3b430a81f 100644
+--- a/hw/ppc/vof.c
++++ b/hw/ppc/vof.c
+@@ -1024,6 +1024,8 @@ void vof_cleanup(Vof *vof)
+     }
+     vof->claimed = NULL;
+     vof->of_instances = NULL;
++    vof->of_instance_last = 0;
++    vof->claimed_base = 0;
+ }
+ 
+ void vof_build_dt(void *fdt, Vof *vof)
+diff --git a/hw/riscv/virt.c b/hw/riscv/virt.c
+index a5bc7353b4..3a99b4b801 100644
+--- a/hw/riscv/virt.c
++++ b/hw/riscv/virt.c
+@@ -715,7 +715,7 @@ static void create_fdt_pmu(RISCVVirtState *s)
+     MachineState *mc = MACHINE(s);
+     RISCVCPU hart = s->soc[0].harts[0];
+ 
+-    pmu_name = g_strdup_printf("/soc/pmu");
++    pmu_name = g_strdup_printf("/pmu");
+     qemu_fdt_add_subnode(mc->fdt, pmu_name);
+     qemu_fdt_setprop_string(mc->fdt, pmu_name, "compatible", "riscv,pmu");
+     riscv_pmu_generate_fdt_node(mc->fdt, hart.cfg.pmu_num, pmu_name);
+diff --git a/hw/s390x/s390-virtio-ccw.c b/hw/s390x/s390-virtio-ccw.c
+index 2e64ffab45..16899a1814 100644
+--- a/hw/s390x/s390-virtio-ccw.c
++++ b/hw/s390x/s390-virtio-ccw.c
+@@ -108,6 +108,7 @@ static const char *const reset_dev_types[] = {
+     "s390-flic",
+     "diag288",
+     TYPE_S390_PCI_HOST_BRIDGE,
++    TYPE_AP_BRIDGE,
+ };
+ 
+ static void subsystem_reset(void)
+diff --git a/hw/scsi/lsi53c895a.c b/hw/scsi/lsi53c895a.c
+index 42532c4744..ca619ed564 100644
+--- a/hw/scsi/lsi53c895a.c
++++ b/hw/scsi/lsi53c895a.c
+@@ -2313,6 +2313,13 @@ static void lsi_scsi_realize(PCIDevice *dev, Error **errp)
+     memory_region_init_io(&s->io_io, OBJECT(s), &lsi_io_ops, s,
+                           "lsi-io", 256);
+ 
++    /*
++     * Since we use the address-space API to interact with ram_io, disable the
++     * re-entrancy guard.
++     */
++    s->ram_io.disable_reentrancy_guard = true;
++    s->mmio_io.disable_reentrancy_guard = true;
++
+     address_space_init(&s->pci_io_as, pci_address_space_io(dev), "lsi-pci-io");
+     qdev_init_gpio_out(d, &s->ext_irq, 1);
+ 
+diff --git a/hw/scsi/mptsas.c b/hw/scsi/mptsas.c
+index c485da792c..3de288b454 100644
+--- a/hw/scsi/mptsas.c
++++ b/hw/scsi/mptsas.c
+@@ -1322,7 +1322,8 @@ static void mptsas_scsi_realize(PCIDevice *dev, Error **errp)
+     }
+     s->max_devices = MPTSAS_NUM_PORTS;
+ 
+-    s->request_bh = qemu_bh_new(mptsas_fetch_requests, s);
++    s->request_bh = qemu_bh_new_guarded(mptsas_fetch_requests, s,
++                                        &DEVICE(dev)->mem_reentrancy_guard);
+ 
+     scsi_bus_init(&s->bus, sizeof(s->bus), &dev->qdev, &mptsas_scsi_info);
+ }
+diff --git a/hw/scsi/scsi-bus.c b/hw/scsi/scsi-bus.c
+index ceceafb2cd..e5c9f7a53d 100644
+--- a/hw/scsi/scsi-bus.c
++++ b/hw/scsi/scsi-bus.c
+@@ -193,7 +193,8 @@ static void scsi_dma_restart_cb(void *opaque, bool running, RunState state)
+         AioContext *ctx = blk_get_aio_context(s->conf.blk);
+         /* The reference is dropped in scsi_dma_restart_bh.*/
+         object_ref(OBJECT(s));
+-        s->bh = aio_bh_new(ctx, scsi_dma_restart_bh, s);
++        s->bh = aio_bh_new_guarded(ctx, scsi_dma_restart_bh, s,
++                                   &DEVICE(s)->mem_reentrancy_guard);
+         qemu_bh_schedule(s->bh);
+     }
+ }
+diff --git a/hw/scsi/vmw_pvscsi.c b/hw/scsi/vmw_pvscsi.c
+index fa76696855..4de34536e9 100644
+--- a/hw/scsi/vmw_pvscsi.c
++++ b/hw/scsi/vmw_pvscsi.c
+@@ -1184,7 +1184,8 @@ pvscsi_realizefn(PCIDevice *pci_dev, Error **errp)
+         pcie_endpoint_cap_init(pci_dev, PVSCSI_EXP_EP_OFFSET);
+     }
+ 
+-    s->completion_worker = qemu_bh_new(pvscsi_process_completion_queue, s);
++    s->completion_worker = qemu_bh_new_guarded(pvscsi_process_completion_queue, s,
++                                               &DEVICE(pci_dev)->mem_reentrancy_guard);
+ 
+     scsi_bus_init(&s->bus, sizeof(s->bus), DEVICE(pci_dev), &pvscsi_scsi_info);
+     /* override default SCSI bus hotplug-handler, with pvscsi's one */
+diff --git a/hw/smbios/smbios.c b/hw/smbios/smbios.c
+index 66a020999b..cd43185417 100644
+--- a/hw/smbios/smbios.c
++++ b/hw/smbios/smbios.c
+@@ -712,6 +712,8 @@ static void smbios_build_type_4_table(MachineState *ms, unsigned instance)
+ {
+     char sock_str[128];
+     size_t tbl_len = SMBIOS_TYPE_4_LEN_V28;
++    unsigned threads_per_socket;
++    unsigned cores_per_socket;
+ 
+     if (smbios_ep_type == SMBIOS_ENTRY_POINT_TYPE_64) {
+         tbl_len = SMBIOS_TYPE_4_LEN_V30;
+@@ -746,17 +748,20 @@ static void smbios_build_type_4_table(MachineState *ms, unsigned instance)
+     SMBIOS_TABLE_SET_STR(4, asset_tag_number_str, type4.asset);
+     SMBIOS_TABLE_SET_STR(4, part_number_str, type4.part);
+ 
+-    t->core_count = (ms->smp.cores > 255) ? 0xFF : ms->smp.cores;
++    threads_per_socket = machine_topo_get_threads_per_socket(ms);
++    cores_per_socket = machine_topo_get_cores_per_socket(ms);
++
++    t->core_count = (cores_per_socket > 255) ? 0xFF : cores_per_socket;
+     t->core_enabled = t->core_count;
+ 
+-    t->thread_count = (ms->smp.threads > 255) ? 0xFF : ms->smp.threads;
++    t->thread_count = (threads_per_socket > 255) ? 0xFF : threads_per_socket;
+ 
+     t->processor_characteristics = cpu_to_le16(0x02); /* Unknown */
+     t->processor_family2 = cpu_to_le16(0x01); /* Other */
+ 
+     if (tbl_len == SMBIOS_TYPE_4_LEN_V30) {
+-        t->core_count2 = t->core_enabled2 = cpu_to_le16(ms->smp.cores);
+-        t->thread_count2 = cpu_to_le16(ms->smp.threads);
++        t->core_count2 = t->core_enabled2 = cpu_to_le16(cores_per_socket);
++        t->thread_count2 = cpu_to_le16(threads_per_socket);
+     }
+ 
+     SMBIOS_BUILD_TABLE_POST;
+@@ -1087,8 +1092,7 @@ void smbios_get_tables(MachineState *ms,
+         smbios_build_type_2_table();
+         smbios_build_type_3_table();
+ 
+-        smbios_smp_sockets = DIV_ROUND_UP(ms->smp.cpus,
+-                                          ms->smp.cores * ms->smp.threads);
++        smbios_smp_sockets = ms->smp.sockets;
+         assert(smbios_smp_sockets >= 1);
+ 
+         for (i = 0; i < smbios_smp_sockets; i++) {
+diff --git a/hw/tpm/tpm_tis_sysbus.c b/hw/tpm/tpm_tis_sysbus.c
+index 45e63efd63..6724b3d4f6 100644
+--- a/hw/tpm/tpm_tis_sysbus.c
++++ b/hw/tpm/tpm_tis_sysbus.c
+@@ -93,7 +93,6 @@ static void tpm_tis_sysbus_reset(DeviceState *dev)
+ static Property tpm_tis_sysbus_properties[] = {
+     DEFINE_PROP_UINT32("irq", TPMStateSysBus, state.irq_num, TPM_TIS_IRQ),
+     DEFINE_PROP_TPMBE("tpmdev", TPMStateSysBus, state.be_driver),
+-    DEFINE_PROP_BOOL("ppi", TPMStateSysBus, state.ppi_enabled, false),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+diff --git a/hw/usb/dev-uas.c b/hw/usb/dev-uas.c
+index 5192b062d6..18c319043e 100644
+--- a/hw/usb/dev-uas.c
++++ b/hw/usb/dev-uas.c
+@@ -937,7 +937,8 @@ static void usb_uas_realize(USBDevice *dev, Error **errp)
+ 
+     QTAILQ_INIT(&uas->results);
+     QTAILQ_INIT(&uas->requests);
+-    uas->status_bh = qemu_bh_new(usb_uas_send_status_bh, uas);
++    uas->status_bh = qemu_bh_new_guarded(usb_uas_send_status_bh, uas,
++                                         &d->mem_reentrancy_guard);
+ 
+     dev->flags |= (1 << USB_DEV_FLAG_IS_SCSI_STORAGE);
+     scsi_bus_init(&uas->bus, sizeof(uas->bus), DEVICE(dev), &usb_uas_scsi_info);
+diff --git a/hw/usb/hcd-dwc2.c b/hw/usb/hcd-dwc2.c
+index 8755e9cbb0..a0c4e782b2 100644
+--- a/hw/usb/hcd-dwc2.c
++++ b/hw/usb/hcd-dwc2.c
+@@ -1364,7 +1364,8 @@ static void dwc2_realize(DeviceState *dev, Error **errp)
+     s->fi = USB_FRMINTVL - 1;
+     s->eof_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, dwc2_frame_boundary, s);
+     s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, dwc2_work_timer, s);
+-    s->async_bh = qemu_bh_new(dwc2_work_bh, s);
++    s->async_bh = qemu_bh_new_guarded(dwc2_work_bh, s,
++                                      &dev->mem_reentrancy_guard);
+ 
+     sysbus_init_irq(sbd, &s->irq);
+ }
+diff --git a/hw/usb/hcd-ehci.c b/hw/usb/hcd-ehci.c
+index d4da8dcb8d..c930c60921 100644
+--- a/hw/usb/hcd-ehci.c
++++ b/hw/usb/hcd-ehci.c
+@@ -2533,7 +2533,8 @@ void usb_ehci_realize(EHCIState *s, DeviceState *dev, Error **errp)
+     }
+ 
+     s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ehci_work_timer, s);
+-    s->async_bh = qemu_bh_new(ehci_work_bh, s);
++    s->async_bh = qemu_bh_new_guarded(ehci_work_bh, s,
++                                      &dev->mem_reentrancy_guard);
+     s->device = dev;
+ 
+     s->vmstate = qemu_add_vm_change_state_handler(usb_ehci_vm_state_change, s);
+diff --git a/hw/usb/hcd-uhci.c b/hw/usb/hcd-uhci.c
+index d1b5657d72..ef967c42a1 100644
+--- a/hw/usb/hcd-uhci.c
++++ b/hw/usb/hcd-uhci.c
+@@ -1193,7 +1193,7 @@ void usb_uhci_common_realize(PCIDevice *dev, Error **errp)
+                               USB_SPEED_MASK_LOW | USB_SPEED_MASK_FULL);
+         }
+     }
+-    s->bh = qemu_bh_new(uhci_bh, s);
++    s->bh = qemu_bh_new_guarded(uhci_bh, s, &DEVICE(dev)->mem_reentrancy_guard);
+     s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, uhci_frame_timer, s);
+     s->num_ports_vmstate = NB_PORTS;
+     QTAILQ_INIT(&s->queues);
+diff --git a/hw/usb/host-libusb.c b/hw/usb/host-libusb.c
+index 176868d345..f500db85ab 100644
+--- a/hw/usb/host-libusb.c
++++ b/hw/usb/host-libusb.c
+@@ -1141,7 +1141,8 @@ static void usb_host_nodev_bh(void *opaque)
+ static void usb_host_nodev(USBHostDevice *s)
+ {
+     if (!s->bh_nodev) {
+-        s->bh_nodev = qemu_bh_new(usb_host_nodev_bh, s);
++        s->bh_nodev = qemu_bh_new_guarded(usb_host_nodev_bh, s,
++                                          &DEVICE(s)->mem_reentrancy_guard);
+     }
+     qemu_bh_schedule(s->bh_nodev);
+ }
+@@ -1739,7 +1740,8 @@ static int usb_host_post_load(void *opaque, int version_id)
+     USBHostDevice *dev = opaque;
+ 
+     if (!dev->bh_postld) {
+-        dev->bh_postld = qemu_bh_new(usb_host_post_load_bh, dev);
++        dev->bh_postld = qemu_bh_new_guarded(usb_host_post_load_bh, dev,
++                                             &DEVICE(dev)->mem_reentrancy_guard);
+     }
+     qemu_bh_schedule(dev->bh_postld);
+     dev->bh_postld_pending = true;
+diff --git a/hw/usb/redirect.c b/hw/usb/redirect.c
+index fd7df599bc..39fbaaab16 100644
+--- a/hw/usb/redirect.c
++++ b/hw/usb/redirect.c
+@@ -1441,8 +1441,10 @@ static void usbredir_realize(USBDevice *udev, Error **errp)
+         }
+     }
+ 
+-    dev->chardev_close_bh = qemu_bh_new(usbredir_chardev_close_bh, dev);
+-    dev->device_reject_bh = qemu_bh_new(usbredir_device_reject_bh, dev);
++    dev->chardev_close_bh = qemu_bh_new_guarded(usbredir_chardev_close_bh, dev,
++                                                &DEVICE(dev)->mem_reentrancy_guard);
++    dev->device_reject_bh = qemu_bh_new_guarded(usbredir_device_reject_bh, dev,
++                                                &DEVICE(dev)->mem_reentrancy_guard);
+     dev->attach_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, usbredir_do_attach, dev);
+ 
+     packet_id_queue_init(&dev->cancelled, dev, "cancelled");
+diff --git a/hw/usb/xen-usb.c b/hw/usb/xen-usb.c
+index 0f7369e7ed..dec91294ad 100644
+--- a/hw/usb/xen-usb.c
++++ b/hw/usb/xen-usb.c
+@@ -1021,7 +1021,8 @@ static void usbback_alloc(struct XenLegacyDevice *xendev)
+ 
+     QTAILQ_INIT(&usbif->req_free_q);
+     QSIMPLEQ_INIT(&usbif->hotplug_q);
+-    usbif->bh = qemu_bh_new(usbback_bh, usbif);
++    usbif->bh = qemu_bh_new_guarded(usbback_bh, usbif,
++                                    &DEVICE(xendev)->mem_reentrancy_guard);
+ }
+ 
+ static int usbback_free(struct XenLegacyDevice *xendev)
+diff --git a/hw/virtio/virtio-balloon.c b/hw/virtio/virtio-balloon.c
+index 73ac5eb675..e4c4c2d3c8 100644
+--- a/hw/virtio/virtio-balloon.c
++++ b/hw/virtio/virtio-balloon.c
+@@ -910,8 +910,9 @@ static void virtio_balloon_device_realize(DeviceState *dev, Error **errp)
+         precopy_add_notifier(&s->free_page_hint_notify);
+ 
+         object_ref(OBJECT(s->iothread));
+-        s->free_page_bh = aio_bh_new(iothread_get_aio_context(s->iothread),
+-                                     virtio_ballloon_get_free_page_hints, s);
++        s->free_page_bh = aio_bh_new_guarded(iothread_get_aio_context(s->iothread),
++                                             virtio_ballloon_get_free_page_hints, s,
++                                             &dev->mem_reentrancy_guard);
+     }
+ 
+     if (virtio_has_feature(s->host_features, VIRTIO_BALLOON_F_REPORTING)) {
+diff --git a/hw/virtio/virtio-crypto.c b/hw/virtio/virtio-crypto.c
+index 406b4e5fd0..b2e0646d9a 100644
+--- a/hw/virtio/virtio-crypto.c
++++ b/hw/virtio/virtio-crypto.c
+@@ -1057,7 +1057,8 @@ static void virtio_crypto_device_realize(DeviceState *dev, Error **errp)
+         vcrypto->vqs[i].dataq =
+                  virtio_add_queue(vdev, 1024, virtio_crypto_handle_dataq_bh);
+         vcrypto->vqs[i].dataq_bh =
+-                 qemu_bh_new(virtio_crypto_dataq_bh, &vcrypto->vqs[i]);
++                 qemu_bh_new_guarded(virtio_crypto_dataq_bh, &vcrypto->vqs[i],
++                                     &dev->mem_reentrancy_guard);
+         vcrypto->vqs[i].vcrypto = vcrypto;
+     }
+ 
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index 384c8f0f08..b7da7f074d 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -3451,6 +3451,39 @@ static int virtio_set_features_nocheck(VirtIODevice *vdev, uint64_t val)
+     return bad ? -1 : 0;
+ }
+ 
++typedef struct VirtioSetFeaturesNocheckData {
++    Coroutine *co;
++    VirtIODevice *vdev;
++    uint64_t val;
++    int ret;
++} VirtioSetFeaturesNocheckData;
++
++static void virtio_set_features_nocheck_bh(void *opaque)
++{
++    VirtioSetFeaturesNocheckData *data = opaque;
++
++    data->ret = virtio_set_features_nocheck(data->vdev, data->val);
++    aio_co_wake(data->co);
++}
++
++static int
++virtio_set_features_nocheck_maybe_co(VirtIODevice *vdev, uint64_t val)
++{
++    if (qemu_in_coroutine()) {
++        VirtioSetFeaturesNocheckData data = {
++            .co = qemu_coroutine_self(),
++            .vdev = vdev,
++            .val = val,
++        };
++        aio_bh_schedule_oneshot(qemu_get_current_aio_context(),
++                                virtio_set_features_nocheck_bh, &data);
++        qemu_coroutine_yield();
++        return data.ret;
++    } else {
++        return virtio_set_features_nocheck(vdev, val);
++    }
++}
++
+ int virtio_set_features(VirtIODevice *vdev, uint64_t val)
+ {
+     int ret;
+@@ -3621,14 +3654,14 @@ int virtio_load(VirtIODevice *vdev, QEMUFile *f, int version_id)
+          * host_features.
+          */
+         uint64_t features64 = vdev->guest_features;
+-        if (virtio_set_features_nocheck(vdev, features64) < 0) {
++        if (virtio_set_features_nocheck_maybe_co(vdev, features64) < 0) {
+             error_report("Features 0x%" PRIx64 " unsupported. "
+                          "Allowed features: 0x%" PRIx64,
+                          features64, vdev->host_features);
+             return -1;
+         }
+     } else {
+-        if (virtio_set_features_nocheck(vdev, features) < 0) {
++        if (virtio_set_features_nocheck_maybe_co(vdev, features) < 0) {
+             error_report("Features 0x%x unsupported. "
+                          "Allowed features: 0x%" PRIx64,
+                          features, vdev->host_features);
+diff --git a/include/block/aio.h b/include/block/aio.h
+index d128558f1d..0dbfd435ae 100644
+--- a/include/block/aio.h
++++ b/include/block/aio.h
+@@ -22,6 +22,8 @@
+ #include "qemu/event_notifier.h"
+ #include "qemu/thread.h"
+ #include "qemu/timer.h"
++#include "hw/qdev-core.h"
++
+ 
+ typedef struct BlockAIOCB BlockAIOCB;
+ typedef void BlockCompletionFunc(void *opaque, int ret);
+@@ -323,9 +325,11 @@ void aio_bh_schedule_oneshot_full(AioContext *ctx, QEMUBHFunc *cb, void *opaque,
+  * is opaque and must be allocated prior to its use.
+  *
+  * @name: A human-readable identifier for debugging purposes.
++ * @reentrancy_guard: A guard set when entering a cb to prevent
++ * device-reentrancy issues
+  */
+ QEMUBH *aio_bh_new_full(AioContext *ctx, QEMUBHFunc *cb, void *opaque,
+-                        const char *name);
++                        const char *name, MemReentrancyGuard *reentrancy_guard);
+ 
+ /**
+  * aio_bh_new: Allocate a new bottom half structure
+@@ -334,7 +338,17 @@ QEMUBH *aio_bh_new_full(AioContext *ctx, QEMUBHFunc *cb, void *opaque,
+  * string.
+  */
+ #define aio_bh_new(ctx, cb, opaque) \
+-    aio_bh_new_full((ctx), (cb), (opaque), (stringify(cb)))
++    aio_bh_new_full((ctx), (cb), (opaque), (stringify(cb)), NULL)
++
++/**
++ * aio_bh_new_guarded: Allocate a new bottom half structure with a
++ * reentrancy_guard
++ *
++ * A convenience wrapper for aio_bh_new_full() that uses the cb as the name
++ * string.
++ */
++#define aio_bh_new_guarded(ctx, cb, opaque, guard) \
++    aio_bh_new_full((ctx), (cb), (opaque), (stringify(cb)), guard)
+ 
+ /**
+  * aio_notify: Force processing of pending events.
+diff --git a/include/exec/memory.h b/include/exec/memory.h
+index 91f8a2395a..124628ada4 100644
+--- a/include/exec/memory.h
++++ b/include/exec/memory.h
+@@ -741,6 +741,8 @@ struct MemoryRegion {
+     bool is_iommu;
+     RAMBlock *ram_block;
+     Object *owner;
++    /* owner as TYPE_DEVICE. Used for re-entrancy checks in MR access hotpath */
++    DeviceState *dev;
+ 
+     const MemoryRegionOps *ops;
+     void *opaque;
+@@ -765,6 +767,9 @@ struct MemoryRegion {
+     unsigned ioeventfd_nb;
+     MemoryRegionIoeventfd *ioeventfds;
+     RamDiscardManager *rdm; /* Only for RAM */
++
++    /* For devices designed to perform re-entrant IO into their own IO MRs */
++    bool disable_reentrancy_guard;
+ };
+ 
+ struct IOMMUMemoryRegion {
+diff --git a/include/exec/user/abitypes.h b/include/exec/user/abitypes.h
+index 743b8bb9ea..6178453d94 100644
+--- a/include/exec/user/abitypes.h
++++ b/include/exec/user/abitypes.h
+@@ -15,7 +15,18 @@
+ #define ABI_LLONG_ALIGNMENT 2
+ #endif
+ 
+-#if (defined(TARGET_I386) && !defined(TARGET_X86_64)) || defined(TARGET_SH4)
++#ifdef TARGET_CRIS
++#define ABI_SHORT_ALIGNMENT 1
++#define ABI_INT_ALIGNMENT 1
++#define ABI_LONG_ALIGNMENT 1
++#define ABI_LLONG_ALIGNMENT 1
++#endif
++
++#if (defined(TARGET_I386) && !defined(TARGET_X86_64)) \
++    || defined(TARGET_SH4) \
++    || defined(TARGET_OPENRISC) \
++    || defined(TARGET_MICROBLAZE) \
++    || defined(TARGET_NIOS2)
+ #define ABI_LLONG_ALIGNMENT 4
+ #endif
+ 
+diff --git a/include/hw/boards.h b/include/hw/boards.h
+index 90f1dd3aeb..ca2f0d3592 100644
+--- a/include/hw/boards.h
++++ b/include/hw/boards.h
+@@ -36,6 +36,8 @@ void machine_set_cpu_numa_node(MachineState *machine,
+                                Error **errp);
+ void machine_parse_smp_config(MachineState *ms,
+                               const SMPConfiguration *config, Error **errp);
++unsigned int machine_topo_get_cores_per_socket(const MachineState *ms);
++unsigned int machine_topo_get_threads_per_socket(const MachineState *ms);
+ 
+ /**
+  * machine_class_allow_dynamic_sysbus_dev: Add type to list of valid devices
+diff --git a/include/hw/i2c/aspeed_i2c.h b/include/hw/i2c/aspeed_i2c.h
+index adc904d6c1..91d0e7157c 100644
+--- a/include/hw/i2c/aspeed_i2c.h
++++ b/include/hw/i2c/aspeed_i2c.h
+@@ -132,9 +132,9 @@ REG32(I2CD_CMD, 0x14) /* I2CD Command/Status */
+ REG32(I2CD_DEV_ADDR, 0x18) /* Slave Device Address */
+     SHARED_FIELD(SLAVE_DEV_ADDR1, 0, 7)
+ REG32(I2CD_POOL_CTRL, 0x1C) /* Pool Buffer Control */
+-    SHARED_FIELD(RX_COUNT, 24, 5)
++    SHARED_FIELD(RX_COUNT, 24, 6)
+     SHARED_FIELD(RX_SIZE, 16, 5)
+-    SHARED_FIELD(TX_COUNT, 9, 5)
++    SHARED_FIELD(TX_COUNT, 8, 5)
+     FIELD(I2CD_POOL_CTRL, OFFSET, 2, 6) /* AST2400 */
+ REG32(I2CD_BYTE_BUF, 0x20) /* Transmit/Receive Byte Buffer */
+     SHARED_FIELD(RX_BUF, 8, 8)
+diff --git a/include/hw/qdev-core.h b/include/hw/qdev-core.h
+index 785dd5a56e..886f6bb79e 100644
+--- a/include/hw/qdev-core.h
++++ b/include/hw/qdev-core.h
+@@ -162,6 +162,10 @@ struct NamedClockList {
+     QLIST_ENTRY(NamedClockList) node;
+ };
+ 
++typedef struct {
++    bool engaged_in_io;
++} MemReentrancyGuard;
++
+ /**
+  * DeviceState:
+  * @realized: Indicates whether the device has been fully constructed.
+@@ -194,6 +198,9 @@ struct DeviceState {
+     int alias_required_for_version;
+     ResettableState reset;
+     GSList *unplug_blockers;
++
++    /* Is the device currently in mmio/pio/dma? Used to prevent re-entrancy */
++    MemReentrancyGuard mem_reentrancy_guard;
+ };
+ 
+ struct DeviceListener {
+diff --git a/include/hw/virtio/virtio-gpu-bswap.h b/include/hw/virtio/virtio-gpu-bswap.h
+index 9124108485..637a0585d0 100644
+--- a/include/hw/virtio/virtio-gpu-bswap.h
++++ b/include/hw/virtio/virtio-gpu-bswap.h
+@@ -63,7 +63,10 @@ virtio_gpu_create_blob_bswap(struct virtio_gpu_resource_create_blob *cblob)
+ {
+     virtio_gpu_ctrl_hdr_bswap(&cblob->hdr);
+     le32_to_cpus(&cblob->resource_id);
++    le32_to_cpus(&cblob->blob_mem);
+     le32_to_cpus(&cblob->blob_flags);
++    le32_to_cpus(&cblob->nr_entries);
++    le64_to_cpus(&cblob->blob_id);
+     le64_to_cpus(&cblob->size);
+ }
+ 
+diff --git a/include/qemu/main-loop.h b/include/qemu/main-loop.h
+index 3c9a9a982d..5c7e95601c 100644
+--- a/include/qemu/main-loop.h
++++ b/include/qemu/main-loop.h
+@@ -360,9 +360,12 @@ void qemu_cond_timedwait_iothread(QemuCond *cond, int ms);
+ 
+ void qemu_fd_register(int fd);
+ 
++#define qemu_bh_new_guarded(cb, opaque, guard) \
++    qemu_bh_new_full((cb), (opaque), (stringify(cb)), guard)
+ #define qemu_bh_new(cb, opaque) \
+-    qemu_bh_new_full((cb), (opaque), (stringify(cb)))
+-QEMUBH *qemu_bh_new_full(QEMUBHFunc *cb, void *opaque, const char *name);
++    qemu_bh_new_full((cb), (opaque), (stringify(cb)), NULL)
++QEMUBH *qemu_bh_new_full(QEMUBHFunc *cb, void *opaque, const char *name,
++                         MemReentrancyGuard *reentrancy_guard);
+ void qemu_bh_schedule_idle(QEMUBH *bh);
+ 
+ enum {
+diff --git a/include/sysemu/kvm.h b/include/sysemu/kvm.h
+index e9a97eda8c..c4ff7d9a4c 100644
+--- a/include/sysemu/kvm.h
++++ b/include/sysemu/kvm.h
+@@ -369,6 +369,8 @@ int kvm_arch_get_registers(CPUState *cpu);
+ 
+ int kvm_arch_put_registers(CPUState *cpu, int level);
+ 
++int kvm_arch_get_default_type(MachineState *ms);
++
+ int kvm_arch_init(MachineState *ms, KVMState *s);
+ 
+ int kvm_arch_init_vcpu(CPUState *cpu);
+diff --git a/linux-user/elfload.c b/linux-user/elfload.c
+index 20894b633f..c2c095d383 100644
+--- a/linux-user/elfload.c
++++ b/linux-user/elfload.c
+@@ -1664,7 +1664,8 @@ static uint32_t get_elf_hwcap(void)
+ #define MISA_BIT(EXT) (1 << (EXT - 'A'))
+     RISCVCPU *cpu = RISCV_CPU(thread_cpu);
+     uint32_t mask = MISA_BIT('I') | MISA_BIT('M') | MISA_BIT('A')
+-                    | MISA_BIT('F') | MISA_BIT('D') | MISA_BIT('C');
++                    | MISA_BIT('F') | MISA_BIT('D') | MISA_BIT('C')
++                    | MISA_BIT('V');
+ 
+     return cpu->env.misa_ext & mask;
+ #undef MISA_BIT
+diff --git a/linux-user/riscv/signal.c b/linux-user/riscv/signal.c
+index eaa168199a..f989f7f51f 100644
+--- a/linux-user/riscv/signal.c
++++ b/linux-user/riscv/signal.c
+@@ -38,8 +38,8 @@ struct target_sigcontext {
+ }; /* cf. riscv-linux:arch/riscv/include/uapi/asm/ptrace.h */
+ 
+ struct target_ucontext {
+-    unsigned long uc_flags;
+-    struct target_ucontext *uc_link;
++    abi_ulong uc_flags;
++    abi_ptr uc_link;
+     target_stack_t uc_stack;
+     target_sigset_t uc_sigmask;
+     uint8_t   __unused[1024 / 8 - sizeof(target_sigset_t)];
+diff --git a/migration/block.c b/migration/block.c
+index 4347da1526..4026b73f75 100644
+--- a/migration/block.c
++++ b/migration/block.c
+@@ -376,7 +376,9 @@ static void unset_dirty_tracking(void)
+     BlkMigDevState *bmds;
+ 
+     QSIMPLEQ_FOREACH(bmds, &block_mig_state.bmds_list, entry) {
+-        bdrv_release_dirty_bitmap(bmds->dirty_bitmap);
++        if (bmds->dirty_bitmap) {
++            bdrv_release_dirty_bitmap(bmds->dirty_bitmap);
++        }
+     }
+ }
+ 
+@@ -684,13 +686,18 @@ static int64_t get_remaining_dirty(void)
+ static void block_migration_cleanup_bmds(void)
+ {
+     BlkMigDevState *bmds;
++    BlockDriverState *bs;
+     AioContext *ctx;
+ 
+     unset_dirty_tracking();
+ 
+     while ((bmds = QSIMPLEQ_FIRST(&block_mig_state.bmds_list)) != NULL) {
+         QSIMPLEQ_REMOVE_HEAD(&block_mig_state.bmds_list, entry);
+-        bdrv_op_unblock_all(blk_bs(bmds->blk), bmds->blocker);
++
++        bs = blk_bs(bmds->blk);
++        if (bs) {
++            bdrv_op_unblock_all(bs, bmds->blocker);
++        }
+         error_free(bmds->blocker);
+ 
+         /* Save ctx, because bmds->blk can disappear during blk_unref.  */
+diff --git a/python/.gitignore b/python/.gitignore
+index 904f324bb1..c3ceb1ca0a 100644
+--- a/python/.gitignore
++++ b/python/.gitignore
+@@ -11,8 +11,8 @@ qemu.egg-info/
+ .idea/
+ .vscode/
+ 
+-# virtual environments (pipenv et al)
+-.venv/
++# virtual environments
++.min-venv/
+ .tox/
+ .dev-venv/
+ 
+diff --git a/python/Makefile b/python/Makefile
+index b170708398..c5bd6ff83a 100644
+--- a/python/Makefile
++++ b/python/Makefile
+@@ -1,15 +1,16 @@
+ QEMU_VENV_DIR=.dev-venv
++QEMU_MINVENV_DIR=.min-venv
+ QEMU_TOX_EXTRA_ARGS ?=
+ 
+ .PHONY: help
+ help:
+ 	@echo "python packaging help:"
+ 	@echo ""
+-	@echo "make check-pipenv:"
+-	@echo "    Run tests in pipenv's virtual environment."
++	@echo "make check-minreqs:"
++	@echo "    Run tests in the minreqs virtual environment."
+ 	@echo "    These tests use the oldest dependencies."
+-	@echo "    Requires: Python 3.6 and pipenv."
+-	@echo "    Hint (Fedora): 'sudo dnf install python3.6 pipenv'"
++	@echo "    Requires: Python 3.6"
++	@echo "    Hint (Fedora): 'sudo dnf install python3.6'"
+ 	@echo ""
+ 	@echo "make check-tox:"
+ 	@echo "    Run tests against multiple python versions."
+@@ -33,8 +34,8 @@ help:
+ 	@echo "    and install the qemu package in editable mode."
+ 	@echo "    (Can be used in or outside of a venv.)"
+ 	@echo ""
+-	@echo "make pipenv"
+-	@echo "    Creates pipenv's virtual environment (.venv)"
++	@echo "make min-venv"
++	@echo "    Creates the minreqs virtual environment ($(QEMU_MINVENV_DIR))"
+ 	@echo ""
+ 	@echo "make dev-venv"
+ 	@echo "    Creates a simple venv for check-dev. ($(QEMU_VENV_DIR))"
+@@ -43,21 +44,38 @@ help:
+ 	@echo "    Remove package build output."
+ 	@echo ""
+ 	@echo "make distclean:"
+-	@echo "    remove pipenv/venv files, qemu package forwarder,"
++	@echo "    remove venv files, qemu package forwarder,"
+ 	@echo "    built distribution files, and everything from 'make clean'."
+ 	@echo ""
+ 	@echo -e "Have a nice day ^_^\n"
+ 
+-.PHONY: pipenv
+-pipenv: .venv
+-.venv: Pipfile.lock
+-	@PIPENV_VENV_IN_PROJECT=1 pipenv sync --dev --keep-outdated
+-	rm -f pyproject.toml
+-	@touch .venv
++.PHONY: pipenv check-pipenv
++pipenv check-pipenv:
++	@echo "pipenv was dropped; try 'make check-minreqs' or 'make min-venv'"
++	@exit 1
++
++.PHONY: min-venv
++min-venv: $(QEMU_MINVENV_DIR) $(QEMU_MINVENV_DIR)/bin/activate
++$(QEMU_MINVENV_DIR) $(QEMU_MINVENV_DIR)/bin/activate: setup.cfg tests/minreqs.txt
++	@echo "VENV $(QEMU_MINVENV_DIR)"
++	@python3.6 -m venv $(QEMU_MINVENV_DIR)
++	@(								\
++		echo "ACTIVATE $(QEMU_MINVENV_DIR)";			\
++		. $(QEMU_MINVENV_DIR)/bin/activate;			\
++		echo "INSTALL -r tests/minreqs.txt $(QEMU_MINVENV_DIR)";\
++		pip install -r tests/minreqs.txt 1>/dev/null;		\
++		echo "INSTALL -e qemu $(QEMU_MINVENV_DIR)";		\
++		pip install -e . 1>/dev/null;				\
++	)
++	@touch $(QEMU_MINVENV_DIR)
+ 
+-.PHONY: check-pipenv
+-check-pipenv: pipenv
+-	@pipenv run make check
++.PHONY: check-minreqs
++check-minreqs: min-venv
++	@(							\
++		echo "ACTIVATE $(QEMU_MINVENV_DIR)";		\
++		. $(QEMU_MINVENV_DIR)/bin/activate;		\
++		make check;					\
++	)
+ 
+ .PHONY: dev-venv
+ dev-venv: $(QEMU_VENV_DIR) $(QEMU_VENV_DIR)/bin/activate
+@@ -106,6 +124,7 @@ clean:
+ 
+ .PHONY: distclean
+ distclean: clean
+-	rm -rf qemu.egg-info/ .venv/ .tox/ $(QEMU_VENV_DIR) dist/
++	rm -rf qemu.egg-info/ .eggs/ dist/
++	rm -rf $(QEMU_VENV_DIR) $(QEMU_MINVENV_DIR) .tox/
+ 	rm -f .coverage .coverage.*
+ 	rm -rf htmlcov/
+diff --git a/python/Pipfile b/python/Pipfile
+deleted file mode 100644
+index e7acb8cefa..0000000000
+--- a/python/Pipfile
++++ /dev/null
+@@ -1,13 +0,0 @@
+-[[source]]
+-name = "pypi"
+-url = "https://pypi.org/simple"
+-verify_ssl = true
+-
+-[dev-packages]
+-qemu = {editable = true, extras = ["devel"], path = "."}
+-
+-[packages]
+-qemu = {editable = true,path = "."}
+-
+-[requires]
+-python_version = "3.6"
+diff --git a/python/Pipfile.lock b/python/Pipfile.lock
+deleted file mode 100644
+index ce46404ce0..0000000000
+--- a/python/Pipfile.lock
++++ /dev/null
+@@ -1,347 +0,0 @@
+-{
+-    "_meta": {
+-        "hash": {
+-            "sha256": "f1a25654d884a5b450e38d78b1f2e3ebb9073e421cc4358d4bbb83ac251a5670"
+-        },
+-        "pipfile-spec": 6,
+-        "requires": {
+-            "python_version": "3.6"
+-        },
+-        "sources": [
+-            {
+-                "name": "pypi",
+-                "url": "https://pypi.org/simple",
+-                "verify_ssl": true
+-            }
+-        ]
+-    },
+-    "default": {
+-        "qemu": {
+-            "editable": true,
+-            "path": "."
+-        }
+-    },
+-    "develop": {
+-        "appdirs": {
+-            "hashes": [
+-                "sha256:7d5d0167b2b1ba821647616af46a749d1c653740dd0d2415100fe26e27afdf41",
+-                "sha256:a841dacd6b99318a741b166adb07e19ee71a274450e68237b4650ca1055ab128"
+-            ],
+-            "version": "==1.4.4"
+-        },
+-        "astroid": {
+-            "hashes": [
+-                "sha256:09bdb456e02564731f8b5957cdd0c98a7f01d2db5e90eb1d794c353c28bfd705",
+-                "sha256:6a8a51f64dae307f6e0c9db752b66a7951e282389d8362cc1d39a56f3feeb31d"
+-            ],
+-            "index": "pypi",
+-            "version": "==2.6.0"
+-        },
+-        "avocado-framework": {
+-            "hashes": [
+-                "sha256:244cb569f8eb4e50a22ac82e1a2b2bba2458999f4281efbe2651bd415d59c65b",
+-                "sha256:6f15998b67ecd0e7dde790c4de4dd249d6df52dfe6d5cc4e2dd6596df51c3583"
+-            ],
+-            "index": "pypi",
+-            "version": "==90.0"
+-        },
+-        "distlib": {
+-            "hashes": [
+-                "sha256:106fef6dc37dd8c0e2c0a60d3fca3e77460a48907f335fa28420463a6f799736",
+-                "sha256:23e223426b28491b1ced97dc3bbe183027419dfc7982b4fa2f05d5f3ff10711c"
+-            ],
+-            "index": "pypi",
+-            "version": "==0.3.2"
+-        },
+-        "filelock": {
+-            "hashes": [
+-                "sha256:18d82244ee114f543149c66a6e0c14e9c4f8a1044b5cdaadd0f82159d6a6ff59",
+-                "sha256:929b7d63ec5b7d6b71b0fa5ac14e030b3f70b75747cef1b10da9b879fef15836"
+-            ],
+-            "index": "pypi",
+-            "version": "==3.0.12"
+-        },
+-        "flake8": {
+-            "hashes": [
+-                "sha256:6a35f5b8761f45c5513e3405f110a86bea57982c3b75b766ce7b65217abe1670",
+-                "sha256:c01f8a3963b3571a8e6bd7a4063359aff90749e160778e03817cd9b71c9e07d2"
+-            ],
+-            "index": "pypi",
+-            "version": "==3.6.0"
+-        },
+-        "fusepy": {
+-            "hashes": [
+-                "sha256:10f5c7f5414241bffecdc333c4d3a725f1d6605cae6b4eaf86a838ff49cdaf6c",
+-                "sha256:a9f3a3699080ddcf0919fd1eb2cf743e1f5859ca54c2018632f939bdfac269ee"
+-            ],
+-            "index": "pypi",
+-            "version": "==2.0.4"
+-        },
+-        "importlib-metadata": {
+-            "hashes": [
+-                "sha256:90bb658cdbbf6d1735b6341ce708fc7024a3e14e99ffdc5783edea9f9b077f83",
+-                "sha256:dc15b2969b4ce36305c51eebe62d418ac7791e9a157911d58bfb1f9ccd8e2070"
+-            ],
+-            "markers": "python_version < '3.8'",
+-            "version": "==1.7.0"
+-        },
+-        "importlib-resources": {
+-            "hashes": [
+-                "sha256:54161657e8ffc76596c4ede7080ca68cb02962a2e074a2586b695a93a925d36e",
+-                "sha256:e962bff7440364183203d179d7ae9ad90cb1f2b74dcb84300e88ecc42dca3351"
+-            ],
+-            "index": "pypi",
+-            "version": "==5.1.4"
+-        },
+-        "isort": {
+-            "hashes": [
+-                "sha256:408e4d75d84f51b64d0824894afee44469eba34a4caee621dc53799f80d71ccc",
+-                "sha256:64022dea6a06badfa09b300b4dfe8ba968114a737919e8ed50aea1c288f078aa"
+-            ],
+-            "index": "pypi",
+-            "version": "==5.1.2"
+-        },
+-        "lazy-object-proxy": {
+-            "hashes": [
+-                "sha256:17e0967ba374fc24141738c69736da90e94419338fd4c7c7bef01ee26b339653",
+-                "sha256:1fee665d2638491f4d6e55bd483e15ef21f6c8c2095f235fef72601021e64f61",
+-                "sha256:22ddd618cefe54305df49e4c069fa65715be4ad0e78e8d252a33debf00f6ede2",
+-                "sha256:24a5045889cc2729033b3e604d496c2b6f588c754f7a62027ad4437a7ecc4837",
+-                "sha256:410283732af311b51b837894fa2f24f2c0039aa7f220135192b38fcc42bd43d3",
+-                "sha256:4732c765372bd78a2d6b2150a6e99d00a78ec963375f236979c0626b97ed8e43",
+-                "sha256:489000d368377571c6f982fba6497f2aa13c6d1facc40660963da62f5c379726",
+-                "sha256:4f60460e9f1eb632584c9685bccea152f4ac2130e299784dbaf9fae9f49891b3",
+-                "sha256:5743a5ab42ae40caa8421b320ebf3a998f89c85cdc8376d6b2e00bd12bd1b587",
+-                "sha256:85fb7608121fd5621cc4377a8961d0b32ccf84a7285b4f1d21988b2eae2868e8",
+-                "sha256:9698110e36e2df951c7c36b6729e96429c9c32b3331989ef19976592c5f3c77a",
+-                "sha256:9d397bf41caad3f489e10774667310d73cb9c4258e9aed94b9ec734b34b495fd",
+-                "sha256:b579f8acbf2bdd9ea200b1d5dea36abd93cabf56cf626ab9c744a432e15c815f",
+-                "sha256:b865b01a2e7f96db0c5d12cfea590f98d8c5ba64ad222300d93ce6ff9138bcad",
+-                "sha256:bf34e368e8dd976423396555078def5cfc3039ebc6fc06d1ae2c5a65eebbcde4",
+-                "sha256:c6938967f8528b3668622a9ed3b31d145fab161a32f5891ea7b84f6b790be05b",
+-                "sha256:d1c2676e3d840852a2de7c7d5d76407c772927addff8d742b9808fe0afccebdf",
+-                "sha256:d7124f52f3bd259f510651450e18e0fd081ed82f3c08541dffc7b94b883aa981",
+-                "sha256:d900d949b707778696fdf01036f58c9876a0d8bfe116e8d220cfd4b15f14e741",
+-                "sha256:ebfd274dcd5133e0afae738e6d9da4323c3eb021b3e13052d8cbd0e457b1256e",
+-                "sha256:ed361bb83436f117f9917d282a456f9e5009ea12fd6de8742d1a4752c3017e93",
+-                "sha256:f5144c75445ae3ca2057faac03fda5a902eff196702b0a24daf1d6ce0650514b"
+-            ],
+-            "index": "pypi",
+-            "version": "==1.6.0"
+-        },
+-        "mccabe": {
+-            "hashes": [
+-                "sha256:ab8a6258860da4b6677da4bd2fe5dc2c659cff31b3ee4f7f5d64e79735b80d42",
+-                "sha256:dd8d182285a0fe56bace7f45b5e7d1a6ebcbf524e8f3bd87eb0f125271b8831f"
+-            ],
+-            "version": "==0.6.1"
+-        },
+-        "mypy": {
+-            "hashes": [
+-                "sha256:00cb1964a7476e871d6108341ac9c1a857d6bd20bf5877f4773ac5e9d92cd3cd",
+-                "sha256:127de5a9b817a03a98c5ae8a0c46a20dc44442af6dcfa2ae7f96cb519b312efa",
+-                "sha256:1f3976a945ad7f0a0727aafdc5651c2d3278e3c88dee94e2bf75cd3386b7b2f4",
+-                "sha256:2f8c098f12b402c19b735aec724cc9105cc1a9eea405d08814eb4b14a6fb1a41",
+-                "sha256:4ef13b619a289aa025f2273e05e755f8049bb4eaba6d703a425de37d495d178d",
+-                "sha256:5d142f219bf8c7894dfa79ebfb7d352c4c63a325e75f10dfb4c3db9417dcd135",
+-                "sha256:62eb5dd4ea86bda8ce386f26684f7f26e4bfe6283c9f2b6ca6d17faf704dcfad",
+-                "sha256:64c36eb0936d0bfb7d8da49f92c18e312ad2e3ed46e5548ae4ca997b0d33bd59",
+-                "sha256:75eed74d2faf2759f79c5f56f17388defd2fc994222312ec54ee921e37b31ad4",
+-                "sha256:974bebe3699b9b46278a7f076635d219183da26e1a675c1f8243a69221758273",
+-                "sha256:a5e5bb12b7982b179af513dddb06fca12285f0316d74f3964078acbfcf4c68f2",
+-                "sha256:d31291df31bafb997952dc0a17ebb2737f802c754aed31dd155a8bfe75112c57",
+-                "sha256:d3b4941de44341227ece1caaf5b08b23e42ad4eeb8b603219afb11e9d4cfb437",
+-                "sha256:eadb865126da4e3c4c95bdb47fe1bb087a3e3ea14d39a3b13224b8a4d9f9a102"
+-            ],
+-            "index": "pypi",
+-            "version": "==0.780"
+-        },
+-        "mypy-extensions": {
+-            "hashes": [
+-                "sha256:090fedd75945a69ae91ce1303b5824f428daf5a028d2f6ab8a299250a846f15d",
+-                "sha256:2d82818f5bb3e369420cb3c4060a7970edba416647068eb4c5343488a6c604a8"
+-            ],
+-            "version": "==0.4.3"
+-        },
+-        "packaging": {
+-            "hashes": [
+-                "sha256:5b327ac1320dc863dca72f4514ecc086f31186744b84a230374cc1fd776feae5",
+-                "sha256:67714da7f7bc052e064859c05c595155bd1ee9f69f76557e21f051443c20947a"
+-            ],
+-            "index": "pypi",
+-            "version": "==20.9"
+-        },
+-        "pluggy": {
+-            "hashes": [
+-                "sha256:15b2acde666561e1298d71b523007ed7364de07029219b604cf808bfa1c765b0",
+-                "sha256:966c145cd83c96502c3c3868f50408687b38434af77734af1e9ca461a4081d2d"
+-            ],
+-            "index": "pypi",
+-            "version": "==0.13.1"
+-        },
+-        "py": {
+-            "hashes": [
+-                "sha256:21b81bda15b66ef5e1a777a21c4dcd9c20ad3efd0b3f817e7a809035269e1bd3",
+-                "sha256:3b80836aa6d1feeaa108e046da6423ab8f6ceda6468545ae8d02d9d58d18818a"
+-            ],
+-            "index": "pypi",
+-            "version": "==1.10.0"
+-        },
+-        "pycodestyle": {
+-            "hashes": [
+-                "sha256:74abc4e221d393ea5ce1f129ea6903209940c1ecd29e002e8c6933c2b21026e0",
+-                "sha256:cbc619d09254895b0d12c2c691e237b2e91e9b2ecf5e84c26b35400f93dcfb83",
+-                "sha256:cbfca99bd594a10f674d0cd97a3d802a1fdef635d4361e1a2658de47ed261e3a"
+-            ],
+-            "version": "==2.4.0"
+-        },
+-        "pyflakes": {
+-            "hashes": [
+-                "sha256:9a7662ec724d0120012f6e29d6248ae3727d821bba522a0e6b356eff19126a49",
+-                "sha256:f661252913bc1dbe7fcfcbf0af0db3f42ab65aabd1a6ca68fe5d466bace94dae"
+-            ],
+-            "version": "==2.0.0"
+-        },
+-        "pygments": {
+-            "hashes": [
+-                "sha256:a18f47b506a429f6f4b9df81bb02beab9ca21d0a5fee38ed15aef65f0545519f",
+-                "sha256:d66e804411278594d764fc69ec36ec13d9ae9147193a1740cd34d272ca383b8e"
+-            ],
+-            "index": "pypi",
+-            "version": "==2.9.0"
+-        },
+-        "pylint": {
+-            "hashes": [
+-                "sha256:082a6d461b54f90eea49ca90fff4ee8b6e45e8029e5dbd72f6107ef84f3779c0",
+-                "sha256:a01cd675eccf6e25b3bdb42be184eb46aaf89187d612ba0fb5f93328ed6b0fd5"
+-            ],
+-            "index": "pypi",
+-            "version": "==2.8.0"
+-        },
+-        "pyparsing": {
+-            "hashes": [
+-                "sha256:c203ec8783bf771a155b207279b9bccb8dea02d8f0c9e5f8ead507bc3246ecc1",
+-                "sha256:ef9d7589ef3c200abe66653d3f1ab1033c3c419ae9b9bdb1240a85b024efc88b"
+-            ],
+-            "index": "pypi",
+-            "version": "==2.4.7"
+-        },
+-        "qemu": {
+-            "editable": true,
+-            "path": "."
+-        },
+-        "setuptools": {
+-            "hashes": [
+-                "sha256:22c7348c6d2976a52632c67f7ab0cdf40147db7789f9aed18734643fe9cf3373",
+-                "sha256:4ce92f1e1f8f01233ee9952c04f6b81d1e02939d6e1b488428154974a4d0783e"
+-            ],
+-            "markers": "python_version >= '3.6'",
+-            "version": "==59.6.0"
+-        },
+-        "six": {
+-            "hashes": [
+-                "sha256:1e61c37477a1626458e36f7b1d82aa5c9b094fa4802892072e49de9c60c4c926",
+-                "sha256:8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254"
+-            ],
+-            "markers": "python_version >= '2.7' and python_version not in '3.0, 3.1, 3.2, 3.3'",
+-            "version": "==1.16.0"
+-        },
+-        "toml": {
+-            "hashes": [
+-                "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b",
+-                "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f"
+-            ],
+-            "markers": "python_version >= '2.6' and python_version not in '3.0, 3.1, 3.2, 3.3'",
+-            "version": "==0.10.2"
+-        },
+-        "tox": {
+-            "hashes": [
+-                "sha256:c60692d92fe759f46c610ac04c03cf0169432d1ff8e981e8ae63e068d0954fc3",
+-                "sha256:f179cb4043d7dc1339425dd49ab1dd8c916246b0d9173143c1b0af7498a03ab0"
+-            ],
+-            "index": "pypi",
+-            "version": "==3.18.0"
+-        },
+-        "typed-ast": {
+-            "hashes": [
+-                "sha256:01ae5f73431d21eead5015997ab41afa53aa1fbe252f9da060be5dad2c730ace",
+-                "sha256:067a74454df670dcaa4e59349a2e5c81e567d8d65458d480a5b3dfecec08c5ff",
+-                "sha256:0fb71b8c643187d7492c1f8352f2c15b4c4af3f6338f21681d3681b3dc31a266",
+-                "sha256:1b3ead4a96c9101bef08f9f7d1217c096f31667617b58de957f690c92378b528",
+-                "sha256:2068531575a125b87a41802130fa7e29f26c09a2833fea68d9a40cf33902eba6",
+-                "sha256:209596a4ec71d990d71d5e0d312ac935d86930e6eecff6ccc7007fe54d703808",
+-                "sha256:2c726c276d09fc5c414693a2de063f521052d9ea7c240ce553316f70656c84d4",
+-                "sha256:398e44cd480f4d2b7ee8d98385ca104e35c81525dd98c519acff1b79bdaac363",
+-                "sha256:52b1eb8c83f178ab787f3a4283f68258525f8d70f778a2f6dd54d3b5e5fb4341",
+-                "sha256:5feca99c17af94057417d744607b82dd0a664fd5e4ca98061480fd8b14b18d04",
+-                "sha256:7538e495704e2ccda9b234b82423a4038f324f3a10c43bc088a1636180f11a41",
+-                "sha256:760ad187b1041a154f0e4d0f6aae3e40fdb51d6de16e5c99aedadd9246450e9e",
+-                "sha256:777a26c84bea6cd934422ac2e3b78863a37017618b6e5c08f92ef69853e765d3",
+-                "sha256:95431a26309a21874005845c21118c83991c63ea800dd44843e42a916aec5899",
+-                "sha256:9ad2c92ec681e02baf81fdfa056fe0d818645efa9af1f1cd5fd6f1bd2bdfd805",
+-                "sha256:9c6d1a54552b5330bc657b7ef0eae25d00ba7ffe85d9ea8ae6540d2197a3788c",
+-                "sha256:aee0c1256be6c07bd3e1263ff920c325b59849dc95392a05f258bb9b259cf39c",
+-                "sha256:af3d4a73793725138d6b334d9d247ce7e5f084d96284ed23f22ee626a7b88e39",
+-                "sha256:b36b4f3920103a25e1d5d024d155c504080959582b928e91cb608a65c3a49e1a",
+-                "sha256:b9574c6f03f685070d859e75c7f9eeca02d6933273b5e69572e5ff9d5e3931c3",
+-                "sha256:bff6ad71c81b3bba8fa35f0f1921fb24ff4476235a6e94a26ada2e54370e6da7",
+-                "sha256:c190f0899e9f9f8b6b7863debfb739abcb21a5c054f911ca3596d12b8a4c4c7f",
+-                "sha256:c907f561b1e83e93fad565bac5ba9c22d96a54e7ea0267c708bffe863cbe4075",
+-                "sha256:cae53c389825d3b46fb37538441f75d6aecc4174f615d048321b716df2757fb0",
+-                "sha256:dd4a21253f42b8d2b48410cb31fe501d32f8b9fbeb1f55063ad102fe9c425e40",
+-                "sha256:dde816ca9dac1d9c01dd504ea5967821606f02e510438120091b84e852367428",
+-                "sha256:f2362f3cb0f3172c42938946dbc5b7843c2a28aec307c49100c8b38764eb6927",
+-                "sha256:f328adcfebed9f11301eaedfa48e15bdece9b519fb27e6a8c01aa52a17ec31b3",
+-                "sha256:f8afcf15cc511ada719a88e013cec87c11aff7b91f019295eb4530f96fe5ef2f",
+-                "sha256:fb1bbeac803adea29cedd70781399c99138358c26d05fcbd23c13016b7f5ec65"
+-            ],
+-            "markers": "python_version < '3.8' and implementation_name == 'cpython'",
+-            "version": "==1.4.3"
+-        },
+-        "typing-extensions": {
+-            "hashes": [
+-                "sha256:0ac0f89795dd19de6b97debb0c6af1c70987fd80a2d62d1958f7e56fcc31b497",
+-                "sha256:50b6f157849174217d0656f99dc82fe932884fb250826c18350e159ec6cdf342",
+-                "sha256:779383f6086d90c99ae41cf0ff39aac8a7937a9283ce0a414e5dd782f4c94a84"
+-            ],
+-            "index": "pypi",
+-            "version": "==3.10.0.0"
+-        },
+-        "urwid": {
+-            "hashes": [
+-                "sha256:588bee9c1cb208d0906a9f73c613d2bd32c3ed3702012f51efe318a3f2127eae"
+-            ],
+-            "index": "pypi",
+-            "version": "==2.1.2"
+-        },
+-        "urwid-readline": {
+-            "hashes": [
+-                "sha256:018020cbc864bb5ed87be17dc26b069eae2755cb29f3a9c569aac3bded1efaf4"
+-            ],
+-            "index": "pypi",
+-            "version": "==0.13"
+-        },
+-        "virtualenv": {
+-            "hashes": [
+-                "sha256:14fdf849f80dbb29a4eb6caa9875d476ee2a5cf76a5f5415fa2f1606010ab467",
+-                "sha256:2b0126166ea7c9c3661f5b8e06773d28f83322de7a3ff7d06f0aed18c9de6a76"
+-            ],
+-            "index": "pypi",
+-            "version": "==20.4.7"
+-        },
+-        "wrapt": {
+-            "hashes": [
+-                "sha256:b62ffa81fb85f4332a4f609cab4ac40709470da05643a082ec1eb88e6d9b97d7"
+-            ],
+-            "version": "==1.12.1"
+-        },
+-        "zipp": {
+-            "hashes": [
+-                "sha256:3607921face881ba3e026887d8150cca609d517579abe052ac81fc5aeffdbd76",
+-                "sha256:51cb66cc54621609dd593d1787f286ee42a5c0adbb4b29abea5a63edc3e03098"
+-            ],
+-            "index": "pypi",
+-            "version": "==3.4.1"
+-        }
+-    }
+-}
+diff --git a/python/README.rst b/python/README.rst
+index 9c1fceaee7..d62e71528d 100644
+--- a/python/README.rst
++++ b/python/README.rst
+@@ -77,9 +77,6 @@ Files in this directory
+ - ``MANIFEST.in`` is read by python setuptools, it specifies additional files
+   that should be included by a source distribution.
+ - ``PACKAGE.rst`` is used as the README file that is visible on PyPI.org.
+-- ``Pipfile`` is used by Pipenv to generate ``Pipfile.lock``.
+-- ``Pipfile.lock`` is a set of pinned package dependencies that this package
+-  is tested under in our CI suite. It is used by ``make check-pipenv``.
+ - ``README.rst`` you are here!
+ - ``VERSION`` contains the PEP-440 compliant version used to describe
+   this package; it is referenced by ``setup.cfg``.
+diff --git a/python/setup.cfg b/python/setup.cfg
+index c2c61c7519..c16bedf398 100644
+--- a/python/setup.cfg
++++ b/python/setup.cfg
+@@ -32,9 +32,7 @@ packages =
+ * = py.typed
+ 
+ [options.extras_require]
+-# For the devel group, When adding new dependencies or bumping the minimum
+-# version, use e.g. "pipenv install --dev pylint==3.0.0".
+-# Subsequently, edit 'Pipfile' to remove e.g. 'pylint = "==3.0.0'.
++# Remember to update tests/minreqs.txt if changing anything below:
+ devel =
+     avocado-framework >= 90.0
+     flake8 >= 3.6.0
+diff --git a/python/tests/minreqs.txt b/python/tests/minreqs.txt
+new file mode 100644
+index 0000000000..dfb8abb155
+--- /dev/null
++++ b/python/tests/minreqs.txt
+@@ -0,0 +1,45 @@
++# This file lists the ***oldest possible dependencies*** needed to run
++# "make check" successfully under ***Python 3.6***. It is used primarily
++# by GitLab CI to ensure that our stated minimum versions in setup.cfg
++# are truthful and regularly validated.
++#
++# This file should not contain any dependencies that are not expressed
++# by the [devel] section of setup.cfg, except for transitive
++# dependencies which must be enumerated here explicitly to eliminate
++# dependency resolution ambiguity.
++#
++# When adding new dependencies, pin the very oldest non-yanked version
++# on PyPI that allows the test suite to pass.
++
++# Dependencies for the TUI addon (Required for successful linting)
++urwid==2.1.2
++urwid-readline==0.13
++Pygments==2.9.0
++
++# Dependencies for FUSE support for qom-fuse
++fusepy==2.0.4
++
++# Test-runners, utilities, etc.
++avocado-framework==90.0
++
++# Linters
++flake8==3.6.0
++isort==5.1.2
++mypy==0.780
++pylint==2.8.0
++
++# Transitive flake8 dependencies
++mccabe==0.6.0
++pycodestyle==2.4.0
++pyflakes==2.0.0
++
++# Transitive mypy dependencies
++mypy-extensions==0.4.3
++typed-ast==1.4.0
++typing-extensions==3.7.4
++
++# Transitive pylint dependencies
++astroid==2.5.4
++lazy-object-proxy==1.4.0
++toml==0.10.0
++wrapt==1.12.1
+diff --git a/qemu-options.hx b/qemu-options.hx
+index e52289479b..379692da86 100644
+--- a/qemu-options.hx
++++ b/qemu-options.hx
+@@ -1171,10 +1171,10 @@ SRST
+ ERST
+ 
+ DEF("hda", HAS_ARG, QEMU_OPTION_hda,
+-    "-hda/-hdb file  use 'file' as IDE hard disk 0/1 image\n", QEMU_ARCH_ALL)
++    "-hda/-hdb file  use 'file' as hard disk 0/1 image\n", QEMU_ARCH_ALL)
+ DEF("hdb", HAS_ARG, QEMU_OPTION_hdb, "", QEMU_ARCH_ALL)
+ DEF("hdc", HAS_ARG, QEMU_OPTION_hdc,
+-    "-hdc/-hdd file  use 'file' as IDE hard disk 2/3 image\n", QEMU_ARCH_ALL)
++    "-hdc/-hdd file  use 'file' as hard disk 2/3 image\n", QEMU_ARCH_ALL)
+ DEF("hdd", HAS_ARG, QEMU_OPTION_hdd, "", QEMU_ARCH_ALL)
+ SRST
+ ``-hda file``
+@@ -1184,18 +1184,22 @@ SRST
+ ``-hdc file``
+   \ 
+ ``-hdd file``
+-    Use file as hard disk 0, 1, 2 or 3 image (see the :ref:`disk images`
+-    chapter in the System Emulation Users Guide).
++    Use file as hard disk 0, 1, 2 or 3 image on the default bus of the
++    emulated machine (this is for example the IDE bus on most x86 machines,
++    but it can also be SCSI, virtio or something else on other target
++    architectures). See also the :ref:`disk images` chapter in the System
++    Emulation Users Guide.
+ ERST
+ 
+ DEF("cdrom", HAS_ARG, QEMU_OPTION_cdrom,
+-    "-cdrom file     use 'file' as IDE cdrom image (cdrom is ide1 master)\n",
++    "-cdrom file     use 'file' as CD-ROM image\n",
+     QEMU_ARCH_ALL)
+ SRST
+ ``-cdrom file``
+-    Use file as CD-ROM image (you cannot use ``-hdc`` and ``-cdrom`` at
+-    the same time). You can use the host CD-ROM by using ``/dev/cdrom``
+-    as filename.
++    Use file as CD-ROM image on the default bus of the emulated machine
++    (which is IDE1 master on x86, so you cannot use ``-hdc`` and ``-cdrom``
++    at the same time there). On systems that support it, you can use the
++    host CD-ROM by using ``/dev/cdrom`` as filename.
+ ERST
+ 
+ DEF("blockdev", HAS_ARG, QEMU_OPTION_blockdev,
+diff --git a/scripts/checkpatch.pl b/scripts/checkpatch.pl
+index 6ecabfb2b5..fbb71c70f8 100755
+--- a/scripts/checkpatch.pl
++++ b/scripts/checkpatch.pl
+@@ -2865,6 +2865,14 @@ sub process {
+ 		if ($line =~ /\bsignal\s*\(/ && !($line =~ /SIG_(?:IGN|DFL)/)) {
+ 			ERROR("use sigaction to establish signal handlers; signal is not portable\n" . $herecurr);
+ 		}
++# recommend qemu_bh_new_guarded instead of qemu_bh_new
++        if ($realfile =~ /.*\/hw\/.*/ && $line =~ /\bqemu_bh_new\s*\(/) {
++			ERROR("use qemu_bh_new_guarded() instead of qemu_bh_new() to avoid reentrancy problems\n" . $herecurr);
++		}
++# recommend aio_bh_new_guarded instead of aio_bh_new
++        if ($realfile =~ /.*\/hw\/.*/ && $line =~ /\baio_bh_new\s*\(/) {
++			ERROR("use aio_bh_new_guarded() instead of aio_bh_new() to avoid reentrancy problems\n" . $herecurr);
++		}
+ # check for module_init(), use category-specific init macros explicitly please
+ 		if ($line =~ /^module_init\s*\(/) {
+ 			ERROR("please use block_init(), type_init() etc. instead of module_init()\n" . $herecurr);
+diff --git a/softmmu/memory.c b/softmmu/memory.c
+index bc0be3f62c..61569f8306 100644
+--- a/softmmu/memory.c
++++ b/softmmu/memory.c
+@@ -542,6 +542,18 @@ static MemTxResult access_with_adjusted_size(hwaddr addr,
+         access_size_max = 4;
+     }
+ 
++    /* Do not allow more than one simultaneous access to a device's IO Regions */
++    if (mr->dev && !mr->disable_reentrancy_guard &&
++        !mr->ram_device && !mr->ram && !mr->rom_device && !mr->readonly) {
++        if (mr->dev->mem_reentrancy_guard.engaged_in_io) {
++            warn_report_once("Blocked re-entrant IO on MemoryRegion: "
++                             "%s at addr: 0x%" HWADDR_PRIX,
++                             memory_region_name(mr), addr);
++            return MEMTX_ACCESS_ERROR;
++        }
++        mr->dev->mem_reentrancy_guard.engaged_in_io = true;
++    }
++
+     /* FIXME: support unaligned access? */
+     access_size = MAX(MIN(size, access_size_max), access_size_min);
+     access_mask = MAKE_64BIT_MASK(0, access_size * 8);
+@@ -556,6 +568,9 @@ static MemTxResult access_with_adjusted_size(hwaddr addr,
+                         access_mask, attrs);
+         }
+     }
++    if (mr->dev) {
++        mr->dev->mem_reentrancy_guard.engaged_in_io = false;
++    }
+     return r;
+ }
+ 
+@@ -1170,6 +1185,7 @@ static void memory_region_do_init(MemoryRegion *mr,
+     }
+     mr->name = g_strdup(name);
+     mr->owner = owner;
++    mr->dev = (DeviceState *) object_dynamic_cast(mr->owner, TYPE_DEVICE);
+     mr->ram_block = NULL;
+ 
+     if (name) {
+diff --git a/target/arm/kvm.c b/target/arm/kvm.c
+index 84da49332c..e219f78535 100644
+--- a/target/arm/kvm.c
++++ b/target/arm/kvm.c
+@@ -247,6 +247,13 @@ int kvm_arm_get_max_vm_ipa_size(MachineState *ms, bool *fixed_ipa)
+     return ret > 0 ? ret : 40;
+ }
+ 
++int kvm_arch_get_default_type(MachineState *ms)
++{
++    bool fixed_ipa;
++    int size = kvm_arm_get_max_vm_ipa_size(ms, &fixed_ipa);
++    return fixed_ipa ? 0 : size;
++}
++
+ int kvm_arch_init(MachineState *ms, KVMState *s)
+ {
+     int ret = 0;
+diff --git a/target/arm/kvm64.c b/target/arm/kvm64.c
+index 810db33ccb..ed85bcfb5c 100644
+--- a/target/arm/kvm64.c
++++ b/target/arm/kvm64.c
+@@ -950,6 +950,7 @@ typedef struct CPRegStateLevel {
+  */
+ static const CPRegStateLevel non_runtime_cpregs[] = {
+     { KVM_REG_ARM_TIMER_CNT, KVM_PUT_FULL_STATE },
++    { KVM_REG_ARM_PTIMER_CNT, KVM_PUT_FULL_STATE },
+ };
+ 
+ int kvm_arm_cpreg_level(uint64_t regidx)
+diff --git a/target/arm/sme_helper.c b/target/arm/sme_helper.c
+index f891306bb9..73dd838330 100644
+--- a/target/arm/sme_helper.c
++++ b/target/arm/sme_helper.c
+@@ -412,7 +412,7 @@ static inline void HNAME##_host(void *za, intptr_t off, void *host)         \
+ {                                                                           \
+     uint64_t *ptr = za + off;                                               \
+     HOST(host, ptr[BE]);                                                    \
+-    HOST(host + 1, ptr[!BE]);                                               \
++    HOST(host + 8, ptr[!BE]);                                               \
+ }                                                                           \
+ static inline void VNAME##_v_host(void *za, intptr_t off, void *host)       \
+ {                                                                           \
+diff --git a/target/arm/translate.c b/target/arm/translate.c
+index 9cf4a6819e..10dfa11a2b 100644
+--- a/target/arm/translate.c
++++ b/target/arm/translate.c
+@@ -3138,7 +3138,7 @@ void gen_gvec_ssra(unsigned vece, uint32_t rd_ofs, uint32_t rm_ofs,
+           .vece = MO_32 },
+         { .fni8 = gen_ssra64_i64,
+           .fniv = gen_ssra_vec,
+-          .fno = gen_helper_gvec_ssra_b,
++          .fno = gen_helper_gvec_ssra_d,
+           .prefer_i64 = TCG_TARGET_REG_BITS == 64,
+           .opt_opc = vecop_list,
+           .load_dest = true,
+diff --git a/target/i386/kvm/kvm.c b/target/i386/kvm/kvm.c
+index a213209379..002b699030 100644
+--- a/target/i386/kvm/kvm.c
++++ b/target/i386/kvm/kvm.c
+@@ -2455,6 +2455,11 @@ static void register_smram_listener(Notifier *n, void *unused)
+                                  &smram_address_space, 1, "kvm-smram");
+ }
+ 
++int kvm_arch_get_default_type(MachineState *ms)
++{
++    return 0;
++}
++
+ int kvm_arch_init(MachineState *ms, KVMState *s)
+ {
+     uint64_t identity_base = 0xfffbc000;
+diff --git a/target/mips/kvm.c b/target/mips/kvm.c
+index bcb8e06b2c..27cf4e8c1b 100644
+--- a/target/mips/kvm.c
++++ b/target/mips/kvm.c
+@@ -1266,7 +1266,7 @@ int kvm_arch_msi_data_to_gsi(uint32_t data)
+     abort();
+ }
+ 
+-int mips_kvm_type(MachineState *machine, const char *vm_type)
++int kvm_arch_get_default_type(MachineState *machine)
+ {
+ #if defined(KVM_CAP_MIPS_VZ) || defined(KVM_CAP_MIPS_TE)
+     int r;
+diff --git a/target/mips/kvm_mips.h b/target/mips/kvm_mips.h
+index 171d53dbe1..c711269d0a 100644
+--- a/target/mips/kvm_mips.h
++++ b/target/mips/kvm_mips.h
+@@ -25,13 +25,4 @@ void kvm_mips_reset_vcpu(MIPSCPU *cpu);
+ int kvm_mips_set_interrupt(MIPSCPU *cpu, int irq, int level);
+ int kvm_mips_set_ipi_interrupt(MIPSCPU *cpu, int irq, int level);
+ 
+-#ifdef CONFIG_KVM
+-int mips_kvm_type(MachineState *machine, const char *vm_type);
+-#else
+-static inline int mips_kvm_type(MachineState *machine, const char *vm_type)
+-{
+-    return 0;
+-}
+-#endif
+-
+ #endif /* KVM_MIPS_H */
+diff --git a/target/ppc/cpu.c b/target/ppc/cpu.c
+index 1a97b41c6b..6e597680fb 100644
+--- a/target/ppc/cpu.c
++++ b/target/ppc/cpu.c
+@@ -59,6 +59,7 @@ void ppc_store_vscr(CPUPPCState *env, uint32_t vscr)
+     env->vscr_sat.u64[0] = vscr & (1u << VSCR_SAT);
+     env->vscr_sat.u64[1] = 0;
+     set_flush_to_zero((vscr >> VSCR_NJ) & 1, &env->vec_status);
++    set_flush_inputs_to_zero((vscr >> VSCR_NJ) & 1, &env->vec_status);
+ }
+ 
+ uint32_t ppc_get_vscr(CPUPPCState *env)
+diff --git a/target/ppc/kvm.c b/target/ppc/kvm.c
+index 7c25348b7b..4bcda6e2dc 100644
+--- a/target/ppc/kvm.c
++++ b/target/ppc/kvm.c
+@@ -108,6 +108,11 @@ static int kvm_ppc_register_host_cpu_type(void);
+ static void kvmppc_get_cpu_characteristics(KVMState *s);
+ static int kvmppc_get_dec_bits(void);
+ 
++int kvm_arch_get_default_type(MachineState *ms)
++{
++    return 0;
++}
++
+ int kvm_arch_init(MachineState *ms, KVMState *s)
+ {
+     cap_interrupt_unset = kvm_check_extension(s, KVM_CAP_PPC_UNSET_IRQ);
+diff --git a/target/riscv/kvm.c b/target/riscv/kvm.c
+index 30f21453d6..d28d5241f9 100644
+--- a/target/riscv/kvm.c
++++ b/target/riscv/kvm.c
+@@ -426,6 +426,11 @@ int kvm_arch_add_msi_route_post(struct kvm_irq_routing_entry *route,
+     return 0;
+ }
+ 
++int kvm_arch_get_default_type(MachineState *ms)
++{
++    return 0;
++}
++
+ int kvm_arch_init(MachineState *ms, KVMState *s)
+ {
+     return 0;
+diff --git a/target/riscv/pmp.c b/target/riscv/pmp.c
+index 2b43e399b8..575cea1b28 100644
+--- a/target/riscv/pmp.c
++++ b/target/riscv/pmp.c
+@@ -45,6 +45,10 @@ static inline uint8_t pmp_get_a_field(uint8_t cfg)
+  */
+ static inline int pmp_is_locked(CPURISCVState *env, uint32_t pmp_index)
+ {
++    /* mseccfg.RLB is set */
++    if (MSECCFG_RLB_ISSET(env)) {
++        return 0;
++    }
+ 
+     if (env->pmp_state.pmp[pmp_index].cfg_reg & PMP_LOCK) {
+         return 1;
+diff --git a/target/s390x/kvm/kvm.c b/target/s390x/kvm/kvm.c
+index 3ac7ec9acf..8ffe140513 100644
+--- a/target/s390x/kvm/kvm.c
++++ b/target/s390x/kvm/kvm.c
+@@ -340,6 +340,11 @@ static void ccw_machine_class_foreach(ObjectClass *oc, void *opaque)
+     mc->default_cpu_type = S390_CPU_TYPE_NAME("host");
+ }
+ 
++int kvm_arch_get_default_type(MachineState *ms)
++{
++    return 0;
++}
++
+ int kvm_arch_init(MachineState *ms, KVMState *s)
+ {
+     object_class_foreach(ccw_machine_class_foreach, TYPE_S390_CCW_MACHINE,
+diff --git a/target/s390x/tcg/translate_vx.c.inc b/target/s390x/tcg/translate_vx.c.inc
+index 79e2bbe0a7..25e974c99f 100644
+--- a/target/s390x/tcg/translate_vx.c.inc
++++ b/target/s390x/tcg/translate_vx.c.inc
+@@ -57,7 +57,7 @@
+ #define FPF_LONG        3
+ #define FPF_EXT         4
+ 
+-static inline bool valid_vec_element(uint8_t enr, MemOp es)
++static inline bool valid_vec_element(uint16_t enr, MemOp es)
+ {
+     return !(enr & ~(NUM_VEC_ELEMENTS(es) - 1));
+ }
+@@ -1014,7 +1014,7 @@ static DisasJumpType op_vpdi(DisasContext *s, DisasOps *o)
+ 
+ static DisasJumpType op_vrep(DisasContext *s, DisasOps *o)
+ {
+-    const uint8_t enr = get_field(s, i2);
++    const uint16_t enr = get_field(s, i2);
+     const uint8_t es = get_field(s, m4);
+ 
+     if (es > ES_64 || !valid_vec_element(enr, es)) {
+@@ -3192,7 +3192,7 @@ static DisasJumpType op_vfmax(DisasContext *s, DisasOps *o)
+     const uint8_t m5 = get_field(s, m5);
+     gen_helper_gvec_3_ptr *fn;
+ 
+-    if (m6 == 5 || m6 == 6 || m6 == 7 || m6 >= 13) {
++    if (m6 == 5 || m6 == 6 || m6 == 7 || m6 >= 13 || (m5 & 7)) {
+         gen_program_exception(s, PGM_SPECIFICATION);
+         return DISAS_NORETURN;
+     }
+diff --git a/target/s390x/tcg/vec_helper.c b/target/s390x/tcg/vec_helper.c
+index 48d86722b2..dafc4c3582 100644
+--- a/target/s390x/tcg/vec_helper.c
++++ b/target/s390x/tcg/vec_helper.c
+@@ -193,7 +193,7 @@ void HELPER(vstl)(CPUS390XState *env, const void *v1, uint64_t addr,
+                   uint64_t bytes)
+ {
+     /* Probe write access before actually modifying memory */
+-    probe_write_access(env, addr, bytes, GETPC());
++    probe_write_access(env, addr, MIN(bytes, 16), GETPC());
+ 
+     if (likely(bytes >= 16)) {
+         cpu_stq_data_ra(env, addr, s390_vec_read_element64(v1, 0), GETPC());
+diff --git a/target/s390x/tcg/vec_string_helper.c b/target/s390x/tcg/vec_string_helper.c
+index 9b85becdfb..a19f429768 100644
+--- a/target/s390x/tcg/vec_string_helper.c
++++ b/target/s390x/tcg/vec_string_helper.c
+@@ -474,9 +474,9 @@ DEF_VSTRC_CC_RT_HELPER(32)
+ static int vstrs(S390Vector *v1, const S390Vector *v2, const S390Vector *v3,
+                  const S390Vector *v4, uint8_t es, bool zs)
+ {
+-    int substr_elen, substr_0, str_elen, i, j, k, cc;
++    int substr_elen, i, j, k, cc;
+     int nelem = 16 >> es;
+-    bool eos = false;
++    int str_leftmost_0;
+ 
+     substr_elen = s390_vec_read_element8(v4, 7) >> es;
+ 
+@@ -498,47 +498,20 @@ static int vstrs(S390Vector *v1, const S390Vector *v2, const S390Vector *v3,
+     }
+ 
+     /* If ZS, look for eos in the searched string. */
++    str_leftmost_0 = nelem;
+     if (zs) {
+         for (k = 0; k < nelem; k++) {
+             if (s390_vec_read_element(v2, k, es) == 0) {
+-                eos = true;
++                str_leftmost_0 = k;
+                 break;
+             }
+         }
+-        str_elen = k;
+-    } else {
+-        str_elen = nelem;
+     }
+ 
+-    substr_0 = s390_vec_read_element(v3, 0, es);
+-
+-    for (k = 0; ; k++) {
+-        for (; k < str_elen; k++) {
+-            if (s390_vec_read_element(v2, k, es) == substr_0) {
+-                break;
+-            }
+-        }
+-
+-        /* If we reached the end of the string, no match. */
+-        if (k == str_elen) {
+-            cc = eos; /* no match (with or without zero char) */
+-            goto done;
+-        }
+-
+-        /* If the substring is only one char, match. */
+-        if (substr_elen == 1) {
+-            cc = 2; /* full match */
+-            goto done;
+-        }
+-
+-        /* If the match begins at the last char, we have a partial match. */
+-        if (k == str_elen - 1) {
+-            cc = 3; /* partial match */
+-            goto done;
+-        }
+-
++    cc = str_leftmost_0 == nelem ? 0 : 1;  /* No match. */
++    for (k = 0; k < nelem; k++) {
+         i = MIN(nelem, k + substr_elen);
+-        for (j = k + 1; j < i; j++) {
++        for (j = k; j < i; j++) {
+             uint32_t e2 = s390_vec_read_element(v2, j, es);
+             uint32_t e3 = s390_vec_read_element(v3, j - k, es);
+             if (e2 != e3) {
+@@ -546,9 +519,16 @@ static int vstrs(S390Vector *v1, const S390Vector *v2, const S390Vector *v3,
+             }
+         }
+         if (j == i) {
+-            /* Matched up until "end". */
+-            cc = i - k == substr_elen ? 2 : 3; /* full or partial match */
+-            goto done;
++            /* All elements matched. */
++            if (k > str_leftmost_0) {
++                cc = 1;  /* Ignored match. */
++                k = nelem;
++            } else if (i - k == substr_elen) {
++                cc = 2;  /* Full match. */
++            } else {
++                cc = 3;  /* Partial match. */
++            }
++            break;
+         }
+     }
+ 
+diff --git a/tests/docker/dockerfiles/python.docker b/tests/docker/dockerfiles/python.docker
+index 56d88417df..175c10a34e 100644
+--- a/tests/docker/dockerfiles/python.docker
++++ b/tests/docker/dockerfiles/python.docker
+@@ -7,7 +7,6 @@ MAINTAINER John Snow <jsnow@redhat.com>
+ ENV PACKAGES \
+     gcc \
+     make \
+-    pipenv \
+     python3 \
+     python3-pip \
+     python3-tox \
+diff --git a/tests/qemu-iotests/181 b/tests/qemu-iotests/181
+index cb96d09ae5..dc90a10757 100755
+--- a/tests/qemu-iotests/181
++++ b/tests/qemu-iotests/181
+@@ -109,7 +109,7 @@ if [ ${QEMU_STATUS[$dest]} -lt 0 ]; then
+     _notrun 'Postcopy is not supported'
+ fi
+ 
+-_send_qemu_cmd $src 'migrate_set_parameter max_bandwidth 4k' "(qemu)"
++_send_qemu_cmd $src 'migrate_set_parameter max-bandwidth 4k' "(qemu)"
+ _send_qemu_cmd $src 'migrate_set_capability postcopy-ram on' "(qemu)"
+ _send_qemu_cmd $src "migrate -d unix:${MIG_SOCKET}" "(qemu)"
+ _send_qemu_cmd $src 'migrate_start_postcopy' "(qemu)"
+diff --git a/tests/qtest/libqos/ahci.c b/tests/qtest/libqos/ahci.c
+index f53f12aa99..a2c94c6e06 100644
+--- a/tests/qtest/libqos/ahci.c
++++ b/tests/qtest/libqos/ahci.c
+@@ -404,57 +404,110 @@ void ahci_port_clear(AHCIQState *ahci, uint8_t port)
+ /**
+  * Check a port for errors.
+  */
+-void ahci_port_check_error(AHCIQState *ahci, uint8_t port,
+-                           uint32_t imask, uint8_t emask)
++void ahci_port_check_error(AHCIQState *ahci, AHCICommand *cmd)
+ {
++    uint8_t port = cmd->port;
+     uint32_t reg;
+ 
+-    /* The upper 9 bits of the IS register all indicate errors. */
+-    reg = ahci_px_rreg(ahci, port, AHCI_PX_IS);
+-    reg &= ~imask;
+-    reg >>= 23;
+-    g_assert_cmphex(reg, ==, 0);
++    /* If expecting TF error, ensure that TFES is set. */
++    if (cmd->errors) {
++        reg = ahci_px_rreg(ahci, port, AHCI_PX_IS);
++        ASSERT_BIT_SET(reg, AHCI_PX_IS_TFES);
++    } else {
++        /* The upper 9 bits of the IS register all indicate errors. */
++        reg = ahci_px_rreg(ahci, port, AHCI_PX_IS);
++        reg &= ~cmd->interrupts;
++        reg >>= 23;
++        g_assert_cmphex(reg, ==, 0);
++    }
+ 
+-    /* The Sata Error Register should be empty. */
++    /* The Sata Error Register should be empty, even when expecting TF error. */
+     reg = ahci_px_rreg(ahci, port, AHCI_PX_SERR);
+     g_assert_cmphex(reg, ==, 0);
+ 
++    /* If expecting TF error, and TFES was set, perform error recovery
++     * (see AHCI 1.3 section 6.2.2.1) such that we can send new commands. */
++    if (cmd->errors) {
++        /* This will clear PxCI. */
++        ahci_px_clr(ahci, port, AHCI_PX_CMD, AHCI_PX_CMD_ST);
++
++        /* The port has 500ms to disengage. */
++        usleep(500000);
++        reg = ahci_px_rreg(ahci, port, AHCI_PX_CMD);
++        ASSERT_BIT_CLEAR(reg, AHCI_PX_CMD_CR);
++
++        /* Clear PxIS. */
++        reg = ahci_px_rreg(ahci, port, AHCI_PX_IS);
++        ahci_px_wreg(ahci, port, AHCI_PX_IS, reg);
++
++        /* Check if we need to perform a COMRESET.
++         * Not implemented right now, as there is no reason why our QEMU model
++         * should need a COMRESET when expecting TF error. */
++        reg = ahci_px_rreg(ahci, port, AHCI_PX_TFD);
++        ASSERT_BIT_CLEAR(reg, AHCI_PX_TFD_STS_BSY | AHCI_PX_TFD_STS_DRQ);
++
++        /* Enable issuing new commands. */
++        ahci_px_set(ahci, port, AHCI_PX_CMD, AHCI_PX_CMD_ST);
++    }
++
+     /* The TFD also has two error sections. */
+     reg = ahci_px_rreg(ahci, port, AHCI_PX_TFD);
+-    if (!emask) {
++    if (!cmd->errors) {
+         ASSERT_BIT_CLEAR(reg, AHCI_PX_TFD_STS_ERR);
+     } else {
+         ASSERT_BIT_SET(reg, AHCI_PX_TFD_STS_ERR);
+     }
+-    ASSERT_BIT_CLEAR(reg, AHCI_PX_TFD_ERR & (~emask << 8));
+-    ASSERT_BIT_SET(reg, AHCI_PX_TFD_ERR & (emask << 8));
++    ASSERT_BIT_CLEAR(reg, AHCI_PX_TFD_ERR & (~cmd->errors << 8));
++    ASSERT_BIT_SET(reg, AHCI_PX_TFD_ERR & (cmd->errors << 8));
+ }
+ 
+-void ahci_port_check_interrupts(AHCIQState *ahci, uint8_t port,
+-                                uint32_t intr_mask)
++void ahci_port_check_interrupts(AHCIQState *ahci, AHCICommand *cmd)
+ {
++    uint8_t port = cmd->port;
+     uint32_t reg;
+ 
++    /* If we expect errors, error handling in ahci_port_check_error() will
++     * already have cleared PxIS, so in that case this function cannot verify
++     * and clear expected interrupts. */
++    if (cmd->errors) {
++        return;
++    }
++
+     /* Check for expected interrupts */
+     reg = ahci_px_rreg(ahci, port, AHCI_PX_IS);
+-    ASSERT_BIT_SET(reg, intr_mask);
++    ASSERT_BIT_SET(reg, cmd->interrupts);
+ 
+     /* Clear expected interrupts and assert all interrupts now cleared. */
+-    ahci_px_wreg(ahci, port, AHCI_PX_IS, intr_mask);
++    ahci_px_wreg(ahci, port, AHCI_PX_IS, cmd->interrupts);
+     g_assert_cmphex(ahci_px_rreg(ahci, port, AHCI_PX_IS), ==, 0);
+ }
+ 
+-void ahci_port_check_nonbusy(AHCIQState *ahci, uint8_t port, uint8_t slot)
++void ahci_port_check_nonbusy(AHCIQState *ahci, AHCICommand *cmd)
+ {
++    uint8_t slot = cmd->slot;
++    uint8_t port = cmd->port;
+     uint32_t reg;
+ 
+-    /* Assert that the command slot is no longer busy (NCQ) */
++    /* For NCQ command with error PxSACT bit should still be set.
++     * For NCQ command without error, PxSACT bit should be cleared.
++     * For non-NCQ command, PxSACT bit should always be cleared. */
+     reg = ahci_px_rreg(ahci, port, AHCI_PX_SACT);
+-    ASSERT_BIT_CLEAR(reg, (1 << slot));
++    if (cmd->props->ncq && cmd->errors) {
++        ASSERT_BIT_SET(reg, (1 << slot));
++    } else {
++        ASSERT_BIT_CLEAR(reg, (1 << slot));
++    }
+ 
+-    /* Non-NCQ */
++    /* For non-NCQ command with error, PxCI bit should still be set.
++     * For non-NCQ command without error, PxCI bit should be cleared.
++     * For NCQ command without error, PxCI bit should be cleared.
++     * For NCQ command with error, PxCI bit may or may not be cleared. */
+     reg = ahci_px_rreg(ahci, port, AHCI_PX_CI);
+-    ASSERT_BIT_CLEAR(reg, (1 << slot));
++    if (!cmd->props->ncq && cmd->errors) {
++        ASSERT_BIT_SET(reg, (1 << slot));
++    } else if (!cmd->errors) {
++        ASSERT_BIT_CLEAR(reg, (1 << slot));
++    }
+ 
+     /* And assert that we are generally not busy. */
+     reg = ahci_px_rreg(ahci, port, AHCI_PX_TFD);
+@@ -1207,9 +1260,10 @@ void ahci_command_wait(AHCIQState *ahci, AHCICommand *cmd)
+ 
+ #define RSET(REG, MASK) (BITSET(ahci_px_rreg(ahci, cmd->port, (REG)), (MASK)))
+ 
+-    while (RSET(AHCI_PX_TFD, AHCI_PX_TFD_STS_BSY) ||
+-           RSET(AHCI_PX_CI, 1 << cmd->slot) ||
+-           (cmd->props->ncq && RSET(AHCI_PX_SACT, 1 << cmd->slot))) {
++    while (!RSET(AHCI_PX_TFD, AHCI_PX_TFD_STS_ERR) &&
++           (RSET(AHCI_PX_TFD, AHCI_PX_TFD_STS_BSY) ||
++            RSET(AHCI_PX_CI, 1 << cmd->slot) ||
++            (cmd->props->ncq && RSET(AHCI_PX_SACT, 1 << cmd->slot)))) {
+         usleep(50);
+     }
+ 
+@@ -1226,9 +1280,9 @@ void ahci_command_verify(AHCIQState *ahci, AHCICommand *cmd)
+     uint8_t slot = cmd->slot;
+     uint8_t port = cmd->port;
+ 
+-    ahci_port_check_error(ahci, port, cmd->interrupts, cmd->errors);
+-    ahci_port_check_interrupts(ahci, port, cmd->interrupts);
+-    ahci_port_check_nonbusy(ahci, port, slot);
++    ahci_port_check_nonbusy(ahci, cmd);
++    ahci_port_check_error(ahci, cmd);
++    ahci_port_check_interrupts(ahci, cmd);
+     ahci_port_check_cmd_sanity(ahci, cmd);
+     if (cmd->interrupts & AHCI_PX_IS_DHRS) {
+         ahci_port_check_d2h_sanity(ahci, port, slot);
+diff --git a/tests/qtest/libqos/ahci.h b/tests/qtest/libqos/ahci.h
+index 88835b6228..48017864bf 100644
+--- a/tests/qtest/libqos/ahci.h
++++ b/tests/qtest/libqos/ahci.h
+@@ -590,11 +590,9 @@ void ahci_set_command_header(AHCIQState *ahci, uint8_t port,
+ void ahci_destroy_command(AHCIQState *ahci, uint8_t port, uint8_t slot);
+ 
+ /* AHCI sanity check routines */
+-void ahci_port_check_error(AHCIQState *ahci, uint8_t port,
+-                           uint32_t imask, uint8_t emask);
+-void ahci_port_check_interrupts(AHCIQState *ahci, uint8_t port,
+-                                uint32_t intr_mask);
+-void ahci_port_check_nonbusy(AHCIQState *ahci, uint8_t port, uint8_t slot);
++void ahci_port_check_error(AHCIQState *ahci, AHCICommand *cmd);
++void ahci_port_check_interrupts(AHCIQState *ahci, AHCICommand *cmd);
++void ahci_port_check_nonbusy(AHCIQState *ahci, AHCICommand *cmd);
+ void ahci_port_check_d2h_sanity(AHCIQState *ahci, uint8_t port, uint8_t slot);
+ void ahci_port_check_pio_sanity(AHCIQState *ahci, AHCICommand *cmd);
+ void ahci_port_check_cmd_sanity(AHCIQState *ahci, AHCICommand *cmd);
+diff --git a/tests/qtest/test-hmp.c b/tests/qtest/test-hmp.c
+index f8b22abe4c..c38d0b9db9 100644
+--- a/tests/qtest/test-hmp.c
++++ b/tests/qtest/test-hmp.c
+@@ -45,9 +45,9 @@ static const char *hmp_cmds[] = {
+     "log all",
+     "log none",
+     "memsave 0 4096 \"/dev/null\"",
+-    "migrate_set_parameter xbzrle_cache_size 1",
+-    "migrate_set_parameter downtime_limit 1",
+-    "migrate_set_parameter max_bandwidth 1",
++    "migrate_set_parameter xbzrle-cache-size 1",
++    "migrate_set_parameter downtime-limit 1",
++    "migrate_set_parameter max-bandwidth 1",
+     "netdev_add user,id=net1",
+     "set_link net1 off",
+     "set_link net1 on",
+diff --git a/tests/unit/ptimer-test-stubs.c b/tests/unit/ptimer-test-stubs.c
+index f5e75a96b6..24d5413f9d 100644
+--- a/tests/unit/ptimer-test-stubs.c
++++ b/tests/unit/ptimer-test-stubs.c
+@@ -107,7 +107,8 @@ int64_t qemu_clock_deadline_ns_all(QEMUClockType type, int attr_mask)
+     return deadline;
+ }
+ 
+-QEMUBH *qemu_bh_new_full(QEMUBHFunc *cb, void *opaque, const char *name)
++QEMUBH *qemu_bh_new_full(QEMUBHFunc *cb, void *opaque, const char *name,
++                         MemReentrancyGuard *reentrancy_guard)
+ {
+     QEMUBH *bh = g_new(QEMUBH, 1);
+ 
+diff --git a/ui/console.c b/ui/console.c
+index 646202214a..52414d6aa3 100644
+--- a/ui/console.c
++++ b/ui/console.c
+@@ -1697,6 +1697,9 @@ bool dpy_ui_info_supported(QemuConsole *con)
+     if (con == NULL) {
+         con = active_console;
+     }
++    if (con == NULL) {
++        return false;
++    }
+ 
+     return con->hw_ops->ui_info != NULL;
+ }
+diff --git a/util/async.c b/util/async.c
+index f449c3444e..a1f07fc5a7 100644
+--- a/util/async.c
++++ b/util/async.c
+@@ -64,6 +64,7 @@ struct QEMUBH {
+     void *opaque;
+     QSLIST_ENTRY(QEMUBH) next;
+     unsigned flags;
++    MemReentrancyGuard *reentrancy_guard;
+ };
+ 
+ /* Called concurrently from any thread */
+@@ -132,7 +133,7 @@ void aio_bh_schedule_oneshot_full(AioContext *ctx, QEMUBHFunc *cb,
+ }
+ 
+ QEMUBH *aio_bh_new_full(AioContext *ctx, QEMUBHFunc *cb, void *opaque,
+-                        const char *name)
++                        const char *name, MemReentrancyGuard *reentrancy_guard)
+ {
+     QEMUBH *bh;
+     bh = g_new(QEMUBH, 1);
+@@ -141,13 +142,30 @@ QEMUBH *aio_bh_new_full(AioContext *ctx, QEMUBHFunc *cb, void *opaque,
+         .cb = cb,
+         .opaque = opaque,
+         .name = name,
++        .reentrancy_guard = reentrancy_guard,
+     };
+     return bh;
+ }
+ 
+ void aio_bh_call(QEMUBH *bh)
+ {
++    bool last_engaged_in_io = false;
++
++    /* Make a copy of the guard-pointer as cb may free the bh */
++    MemReentrancyGuard *reentrancy_guard = bh->reentrancy_guard;
++    if (reentrancy_guard) {
++        last_engaged_in_io = reentrancy_guard->engaged_in_io;
++        if (reentrancy_guard->engaged_in_io) {
++            trace_reentrant_aio(bh->ctx, bh->name);
++        }
++        reentrancy_guard->engaged_in_io = true;
++    }
++
+     bh->cb(bh->opaque);
++
++    if (reentrancy_guard) {
++        reentrancy_guard->engaged_in_io = last_engaged_in_io;
++    }
+ }
+ 
+ /* Multiple occurrences of aio_bh_poll cannot be called concurrently. */
+diff --git a/util/main-loop.c b/util/main-loop.c
+index 10fa74c6e3..4d49e0bcbf 100644
+--- a/util/main-loop.c
++++ b/util/main-loop.c
+@@ -619,9 +619,11 @@ void main_loop_wait(int nonblocking)
+ 
+ /* Functions to operate on the main QEMU AioContext.  */
+ 
+-QEMUBH *qemu_bh_new_full(QEMUBHFunc *cb, void *opaque, const char *name)
++QEMUBH *qemu_bh_new_full(QEMUBHFunc *cb, void *opaque, const char *name,
++                         MemReentrancyGuard *reentrancy_guard)
+ {
+-    return aio_bh_new_full(qemu_aio_context, cb, opaque, name);
++    return aio_bh_new_full(qemu_aio_context, cb, opaque, name,
++                           reentrancy_guard);
+ }
+ 
+ /*
+diff --git a/util/trace-events b/util/trace-events
+index c8f53d7d9f..dc3b1eb3bf 100644
+--- a/util/trace-events
++++ b/util/trace-events
+@@ -11,6 +11,7 @@ poll_remove(void *ctx, void *node, int fd) "ctx %p node %p fd %d"
+ # async.c
+ aio_co_schedule(void *ctx, void *co) "ctx %p co %p"
+ aio_co_schedule_bh_cb(void *ctx, void *co) "ctx %p co %p"
++reentrant_aio(void *ctx, const char *name) "ctx %p name %s"
+ 
+ # thread-pool.c
+ thread_pool_submit(void *pool, void *req, void *opaque) "pool %p req %p opaque %p"
