@@ -1,0 +1,1544 @@
+From 84a139b0289470994f8a518034d69186f5ad5bb9 Mon Sep 17 00:00:00 2001
+From: Michael Tokarev <mjt@tls.msk.ru>
+Date: Tue, 6 Feb 2024 20:35:22 +0300
+Subject: [PATCH] Revert "monitor: only run coroutine commands in
+ qemu_aio_context"
+
+This reverts commit 8ec90598e922a604c222bdbc6289bed7279dced6.
+Causes a regression at least in suspend-resume-hibernate cycle,
+let's revert it to restore the status quo for now.
+---
+ monitor/qmp.c                         | 17 ++++++
+ qapi/qmp-dispatch.c                   | 24 +--------
+ tests/qemu-iotests/060.out            |  4 +-
+ tests/qemu-iotests/071.out            |  4 +-
+ tests/qemu-iotests/081.out            | 16 +++---
+ tests/qemu-iotests/087.out            | 12 ++---
+ tests/qemu-iotests/108.out            |  2 +-
+ tests/qemu-iotests/109                |  4 +-
+ tests/qemu-iotests/109.out            | 78 +++++++++++++++------------
+ tests/qemu-iotests/117.out            |  2 +-
+ tests/qemu-iotests/120.out            |  2 +-
+ tests/qemu-iotests/127.out            |  2 +-
+ tests/qemu-iotests/140.out            |  2 +-
+ tests/qemu-iotests/143.out            |  2 +-
+ tests/qemu-iotests/156.out            |  2 +-
+ tests/qemu-iotests/176.out            | 16 +++---
+ tests/qemu-iotests/182.out            |  2 +-
+ tests/qemu-iotests/183.out            |  4 +-
+ tests/qemu-iotests/184.out            | 32 +++++------
+ tests/qemu-iotests/185                |  6 +--
+ tests/qemu-iotests/185.out            | 45 ++--------------
+ tests/qemu-iotests/191.out            | 16 +++---
+ tests/qemu-iotests/195.out            | 16 +++---
+ tests/qemu-iotests/223.out            | 12 ++---
+ tests/qemu-iotests/227.out            | 32 +++++------
+ tests/qemu-iotests/247.out            |  2 +-
+ tests/qemu-iotests/273.out            |  8 +--
+ tests/qemu-iotests/308                |  4 +-
+ tests/qemu-iotests/308.out            |  2 +-
+ tests/qemu-iotests/tests/qsd-jobs.out |  4 +-
+ 30 files changed, 173 insertions(+), 201 deletions(-)
+
+diff --git a/monitor/qmp.c b/monitor/qmp.c
+index acd0a350c2..092c527b6f 100644
+--- a/monitor/qmp.c
++++ b/monitor/qmp.c
+@@ -296,6 +296,14 @@ void coroutine_fn monitor_qmp_dispatcher_co(void *data)
+             qemu_coroutine_yield();
+         }
+ 
++        /*
++         * Move the coroutine from iohandler_ctx to qemu_aio_context for
++         * executing the command handler so that it can make progress if it
++         * involves an AIO_WAIT_WHILE().
++         */
++        aio_co_schedule(qemu_get_aio_context(), qmp_dispatcher_co);
++        qemu_coroutine_yield();
++
+         /* Process request */
+         if (req_obj->req) {
+             if (trace_event_get_state(TRACE_MONITOR_QMP_CMD_IN_BAND)) {
+@@ -322,6 +330,15 @@ void coroutine_fn monitor_qmp_dispatcher_co(void *data)
+         }
+ 
+         qmp_request_free(req_obj);
++
++        /*
++         * Yield and reschedule so the main loop stays responsive.
++         *
++         * Move back to iohandler_ctx so that nested event loops for
++         * qemu_aio_context don't start new monitor commands.
++         */
++        aio_co_schedule(iohandler_get_aio_context(), qmp_dispatcher_co);
++        qemu_coroutine_yield();
+     }
+ }
+ 
+diff --git a/qapi/qmp-dispatch.c b/qapi/qmp-dispatch.c
+index 5d000fae87..0990873ec8 100644
+--- a/qapi/qmp-dispatch.c
++++ b/qapi/qmp-dispatch.c
+@@ -206,31 +206,9 @@ QDict *qmp_dispatch(const QmpCommandList *cmds, QObject *request,
+     assert(!(oob && qemu_in_coroutine()));
+     assert(monitor_cur() == NULL);
+     if (!!(cmd->options & QCO_COROUTINE) == qemu_in_coroutine()) {
+-        if (qemu_in_coroutine()) {
+-            /*
+-             * Move the coroutine from iohandler_ctx to qemu_aio_context for
+-             * executing the command handler so that it can make progress if it
+-             * involves an AIO_WAIT_WHILE().
+-             */
+-            aio_co_schedule(qemu_get_aio_context(), qemu_coroutine_self());
+-            qemu_coroutine_yield();
+-        }
+-
+         monitor_set_cur(qemu_coroutine_self(), cur_mon);
+         cmd->fn(args, &ret, &err);
+         monitor_set_cur(qemu_coroutine_self(), NULL);
+-
+-        if (qemu_in_coroutine()) {
+-            /*
+-             * Yield and reschedule so the main loop stays responsive.
+-             *
+-             * Move back to iohandler_ctx so that nested event loops for
+-             * qemu_aio_context don't start new monitor commands.
+-             */
+-            aio_co_schedule(iohandler_get_aio_context(),
+-                            qemu_coroutine_self());
+-            qemu_coroutine_yield();
+-        }
+     } else {
+        /*
+         * Actual context doesn't match the one the command needs.
+@@ -254,7 +232,7 @@ QDict *qmp_dispatch(const QmpCommandList *cmds, QObject *request,
+             .errp       = &err,
+             .co         = qemu_coroutine_self(),
+         };
+-        aio_bh_schedule_oneshot(iohandler_get_aio_context(), do_qmp_dispatch_bh,
++        aio_bh_schedule_oneshot(qemu_get_aio_context(), do_qmp_dispatch_bh,
+                                 &data);
+         qemu_coroutine_yield();
+     }
+diff --git a/tests/qemu-iotests/060.out b/tests/qemu-iotests/060.out
+index a37bf446e9..329977d9b9 100644
+--- a/tests/qemu-iotests/060.out
++++ b/tests/qemu-iotests/060.out
+@@ -421,8 +421,8 @@ QMP_VERSION
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_IMAGE_CORRUPTED", "data": {"device": "none0", "msg": "Preventing invalid write on metadata (overlaps with refcount table)", "offset": 65536, "node-name": "drive", "fatal": true, "size": 65536}}
+ write failed: Input/output error
+ {"return": ""}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ === Testing incoming inactive corrupted image ===
+ 
+@@ -432,8 +432,8 @@ QMP_VERSION
+ qcow2: Image is corrupt: L2 table offset 0x2a2a2a00 unaligned (L1 index: 0); further non-fatal corruption events will be suppressed
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_IMAGE_CORRUPTED", "data": {"device": "", "msg": "L2 table offset 0x2a2a2a00 unaligned (L1 index: 0)", "node-name": "drive", "fatal": false}}
+ {"return": ""}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+     corrupt: false
+ *** done
+diff --git a/tests/qemu-iotests/071.out b/tests/qemu-iotests/071.out
+index a2923b05c2..bca0c02f5c 100644
+--- a/tests/qemu-iotests/071.out
++++ b/tests/qemu-iotests/071.out
+@@ -45,8 +45,8 @@ QMP_VERSION
+ {"return": {}}
+ read failed: Input/output error
+ {"return": ""}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ 
+ === Testing blkverify on existing block device ===
+@@ -84,9 +84,9 @@ wrote 512/512 bytes at offset 0
+ {"return": ""}
+ read failed: Input/output error
+ {"return": ""}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ QEMU_PROG: Failed to flush the L2 table cache: Input/output error
+ QEMU_PROG: Failed to flush the refcount block cache: Input/output error
+-{"return": {}}
+ 
+ *** done
+diff --git a/tests/qemu-iotests/081.out b/tests/qemu-iotests/081.out
+index aba85ea564..615c083549 100644
+--- a/tests/qemu-iotests/081.out
++++ b/tests/qemu-iotests/081.out
+@@ -35,8 +35,8 @@ QMP_VERSION
+ read 10485760/10485760 bytes at offset 0
+ 10 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ {"return": ""}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ 
+ == using quorum rewrite corrupted mode ==
+@@ -67,8 +67,8 @@ QMP_VERSION
+ read 10485760/10485760 bytes at offset 0
+ 10 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ {"return": ""}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ -- checking that the image has been corrected --
+ read 10485760/10485760 bytes at offset 0
+@@ -106,8 +106,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ Testing:
+ QMP_VERSION
+@@ -115,8 +115,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"error": {"class": "GenericError", "desc": "Cannot add a child to a quorum in blkverify mode"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ 
+ == dynamically removing a child from a quorum ==
+@@ -125,31 +125,31 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ Testing:
+ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"error": {"class": "GenericError", "desc": "The number of children cannot be lower than the vote threshold 2"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ Testing:
+ QMP_VERSION
+ {"return": {}}
+ {"error": {"class": "GenericError", "desc": "blkverify=on can only be set if there are exactly two files and vote-threshold is 2"}}
+ {"error": {"class": "GenericError", "desc": "Cannot find device='drive0-quorum' nor node-name='drive0-quorum'"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ Testing:
+ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"error": {"class": "GenericError", "desc": "The number of children cannot be lower than the vote threshold 2"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ *** done
+diff --git a/tests/qemu-iotests/087.out b/tests/qemu-iotests/087.out
+index 97b6d8036d..e1c23a6983 100644
+--- a/tests/qemu-iotests/087.out
++++ b/tests/qemu-iotests/087.out
+@@ -7,8 +7,8 @@ Testing:
+ QMP_VERSION
+ {"return": {}}
+ {"error": {"class": "GenericError", "desc": "'node-name' must be specified for the root node"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ 
+ === Duplicate ID ===
+@@ -18,8 +18,8 @@ QMP_VERSION
+ {"return": {}}
+ {"error": {"class": "GenericError", "desc": "node-name=disk is conflicting with a device id"}}
+ {"error": {"class": "GenericError", "desc": "Duplicate nodes with node-name='test-node'"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ 
+ === aio=native without O_DIRECT ===
+@@ -28,8 +28,8 @@ Testing:
+ QMP_VERSION
+ {"return": {}}
+ {"error": {"class": "GenericError", "desc": "aio=native was specified, but it requires cache.direct=on, which was not specified."}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ 
+ === Encrypted image QCow ===
+@@ -40,8 +40,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"error": {"class": "GenericError", "desc": "Use of AES-CBC encrypted IMGFMT images is no longer supported in system emulators"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ 
+ === Encrypted image LUKS ===
+@@ -52,8 +52,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ 
+ === Missing driver ===
+@@ -63,7 +63,7 @@ Testing: -S
+ QMP_VERSION
+ {"return": {}}
+ {"error": {"class": "GenericError", "desc": "Parameter 'driver' is missing"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ *** done
+diff --git a/tests/qemu-iotests/108.out b/tests/qemu-iotests/108.out
+index b9c876b394..b5401d788d 100644
+--- a/tests/qemu-iotests/108.out
++++ b/tests/qemu-iotests/108.out
+@@ -173,8 +173,8 @@ OK: Reftable is where we expect it
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "create"}}
+ {"return": {}}
+ { "execute": "quit" }
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ wrote 65536/65536 bytes at offset 0
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+diff --git a/tests/qemu-iotests/109 b/tests/qemu-iotests/109
+index 0fb580f9a5..e207a555f3 100755
+--- a/tests/qemu-iotests/109
++++ b/tests/qemu-iotests/109
+@@ -57,13 +57,13 @@ run_qemu()
+     _launch_qemu -drive file="${source_img}",format=raw,cache=${CACHEMODE},aio=${AIOMODE},id=src
+     _send_qemu_cmd $QEMU_HANDLE "{ 'execute': 'qmp_capabilities' }" "return"
+ 
+-    capture_events="$qmp_event" _send_qemu_cmd $QEMU_HANDLE \
++    _send_qemu_cmd $QEMU_HANDLE \
+         "{'execute':'drive-mirror', 'arguments':{
+             'device': 'src', 'target': '$raw_img', $qmp_format
+             'mode': 'existing', 'sync': 'full'}}" \
+         "return"
+ 
+-    capture_events="$qmp_event JOB_STATUS_CHANGE" _wait_event $QEMU_HANDLE "$qmp_event"
++    _send_qemu_cmd $QEMU_HANDLE '' "$qmp_event"
+     if test "$qmp_event" = BLOCK_JOB_ERROR; then
+         _send_qemu_cmd $QEMU_HANDLE '' '"status": "null"'
+     fi
+diff --git a/tests/qemu-iotests/109.out b/tests/qemu-iotests/109.out
+index 255b81fcdc..e29280015e 100644
+--- a/tests/qemu-iotests/109.out
++++ b/tests/qemu-iotests/109.out
+@@ -7,7 +7,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -23,8 +23,8 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"execute":"query-block-jobs"}
+ {"return": []}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ { 'execute': 'qmp_capabilities' }
+@@ -35,10 +35,12 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 1024, "offset": 1024, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 1024, "offset": 1024, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -46,7 +48,6 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 1024, "offset": 1024, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ 
+ === Writing a qcow2 header into raw ===
+@@ -56,7 +57,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -72,8 +73,8 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"execute":"query-block-jobs"}
+ {"return": []}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ { 'execute': 'qmp_capabilities' }
+@@ -84,10 +85,12 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 197120, "offset": 197120, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 197120, "offset": 197120, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -95,7 +98,6 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 197120, "offset": 197120, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ 
+ === Writing a qed header into raw ===
+@@ -105,7 +107,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -121,8 +123,8 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"execute":"query-block-jobs"}
+ {"return": []}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ { 'execute': 'qmp_capabilities' }
+@@ -133,10 +135,12 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 327680, "offset": 327680, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 327680, "offset": 327680, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -144,7 +148,6 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 327680, "offset": 327680, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ 
+ === Writing a vdi header into raw ===
+@@ -154,7 +157,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -170,8 +173,8 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"execute":"query-block-jobs"}
+ {"return": []}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ { 'execute': 'qmp_capabilities' }
+@@ -182,10 +185,12 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 1024, "offset": 1024, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 1024, "offset": 1024, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -193,7 +198,6 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 1024, "offset": 1024, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ 
+ === Writing a vmdk header into raw ===
+@@ -203,7 +207,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -219,8 +223,8 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"execute":"query-block-jobs"}
+ {"return": []}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ { 'execute': 'qmp_capabilities' }
+@@ -231,10 +235,12 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 65536, "offset": 65536, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 65536, "offset": 65536, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -242,7 +248,6 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 65536, "offset": 65536, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ 
+ === Writing a vpc header into raw ===
+@@ -252,7 +257,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -268,8 +273,8 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"execute":"query-block-jobs"}
+ {"return": []}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ { 'execute': 'qmp_capabilities' }
+@@ -280,10 +285,12 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 2560, "offset": 2560, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 2560, "offset": 2560, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -291,7 +298,6 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 2560, "offset": 2560, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ 
+ === Copying sample image empty.bochs into raw ===
+@@ -300,7 +306,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -316,8 +322,8 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"execute":"query-block-jobs"}
+ {"return": []}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ { 'execute': 'qmp_capabilities' }
+@@ -328,10 +334,12 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 2560, "offset": 2560, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 2560, "offset": 2560, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -339,7 +347,6 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 2560, "offset": 2560, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ 
+ === Copying sample image iotest-dirtylog-10G-4M.vhdx into raw ===
+@@ -348,7 +355,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -364,8 +371,8 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"execute":"query-block-jobs"}
+ {"return": []}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ { 'execute': 'qmp_capabilities' }
+@@ -376,10 +383,12 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 31457280, "offset": 31457280, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 31457280, "offset": 31457280, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -387,7 +396,6 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 31457280, "offset": 31457280, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ 
+ === Copying sample image parallels-v1 into raw ===
+@@ -396,7 +404,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -412,8 +420,8 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"execute":"query-block-jobs"}
+ {"return": []}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ { 'execute': 'qmp_capabilities' }
+@@ -424,10 +432,12 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 327680, "offset": 327680, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 327680, "offset": 327680, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -435,7 +445,6 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 327680, "offset": 327680, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ 
+ === Copying sample image simple-pattern.cloop into raw ===
+@@ -444,7 +453,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -460,8 +469,8 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"execute":"query-block-jobs"}
+ {"return": []}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ { 'execute': 'qmp_capabilities' }
+@@ -472,10 +481,12 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 2048, "offset": 2048, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 2048, "offset": 2048, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -483,7 +494,6 @@ read 512/512 bytes at offset 0
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 2048, "offset": 2048, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ 
+ === Write legitimate MBR into raw ===
+@@ -492,7 +502,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=SIZE
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+ {'execute':'drive-mirror', 'arguments':{
+-            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT', 
++            'device': 'src', 'target': 'TEST_DIR/t.IMGFMT',
+             'mode': 'existing', 'sync': 'full'}}
+ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed raw.
+          Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+@@ -500,10 +510,12 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 512, "offset": 512, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 512, "offset": 512, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -511,7 +523,6 @@ WARNING: Image format was not specified for 'TEST_DIR/t.raw' and probing guessed
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 512, "offset": 512, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ { 'execute': 'qmp_capabilities' }
+ {"return": {}}
+@@ -521,10 +532,12 @@ Images are identical.
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "src"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "src", "len": 512, "offset": 512, "speed": 0, "type": "mirror"}}
+ {"execute":"query-block-jobs"}
+ {"return": [{"auto-finalize": true, "io-status": "ok", "device": "src", "auto-dismiss": true, "busy": false, "len": 512, "offset": 512, "status": "ready", "paused": false, "speed": 0, "ready": true, "type": "mirror"}]}
+ {"execute":"quit"}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "standby", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "src"}}
+@@ -532,6 +545,5 @@ Images are identical.
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "src", "len": 512, "offset": 512, "speed": 0, "type": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "src"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "src"}}
+-{"return": {}}
+ Images are identical.
+ *** done
+diff --git a/tests/qemu-iotests/117.out b/tests/qemu-iotests/117.out
+index 1cea9e0217..735ffd25c6 100644
+--- a/tests/qemu-iotests/117.out
++++ b/tests/qemu-iotests/117.out
+@@ -18,8 +18,8 @@ wrote 65536/65536 bytes at offset 0
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ {"return": ""}
+ { 'execute': 'quit' }
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ No errors were found on the image.
+ read 65536/65536 bytes at offset 0
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+diff --git a/tests/qemu-iotests/120.out b/tests/qemu-iotests/120.out
+index 35d84a5bc5..0744c1f136 100644
+--- a/tests/qemu-iotests/120.out
++++ b/tests/qemu-iotests/120.out
+@@ -5,8 +5,8 @@ QMP_VERSION
+ wrote 65536/65536 bytes at offset 0
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ {"return": ""}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ read 65536/65536 bytes at offset 0
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ read 65536/65536 bytes at offset 0
+diff --git a/tests/qemu-iotests/127.out b/tests/qemu-iotests/127.out
+index dd8c4a8aa9..1685c4850a 100644
+--- a/tests/qemu-iotests/127.out
++++ b/tests/qemu-iotests/127.out
+@@ -28,6 +28,6 @@ wrote 42/42 bytes at offset 0
+ { 'execute': 'quit' }
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "mirror"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "mirror"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ *** done
+diff --git a/tests/qemu-iotests/140.out b/tests/qemu-iotests/140.out
+index 32866440ae..312f76d5da 100644
+--- a/tests/qemu-iotests/140.out
++++ b/tests/qemu-iotests/140.out
+@@ -19,6 +19,6 @@ read 65536/65536 bytes at offset 0
+ qemu-io: can't open device nbd+unix:///drv?socket=SOCK_DIR/nbd: Requested export not available
+ server reported: export 'drv' not present
+ { 'execute': 'quit' }
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ *** done
+diff --git a/tests/qemu-iotests/143.out b/tests/qemu-iotests/143.out
+index d6afa32abc..9ec5888e0e 100644
+--- a/tests/qemu-iotests/143.out
++++ b/tests/qemu-iotests/143.out
+@@ -10,6 +10,6 @@ server reported: export 'no_such_export' not present
+ qemu-io: can't open device nbd+unix:///aa--aa1?socket=SOCK_DIR/nbd: Requested export not available
+ server reported: export 'aa--aa...' not present
+ { 'execute': 'quit' }
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ *** done
+diff --git a/tests/qemu-iotests/156.out b/tests/qemu-iotests/156.out
+index 07e5e83f5d..4a22f0c41a 100644
+--- a/tests/qemu-iotests/156.out
++++ b/tests/qemu-iotests/156.out
+@@ -72,8 +72,8 @@ read 65536/65536 bytes at offset 196608
+ {"return": ""}
+ 
+ { 'execute': 'quit' }
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ read 65536/65536 bytes at offset 0
+ 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+diff --git a/tests/qemu-iotests/176.out b/tests/qemu-iotests/176.out
+index 45e9153ef3..9d09b60452 100644
+--- a/tests/qemu-iotests/176.out
++++ b/tests/qemu-iotests/176.out
+@@ -169,8 +169,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ wrote 196608/196608 bytes at offset 2147287040
+ 192 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 131072/131072 bytes at offset 2147352576
+@@ -206,8 +206,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {"sha256": HASH}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ === Test pass bitmap.1 ===
+ 
+@@ -218,8 +218,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ wrote 196608/196608 bytes at offset 2147287040
+ 192 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 131072/131072 bytes at offset 2147352576
+@@ -256,8 +256,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {"sha256": HASH}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ === Test pass bitmap.2 ===
+ 
+@@ -268,8 +268,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ wrote 196608/196608 bytes at offset 2147287040
+ 192 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 131072/131072 bytes at offset 2147352576
+@@ -306,8 +306,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {"sha256": HASH}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ === Test pass bitmap.3 ===
+ 
+@@ -318,8 +318,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ wrote 196608/196608 bytes at offset 2147287040
+ 192 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ wrote 131072/131072 bytes at offset 2147352576
+@@ -353,6 +353,6 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {"sha256": HASH}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ *** done
+diff --git a/tests/qemu-iotests/182.out b/tests/qemu-iotests/182.out
+index 83fc1a4797..57f7265458 100644
+--- a/tests/qemu-iotests/182.out
++++ b/tests/qemu-iotests/182.out
+@@ -53,6 +53,6 @@ Formatting 'TEST_DIR/t.qcow2.overlay', fmt=qcow2 cluster_size=65536 extended_l2=
+ {'execute': 'qmp_capabilities'}
+ {"return": {}}
+ {'execute': 'quit'}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ *** done
+diff --git a/tests/qemu-iotests/183.out b/tests/qemu-iotests/183.out
+index 51aa41c888..fd9c2e52a5 100644
+--- a/tests/qemu-iotests/183.out
++++ b/tests/qemu-iotests/183.out
+@@ -53,11 +53,11 @@ wrote 65536/65536 bytes at offset 1048576
+ === Shut down and check image ===
+ 
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ No errors were found on the image.
+ No errors were found on the image.
+ wrote 65536/65536 bytes at offset 1048576
+diff --git a/tests/qemu-iotests/184.out b/tests/qemu-iotests/184.out
+index e8f631f853..77e5489d65 100644
+--- a/tests/qemu-iotests/184.out
++++ b/tests/qemu-iotests/184.out
+@@ -89,6 +89,10 @@ Testing:
+     "return": [
+     ]
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -100,10 +104,6 @@ Testing:
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ 
+ == property changes in ThrottleGroup ==
+@@ -169,6 +169,10 @@ Testing:
+         "iops-total-max": 0
+     }
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -180,10 +184,6 @@ Testing:
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ 
+ == object creation/set errors  ==
+@@ -211,6 +211,10 @@ Testing:
+         "desc": "bps/iops/max total values and read/write values cannot be used at the same time"
+     }
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -222,10 +226,6 @@ Testing:
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ 
+ == don't specify group ==
+@@ -247,6 +247,10 @@ Testing:
+         "desc": "Parameter 'throttle-group' is missing"
+     }
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -258,10 +262,6 @@ Testing:
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ 
+ *** done
+diff --git a/tests/qemu-iotests/185 b/tests/qemu-iotests/185
+index 61f13d0460..8b1143dc16 100755
+--- a/tests/qemu-iotests/185
++++ b/tests/qemu-iotests/185
+@@ -344,14 +344,14 @@ wait_for_job_and_quit() {
+ 
+     sleep 1
+ 
+-    # List of expected events
+-    capture_events='BLOCK_JOB_CANCELLED JOB_STATUS_CHANGE SHUTDOWN'
+-
+     _send_qemu_cmd $h \
+         '{"execute": "quit"}' \
+         'return'
+ 
++    # List of expected events
++    capture_events='BLOCK_JOB_CANCELLED JOB_STATUS_CHANGE SHUTDOWN'
+     _wait_event $h 'SHUTDOWN'
++    QEMU_EVENTS= # Ignore all JOB_STATUS_CHANGE events that came before SHUTDOWN
+     _wait_event $h 'JOB_STATUS_CHANGE' # standby
+     _wait_event $h 'JOB_STATUS_CHANGE' # ready
+     _wait_event $h 'JOB_STATUS_CHANGE' # aborting
+diff --git a/tests/qemu-iotests/185.out b/tests/qemu-iotests/185.out
+index 1cccccb1b6..70e8dd6c87 100644
+--- a/tests/qemu-iotests/185.out
++++ b/tests/qemu-iotests/185.out
+@@ -40,16 +40,9 @@ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 cluster_size=65536 extended_l2=off comp
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+ {"return": {}}
+ { 'execute': 'quit' }
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "paused", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "paused", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "aborting", "id": "disk"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "disk", "len": 67108864, "offset": 524288, "speed": 65536, "type": "commit"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "disk"}}
+-{"return": {}}
+ 
+ === Start active commit job and exit qemu ===
+ 
+@@ -63,16 +56,9 @@ Formatting 'TEST_DIR/t.qcow2', fmt=qcow2 cluster_size=65536 extended_l2=off comp
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+ {"return": {}}
+ { 'execute': 'quit' }
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "paused", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "paused", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "aborting", "id": "disk"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "disk", "len": 4194304, "offset": 4194304, "speed": 65536, "type": "commit"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "disk"}}
+-{"return": {}}
+ 
+ === Start mirror job and exit qemu ===
+ 
+@@ -89,16 +75,9 @@ Formatting 'TEST_DIR/t.qcow2.copy', fmt=qcow2 cluster_size=65536 extended_l2=off
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+ {"return": {}}
+ { 'execute': 'quit' }
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "paused", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "paused", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "aborting", "id": "disk"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "disk", "len": 4194304, "offset": 4194304, "speed": 65536, "type": "mirror"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "disk"}}
+-{"return": {}}
+ 
+ === Start backup job and exit qemu ===
+ 
+@@ -118,16 +97,9 @@ Formatting 'TEST_DIR/t.qcow2.copy', fmt=qcow2 cluster_size=65536 extended_l2=off
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+ {"return": {}}
+ { 'execute': 'quit' }
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "paused", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "paused", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "aborting", "id": "disk"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "disk", "len": 67108864, "offset": 65536, "speed": 65536, "type": "backup"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "disk"}}
+-{"return": {}}
+ 
+ === Start streaming job and exit qemu ===
+ 
+@@ -140,16 +112,9 @@ Formatting 'TEST_DIR/t.qcow2.copy', fmt=qcow2 cluster_size=65536 extended_l2=off
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+ {"return": {}}
+ { 'execute': 'quit' }
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "paused", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "paused", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "aborting", "id": "disk"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "disk", "len": 67108864, "offset": 524288, "speed": 65536, "type": "stream"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "disk"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "disk"}}
+-{"return": {}}
+ No errors were found on the image.
+ 
+ === Start mirror to throttled QSD and exit qemu ===
+diff --git a/tests/qemu-iotests/191.out b/tests/qemu-iotests/191.out
+index c3309e4bc6..ea88777374 100644
+--- a/tests/qemu-iotests/191.out
++++ b/tests/qemu-iotests/191.out
+@@ -378,6 +378,10 @@ wrote 65536/65536 bytes at offset 1048576
+     ]
+ }
+ { 'execute': 'quit' }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -389,10 +393,6 @@ wrote 65536/65536 bytes at offset 1048576
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ image: TEST_DIR/t.IMGFMT
+ file format: IMGFMT
+ virtual size: 64 MiB (67108864 bytes)
+@@ -796,6 +796,10 @@ wrote 65536/65536 bytes at offset 1048576
+     ]
+ }
+ { 'execute': 'quit' }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -807,10 +811,6 @@ wrote 65536/65536 bytes at offset 1048576
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ image: TEST_DIR/t.IMGFMT
+ file format: IMGFMT
+ virtual size: 64 MiB (67108864 bytes)
+diff --git a/tests/qemu-iotests/195.out b/tests/qemu-iotests/195.out
+index 91717d302e..ec84df5012 100644
+--- a/tests/qemu-iotests/195.out
++++ b/tests/qemu-iotests/195.out
+@@ -17,6 +17,10 @@ Testing: -drive if=none,file=TEST_DIR/t.IMGFMT,backing.node-name=mid
+     "return": {
+     }
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -28,10 +32,6 @@ Testing: -drive if=none,file=TEST_DIR/t.IMGFMT,backing.node-name=mid
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ image: TEST_DIR/t.IMGFMT.mid
+ file format: IMGFMT
+@@ -55,6 +55,10 @@ Testing: -drive if=none,file=TEST_DIR/t.IMGFMT,node-name=top
+     "return": {
+     }
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -66,10 +70,6 @@ Testing: -drive if=none,file=TEST_DIR/t.IMGFMT,node-name=top
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ image: TEST_DIR/t.IMGFMT
+ file format: IMGFMT
+diff --git a/tests/qemu-iotests/223.out b/tests/qemu-iotests/223.out
+index 65625c491e..26fb347c5d 100644
+--- a/tests/qemu-iotests/223.out
++++ b/tests/qemu-iotests/223.out
+@@ -11,8 +11,8 @@ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+ {"return": {}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ 
+ === Write part of the file under active bitmap ===
+@@ -142,14 +142,14 @@ read 2097152/2097152 bytes at offset 2097152
+ 
+ {"execute":"nbd-server-remove",
+   "arguments":{"name":"n"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "n"}}
+ {"return": {}}
+ {"execute":"nbd-server-remove",
+   "arguments":{"name":"n2"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "n2"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "n"}}
+ {"return": {}}
+ {"execute":"nbd-server-remove",
+   "arguments":{"name":"n2"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "n2"}}
+ {"error": {"class": "GenericError", "desc": "Export 'n2' is not found"}}
+ {"execute":"nbd-server-stop"}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "n3"}}
+@@ -261,14 +261,14 @@ read 2097152/2097152 bytes at offset 2097152
+ 
+ {"execute":"nbd-server-remove",
+   "arguments":{"name":"n"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "n"}}
+ {"return": {}}
+ {"execute":"nbd-server-remove",
+   "arguments":{"name":"n2"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "n2"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "n"}}
+ {"return": {}}
+ {"execute":"nbd-server-remove",
+   "arguments":{"name":"n2"}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "n2"}}
+ {"error": {"class": "GenericError", "desc": "Export 'n2' is not found"}}
+ {"execute":"nbd-server-stop"}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "n3"}}
+@@ -276,8 +276,8 @@ read 2097152/2097152 bytes at offset 2097152
+ {"execute":"nbd-server-stop"}
+ {"error": {"class": "GenericError", "desc": "NBD server not running"}}
+ {"execute":"quit"}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ 
+ === Use qemu-nbd as server ===
+ 
+diff --git a/tests/qemu-iotests/227.out b/tests/qemu-iotests/227.out
+index b6a56118b7..378c1b8fb1 100644
+--- a/tests/qemu-iotests/227.out
++++ b/tests/qemu-iotests/227.out
+@@ -48,6 +48,10 @@ Testing: -drive driver=null-co,read-zeroes=on,if=virtio
+         }
+     ]
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -59,10 +63,6 @@ Testing: -drive driver=null-co,read-zeroes=on,if=virtio
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ 
+ === blockstats with -drive if=none ===
+@@ -112,6 +112,10 @@ Testing: -drive driver=null-co,if=none
+         }
+     ]
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -123,10 +127,6 @@ Testing: -drive driver=null-co,if=none
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ 
+ === blockstats with -blockdev ===
+@@ -143,6 +143,10 @@ Testing: -blockdev driver=null-co,node-name=null
+     "return": [
+     ]
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -154,10 +158,6 @@ Testing: -blockdev driver=null-co,node-name=null
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ 
+ === blockstats with -blockdev and -device ===
+@@ -208,6 +208,10 @@ Testing: -blockdev driver=null-co,read-zeroes=on,node-name=null -device virtio-b
+         }
+     ]
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -219,9 +223,5 @@ Testing: -blockdev driver=null-co,read-zeroes=on,node-name=null -device virtio-b
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ *** done
+diff --git a/tests/qemu-iotests/247.out b/tests/qemu-iotests/247.out
+index 7d252e7fe4..e909e83994 100644
+--- a/tests/qemu-iotests/247.out
++++ b/tests/qemu-iotests/247.out
+@@ -17,6 +17,6 @@ QMP_VERSION
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_COMPLETED", "data": {"device": "job0", "len": 134217728, "offset": 134217728, "speed": 0, "type": "commit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "concluded", "id": "job0"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "job0"}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ *** done
+diff --git a/tests/qemu-iotests/273.out b/tests/qemu-iotests/273.out
+index 71843f02de..6a74a8138b 100644
+--- a/tests/qemu-iotests/273.out
++++ b/tests/qemu-iotests/273.out
+@@ -282,6 +282,10 @@ Testing: -blockdev file,node-name=base,filename=TEST_DIR/t.IMGFMT.base -blockdev
+         ]
+     }
+ }
++{
++    "return": {
++    }
++}
+ {
+     "timestamp": {
+         "seconds":  TIMESTAMP,
+@@ -293,9 +297,5 @@ Testing: -blockdev file,node-name=base,filename=TEST_DIR/t.IMGFMT.base -blockdev
+         "reason": "host-qmp-quit"
+     }
+ }
+-{
+-    "return": {
+-    }
+-}
+ 
+ *** done
+diff --git a/tests/qemu-iotests/308 b/tests/qemu-iotests/308
+index d1bb49f1de..bde4aac2fa 100755
+--- a/tests/qemu-iotests/308
++++ b/tests/qemu-iotests/308
+@@ -77,7 +77,6 @@ fuse_export_add()
+ # $1: Export ID
+ fuse_export_del()
+ {
+-    capture_events="BLOCK_EXPORT_DELETED" \
+     _send_qemu_cmd $QEMU_HANDLE \
+         "{'execute': 'block-export-del',
+           'arguments': {
+@@ -85,7 +84,8 @@ fuse_export_del()
+           } }" \
+         'return'
+ 
+-    _wait_event $QEMU_HANDLE \
++    _send_qemu_cmd $QEMU_HANDLE \
++        '' \
+         'BLOCK_EXPORT_DELETED'
+ }
+ 
+diff --git a/tests/qemu-iotests/308.out b/tests/qemu-iotests/308.out
+index 9fcf8844d4..e4467a10cf 100644
+--- a/tests/qemu-iotests/308.out
++++ b/tests/qemu-iotests/308.out
+@@ -165,9 +165,9 @@ OK: Post-truncate image size is as expected
+ 
+ === Tear down ===
+ {'execute': 'quit'}
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "SHUTDOWN", "data": {"guest": false, "reason": "host-qmp-quit"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "export-mp"}}
+-{"return": {}}
+ 
+ === Compare copy with original ===
+ Images are identical.
+diff --git a/tests/qemu-iotests/tests/qsd-jobs.out b/tests/qemu-iotests/tests/qsd-jobs.out
+index aa6b6d1aef..c1bc9b8356 100644
+--- a/tests/qemu-iotests/tests/qsd-jobs.out
++++ b/tests/qemu-iotests/tests/qsd-jobs.out
+@@ -7,8 +7,8 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728 backing_file=TEST_DIR/
+ QMP_VERSION
+ {"return": {}}
+ {"return": {}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "job0", "len": 0, "offset": 0, "speed": 0, "type": "commit"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_CANCELLED", "data": {"device": "job0", "len": 0, "offset": 0, "speed": 0, "type": "commit"}}
+ 
+ === Streaming can't get permission on base node ===
+ 
+@@ -17,6 +17,6 @@ QMP_VERSION
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "job0"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "null", "id": "job0"}}
+ {"error": {"class": "GenericError", "desc": "Permission conflict on node 'fmt_base': permissions 'write' are both required by an unnamed block device (uses node 'fmt_base' as 'root' child) and unshared by stream job 'job0' (uses node 'fmt_base' as 'intermediate node' child)."}}
+-{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "export1"}}
+ {"return": {}}
++{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_EXPORT_DELETED", "data": {"id": "export1"}}
+ *** done
+-- 
+2.39.2
+

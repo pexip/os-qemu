@@ -1,3 +1,94 @@
+qemu (1:7.2+dfsg-7+deb12u5) bookworm; urgency=medium
+
+  * +revert-monitor-only-run-coroutine-commands-in-qemu_aio_context.patch
+    Revert a single upstream change in 7.2.9 which, while fixed a few qemu
+    lockup bugs, introduced a regression in suspend-resume-hibernate cycle
+    (triggered by cryptsetup autopkgtest)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 06 Feb 2024 20:38:06 +0300
+
+qemu (1:7.2+dfsg-7+deb12u4) bookworm; urgency=medium
+
+  [ Michael Tokarev ]
+  * update to upstream 7.2.9 stable/bugfix release, v7.2.9.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.9 :
+   - Update version for 7.2.9 release
+   - target/xtensa: fix OOB TLB entry access
+   - qtest: bump aspeed_smc-test timeout to 6 minutes
+   - monitor: only run coroutine commands in qemu_aio_context
+   - iotests: port 141 to Python for reliable QMP testing
+   - iotests: add filter_qmp_generated_node_ids()
+   - block/blklogwrites: Fix a bug when logging "write zeroes" operations.
+   - virtio-net: correctly copy vnet header when flushing TX
+     Closes: CVE-2023-6693
+   - block/io: clear BDRV_BLOCK_RECURSE flag after recursing in
+     bdrv_co_block_status
+   - accel/tcg: Revert mapping of PCREL translation block to multiple
+     virtual addresses
+   - readthodocs: fully specify a build environment
+   - hw/scsi/esp-pci: set DMA_STAT_BCMBLT when BLAST command issued
+   - hw/scsi/esp-pci: synchronise setting of DMA_STAT_DONE with ESP
+     completion interrupt
+   - hw/scsi/esp-pci: generate PCI interrupt from separate ESP and PCI sources
+   - hw/scsi/esp-pci: use correct address register for PCI DMA transfers
+   - hw/pflash: implement update buffer for block writes
+   - hw/pflash: use ldn_{be,le}_p and stn_{be,le}_p
+   - hw/pflash: refactor pflash_data_write()
+   - target/i386: pcrel: store low bits of physical address in data[0]
+   - target/i386: fix incorrect EIP in PC-relative translation blocks
+   - target/i386: Do not re-compute new pc with CF_PCREL
+   - target/i386: Fix 32-bit wrapping of pc/eip computation
+   - load_elf: fix iterator's type for elf file processing
+   - .gitlab-ci.d/buildtest.yml: Work around htags bug when environment
+     is large
+   - target/s390x: Fix LAE setting a wrong access register
+   - hw/intc/arm_gicv3_cpuif: handle LPIs in the list registers
+   - chardev/char.c: fix "abstract device type" error message
+   - target/riscv: Fix mcycle/minstret increment behavior
+   - iotests: Basic tests for internal snapshots
+   - vl: Improve error message for conflicting -incoming and -loadvm
+   - block: Fix crash when loading snapshot on inactive node
+  * update to upstream 7.2.8 stable/bugfix release, v7.2.8.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.8 :
+   - Update version for 7.2.8 release
+   - target/arm/helper: Propagate MDCR_EL2.HPMN into PMCR_EL0.N
+   - system/memory: use ldn_he_p/stn_he_p
+   - target/arm: Disable SME if SVE is disabled
+   - ui/vnc-clipboard: fix inflate_buffer
+   - ui/gtk-egl: move function calls back to regular code path
+   - ui/gtk-egl: Check EGLSurface before doing scanout
+   - msix: unset PCIDevice::msix_vector_poll_notifier in rollback
+   - hw/acpi/erst: Do not ignore Error* in realize handler
+   - pcie_sriov: Remove g_new assertion
+   - hw/audio/hda-codec: fix multiplication overflow
+   - hw/mips/malta: Fix the malta machine on big endian hosts
+   - vmdk: Don't corrupt desc file in vmdk_write_cid
+   - hw/virtio: Add VirtioPCIDeviceTypeInfo::instance_finalize field
+   - hw/nvram/xlnx-efuse-ctrl: Free XlnxVersalEFuseCtrl[] "pg0-lock" array
+   - hw/nvram/xlnx-efuse: Free XlnxEFuse::ro_bits[] array on finalize()
+   - hw/misc/mps2-scc: Free MPS2SCC::oscclk[] array on finalize()
+   - hw/virtio: Free VirtIOIOMMUPCI::vdev.reserved_regions[] on finalize()
+   - target/arm: Set IL bit for pauth, SVE access, BTI trap syndromes
+   - tests/avocado: Replace assertRegexpMatches() for Python 3.12 compatibility
+   - tests/avocado: Replace assertEquals() for Python 3.12 compatibility
+   - linux-user: Fix loaddr computation for some elf files
+   - net: Update MemReentrancyGuard for NIC
+   - net: Provide MemReentrancyGuard * to qemu_new_nic()
+   - hw/ide/ahci: fix legacy software reset
+   - target/arm: Fix SME FMOPA (16-bit), BFMOPA
+  * remove patches included in 7.2.8:
+   - hw_mips_malta-Fix-malta-machine-on-big-endian-hosts.patch
+   - hw-ide-ahci-fix-legacy-software-reset.patch
+  * ui-clipboard-mark-type-as-not-available-when-no-data-CVE-2023-6683.patch
+    Closes: #1060749, CVE-2023-6683 (NULL deref in VNC clipboard code)
+
+  [ Sergio Durigan Junior ]
+  * d/rules: omit --no-start for qemu-guest-agent, this should
+    re-start it on upgrades.  Closes: #1061588, #1061683
+    LP: #2028124
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 30 Jan 2024 19:15:04 +0300
+
 qemu (1:7.2+dfsg-7+deb12u3) bookworm; urgency=medium
 
   * +hw-ide-ahci-fix-legacy-software-reset.patch - fix legacy ide regression

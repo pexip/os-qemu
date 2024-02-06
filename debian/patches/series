@@ -5,6 +5,8 @@ v7.2.4.diff
 v7.2.5.diff
 v7.2.6.diff
 v7.2.7.diff
+v7.2.8.diff
+v7.2.9.diff
 microvm-default-machine-type.patch
 skip-meson-pc-bios.diff
 linux-user-binfmt-P.diff
@@ -21,5 +23,5 @@ spelling.diff
 openbios-spelling-endianess.patch
 slof-spelling-seperator.patch
 ignore-roms-dependency-in-qtest.patch
-hw_mips_malta-Fix-malta-machine-on-big-endian-hosts.patch
-hw-ide-ahci-fix-legacy-software-reset.patch
+ui-clipboard-mark-type-as-not-available-when-no-data-CVE-2023-6683.patch
+revert-monitor-only-run-coroutine-commands-in-qemu_aio_context.patch
