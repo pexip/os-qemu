@@ -1,0 +1,1524 @@
+Subject: v7.2.8
+Date: Fri Dec 22 21:59:29 2023 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.7
+and upstream qemu v7.2.8.
+
+ VERSION                                 |  2 +-
+ block/vmdk.c                            | 28 +++++++---
+ docs/devel/testing.rst                  |  4 +-
+ hw/acpi/erst.c                          | 10 ++++
+ hw/audio/hda-codec.c                    | 29 +++++++---
+ hw/ide/ahci.c                           | 27 ++++++++-
+ hw/mips/malta.c                         |  4 +-
+ hw/misc/mps2-scc.c                      |  8 +++
+ hw/net/allwinner-sun8i-emac.c           |  3 +-
+ hw/net/allwinner_emac.c                 |  3 +-
+ hw/net/cadence_gem.c                    |  3 +-
+ hw/net/dp8393x.c                        |  3 +-
+ hw/net/e1000.c                          |  3 +-
+ hw/net/e1000e.c                         |  2 +-
+ hw/net/eepro100.c                       |  4 +-
+ hw/net/etraxfs_eth.c                    |  3 +-
+ hw/net/fsl_etsec/etsec.c                |  3 +-
+ hw/net/ftgmac100.c                      |  3 +-
+ hw/net/i82596.c                         |  2 +-
+ hw/net/imx_fec.c                        |  2 +-
+ hw/net/lan9118.c                        |  3 +-
+ hw/net/mcf_fec.c                        |  3 +-
+ hw/net/mipsnet.c                        |  3 +-
+ hw/net/msf2-emac.c                      |  3 +-
+ hw/net/mv88w8618_eth.c                  |  3 +-
+ hw/net/ne2000-isa.c                     |  3 +-
+ hw/net/ne2000-pci.c                     |  3 +-
+ hw/net/npcm7xx_emc.c                    |  3 +-
+ hw/net/opencores_eth.c                  |  3 +-
+ hw/net/pcnet.c                          |  3 +-
+ hw/net/rocker/rocker_fp.c               |  4 +-
+ hw/net/rtl8139.c                        |  3 +-
+ hw/net/smc91c111.c                      |  3 +-
+ hw/net/spapr_llan.c                     |  3 +-
+ hw/net/stellaris_enet.c                 |  3 +-
+ hw/net/sungem.c                         |  2 +-
+ hw/net/sunhme.c                         |  3 +-
+ hw/net/tulip.c                          |  3 +-
+ hw/net/virtio-net.c                     |  6 +-
+ hw/net/vmxnet3.c                        |  2 +-
+ hw/net/xen_nic.c                        |  3 +-
+ hw/net/xgmac.c                          |  3 +-
+ hw/net/xilinx_axienet.c                 |  3 +-
+ hw/net/xilinx_ethlite.c                 |  3 +-
+ hw/nvram/xlnx-efuse.c                   |  8 +++
+ hw/nvram/xlnx-versal-efuse-ctrl.c       |  8 +++
+ hw/pci/msix.c                           |  1 +
+ hw/pci/pcie_sriov.c                     |  1 -
+ hw/usb/dev-network.c                    |  3 +-
+ hw/virtio/virtio-iommu-pci.c            |  8 +++
+ hw/virtio/virtio-pci.c                  |  1 +
+ include/hw/virtio/virtio-pci.h          |  1 +
+ include/net/net.h                       |  2 +
+ linux-user/elfload.c                    |  2 +-
+ net/net.c                               | 15 +++++
+ softmmu/memory.c                        | 32 +----------
+ target/arm/cpu.c                        | 10 ++++
+ target/arm/helper.c                     | 22 +++++++-
+ target/arm/sme_helper.c                 | 10 ++--
+ target/arm/syndrome.h                   |  6 +-
+ tests/avocado/cpu_queries.py            |  2 +-
+ tests/avocado/empty_cpu_model.py        |  2 +-
+ tests/avocado/pc_cpu_hotplug_props.py   |  2 +-
+ tests/avocado/version.py                |  2 +-
+ tests/avocado/x86_cpu_model_versions.py | 97 +++++++++++++++++----------------
+ tests/qemu-iotests/059                  |  2 +
+ tests/qemu-iotests/059.out              |  4 ++
+ ui/gtk-egl.c                            |  7 +++
+ ui/vnc-clipboard.c                      |  5 ++
+ 69 files changed, 317 insertions(+), 156 deletions(-)
+
+diff --git a/VERSION b/VERSION
+index 4afc54e7b7..31554632ab 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.7
++7.2.8
+diff --git a/block/vmdk.c b/block/vmdk.c
+index 26376352b9..f8d3a13568 100644
+--- a/block/vmdk.c
++++ b/block/vmdk.c
+@@ -346,29 +346,41 @@ static int vmdk_write_cid(BlockDriverState *bs, uint32_t cid)
+     BDRVVmdkState *s = bs->opaque;
+     int ret = 0;
+ 
+-    desc = g_malloc0(DESC_SIZE);
+-    tmp_desc = g_malloc0(DESC_SIZE);
+-    ret = bdrv_pread(bs->file, s->desc_offset, DESC_SIZE, desc, 0);
++    size_t desc_buf_size;
++
++    if (s->desc_offset == 0) {
++        desc_buf_size = bdrv_getlength(bs->file->bs);
++        if (desc_buf_size > 16ULL << 20) {
++            error_report("VMDK description file too big");
++            return -EFBIG;
++        }
++    } else {
++        desc_buf_size = DESC_SIZE;
++    }
++
++    desc = g_malloc0(desc_buf_size);
++    tmp_desc = g_malloc0(desc_buf_size);
++    ret = bdrv_pread(bs->file, s->desc_offset, desc_buf_size, desc, 0);
+     if (ret < 0) {
+         goto out;
+     }
+ 
+-    desc[DESC_SIZE - 1] = '\0';
++    desc[desc_buf_size - 1] = '\0';
+     tmp_str = strstr(desc, "parentCID");
+     if (tmp_str == NULL) {
+         ret = -EINVAL;
+         goto out;
+     }
+ 
+-    pstrcpy(tmp_desc, DESC_SIZE, tmp_str);
++    pstrcpy(tmp_desc, desc_buf_size, tmp_str);
+     p_name = strstr(desc, "CID");
+     if (p_name != NULL) {
+         p_name += sizeof("CID");
+-        snprintf(p_name, DESC_SIZE - (p_name - desc), "%" PRIx32 "\n", cid);
+-        pstrcat(desc, DESC_SIZE, tmp_desc);
++        snprintf(p_name, desc_buf_size - (p_name - desc), "%" PRIx32 "\n", cid);
++        pstrcat(desc, desc_buf_size, tmp_desc);
+     }
+ 
+-    ret = bdrv_pwrite_sync(bs->file, s->desc_offset, DESC_SIZE, desc, 0);
++    ret = bdrv_pwrite_sync(bs->file, s->desc_offset, desc_buf_size, desc, 0);
+ 
+ out:
+     g_free(desc);
+diff --git a/docs/devel/testing.rst b/docs/devel/testing.rst
+index e10c47b5a7..98c26ecf18 100644
+--- a/docs/devel/testing.rst
++++ b/docs/devel/testing.rst
+@@ -990,7 +990,7 @@ class.  Here's a simple usage example:
+           self.vm.launch()
+           res = self.vm.command('human-monitor-command',
+                                 command_line='info version')
+-          self.assertRegexpMatches(res, r'^(\d+\.\d+\.\d)')
++          self.assertRegex(res, r'^(\d+\.\d+\.\d)')
+ 
+ To execute your test, run:
+ 
+@@ -1051,7 +1051,7 @@ and hypothetical example follows:
+               'human-monitor-command',
+               command_line='info version')
+ 
+-          self.assertEquals(first_res, second_res, third_res)
++          self.assertEqual(first_res, second_res, third_res)
+ 
+ At test "tear down", ``avocado_qemu.Test`` handles all the QEMUMachines
+ shutdown.
+diff --git a/hw/acpi/erst.c b/hw/acpi/erst.c
+index aefcc03ad6..2e057b1800 100644
+--- a/hw/acpi/erst.c
++++ b/hw/acpi/erst.c
+@@ -947,6 +947,7 @@ static const VMStateDescription erst_vmstate  = {
+ 
+ static void erst_realizefn(PCIDevice *pci_dev, Error **errp)
+ {
++    ERRP_GUARD();
+     ERSTDeviceState *s = ACPIERST(pci_dev);
+ 
+     trace_acpi_erst_realizefn_in();
+@@ -964,9 +965,15 @@ static void erst_realizefn(PCIDevice *pci_dev, Error **errp)
+ 
+     /* HostMemoryBackend size will be multiple of PAGE_SIZE */
+     s->storage_size = object_property_get_int(OBJECT(s->hostmem), "size", errp);
++    if (*errp) {
++        return;
++    }
+ 
+     /* Initialize backend storage and record_count */
+     check_erst_backend_storage(s, errp);
++    if (*errp) {
++        return;
++    }
+ 
+     /* BAR 0: Programming registers */
+     memory_region_init_io(&s->iomem_mr, OBJECT(pci_dev), &erst_reg_ops, s,
+@@ -977,6 +984,9 @@ static void erst_realizefn(PCIDevice *pci_dev, Error **errp)
+     memory_region_init_ram(&s->exchange_mr, OBJECT(pci_dev),
+                             "erst.exchange",
+                             le32_to_cpu(s->header->record_size), errp);
++    if (*errp) {
++        return;
++    }
+     pci_register_bar(pci_dev, 1, PCI_BASE_ADDRESS_SPACE_MEMORY,
+                         &s->exchange_mr);
+ 
+diff --git a/hw/audio/hda-codec.c b/hw/audio/hda-codec.c
+index feb8f9e2bb..0f66754b6a 100644
+--- a/hw/audio/hda-codec.c
++++ b/hw/audio/hda-codec.c
+@@ -22,6 +22,7 @@
+ #include "hw/qdev-properties.h"
+ #include "intel-hda.h"
+ #include "migration/vmstate.h"
++#include "qemu/host-utils.h"
+ #include "qemu/module.h"
+ #include "intel-hda-defs.h"
+ #include "audio/audio.h"
+@@ -190,9 +191,9 @@ struct HDAAudioState {
+     bool     use_timer;
+ };
+ 
+-static inline int64_t hda_bytes_per_second(HDAAudioStream *st)
++static inline uint32_t hda_bytes_per_second(HDAAudioStream *st)
+ {
+-    return 2LL * st->as.nchannels * st->as.freq;
++    return 2 * (uint32_t)st->as.nchannels * (uint32_t)st->as.freq;
+ }
+ 
+ static inline void hda_timer_sync_adjust(HDAAudioStream *st, int64_t target_pos)
+@@ -223,12 +224,18 @@ static void hda_audio_input_timer(void *opaque)
+ 
+     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+ 
+-    int64_t buft_start = st->buft_start;
++    int64_t uptime = now - st->buft_start;
+     int64_t wpos = st->wpos;
+     int64_t rpos = st->rpos;
++    int64_t wanted_rpos;
+ 
+-    int64_t wanted_rpos = hda_bytes_per_second(st) * (now - buft_start)
+-                          / NANOSECONDS_PER_SECOND;
++    if (uptime <= 0) {
++        /* wanted_rpos <= 0 */
++        goto out_timer;
++    }
++
++    wanted_rpos = muldiv64(uptime, hda_bytes_per_second(st),
++                           NANOSECONDS_PER_SECOND);
+     wanted_rpos &= -4; /* IMPORTANT! clip to frames */
+ 
+     if (wanted_rpos <= rpos) {
+@@ -287,12 +294,18 @@ static void hda_audio_output_timer(void *opaque)
+ 
+     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+ 
+-    int64_t buft_start = st->buft_start;
++    int64_t uptime = now - st->buft_start;
+     int64_t wpos = st->wpos;
+     int64_t rpos = st->rpos;
++    int64_t wanted_wpos;
++
++    if (uptime <= 0) {
++        /* wanted_wpos <= 0 */
++        goto out_timer;
++    }
+ 
+-    int64_t wanted_wpos = hda_bytes_per_second(st) * (now - buft_start)
+-                          / NANOSECONDS_PER_SECOND;
++    wanted_wpos = muldiv64(uptime, hda_bytes_per_second(st),
++                           NANOSECONDS_PER_SECOND);
+     wanted_wpos &= -4; /* IMPORTANT! clip to frames */
+ 
+     if (wanted_wpos <= wpos) {
+diff --git a/hw/ide/ahci.c b/hw/ide/ahci.c
+index c5e79b6e6d..0167ab3680 100644
+--- a/hw/ide/ahci.c
++++ b/hw/ide/ahci.c
+@@ -622,9 +622,13 @@ static void ahci_init_d2h(AHCIDevice *ad)
+         return;
+     }
+ 
++    /*
++     * For simplicity, do not call ahci_clear_cmd_issue() for this
++     * ahci_write_fis_d2h(). (The reset value for PxCI is 0.)
++     */
+     if (ahci_write_fis_d2h(ad, true)) {
+         ad->init_d2h_sent = true;
+-        /* We're emulating receiving the first Reg H2D Fis from the device;
++        /* We're emulating receiving the first Reg D2H FIS from the device;
+          * Update the SIG register, but otherwise proceed as normal. */
+         pr->sig = ((uint32_t)ide_state->hcyl << 24) |
+             (ide_state->lcyl << 16) |
+@@ -662,6 +666,7 @@ static void ahci_reset_port(AHCIState *s, int port)
+     pr->scr_act = 0;
+     pr->tfdata = 0x7F;
+     pr->sig = 0xFFFFFFFF;
++    pr->cmd_issue = 0;
+     d->busy_slot = -1;
+     d->init_d2h_sent = false;
+ 
+@@ -1242,10 +1247,30 @@ static void handle_reg_h2d_fis(AHCIState *s, int port,
+         case STATE_RUN:
+             if (cmd_fis[15] & ATA_SRST) {
+                 s->dev[port].port_state = STATE_RESET;
++                /*
++                 * When setting SRST in the first H2D FIS in the reset sequence,
++                 * the device does not send a D2H FIS. Host software thus has to
++                 * set the "Clear Busy upon R_OK" bit such that PxCI (and BUSY)
++                 * gets cleared. See AHCI 1.3.1, section 10.4.1 Software Reset.
++                 */
++                if (opts & AHCI_CMD_CLR_BUSY) {
++                    ahci_clear_cmd_issue(ad, slot);
++                }
+             }
+             break;
+         case STATE_RESET:
+             if (!(cmd_fis[15] & ATA_SRST)) {
++                /*
++                 * When clearing SRST in the second H2D FIS in the reset
++                 * sequence, the device will execute diagnostics. When this is
++                 * done, the device will send a D2H FIS with the good status.
++                 * See SATA 3.5a Gold, section 11.4 Software reset protocol.
++                 *
++                 * This D2H FIS is the first D2H FIS received from the device,
++                 * and is received regardless if the reset was performed by a
++                 * COMRESET or by setting and clearing the SRST bit. Therefore,
++                 * the logic for this is found in ahci_init_d2h() and not here.
++                 */
+                 ahci_reset_port(s, port);
+             }
+             break;
+diff --git a/hw/mips/malta.c b/hw/mips/malta.c
+index c0a2e0ab04..da7c110b73 100644
+--- a/hw/mips/malta.c
++++ b/hw/mips/malta.c
+@@ -877,9 +877,9 @@ static void write_bootloader(uint8_t *base, uint64_t run_addr,
+ 
+     /* Bus endianess is always reversed */
+ #if TARGET_BIG_ENDIAN
+-#define cpu_to_gt32 cpu_to_le32
++#define cpu_to_gt32(x) (x)
+ #else
+-#define cpu_to_gt32 cpu_to_be32
++#define cpu_to_gt32(x) bswap32(x)
+ #endif
+ 
+     /* move GT64120 registers from 0x14000000 to 0x1be00000 */
+diff --git a/hw/misc/mps2-scc.c b/hw/misc/mps2-scc.c
+index b3b42a792c..fe5034db14 100644
+--- a/hw/misc/mps2-scc.c
++++ b/hw/misc/mps2-scc.c
+@@ -329,6 +329,13 @@ static void mps2_scc_realize(DeviceState *dev, Error **errp)
+     s->oscclk = g_new0(uint32_t, s->num_oscclk);
+ }
+ 
++static void mps2_scc_finalize(Object *obj)
++{
++    MPS2SCC *s = MPS2_SCC(obj);
++
++    g_free(s->oscclk_reset);
++}
++
+ static const VMStateDescription mps2_scc_vmstate = {
+     .name = "mps2-scc",
+     .version_id = 3,
+@@ -385,6 +392,7 @@ static const TypeInfo mps2_scc_info = {
+     .parent = TYPE_SYS_BUS_DEVICE,
+     .instance_size = sizeof(MPS2SCC),
+     .instance_init = mps2_scc_init,
++    .instance_finalize = mps2_scc_finalize,
+     .class_init = mps2_scc_class_init,
+ };
+ 
+diff --git a/hw/net/allwinner-sun8i-emac.c b/hw/net/allwinner-sun8i-emac.c
+index c3fed5fcbe..1a6a79f5ae 100644
+--- a/hw/net/allwinner-sun8i-emac.c
++++ b/hw/net/allwinner-sun8i-emac.c
+@@ -824,7 +824,8 @@ static void allwinner_sun8i_emac_realize(DeviceState *dev, Error **errp)
+ 
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_allwinner_sun8i_emac_info, &s->conf,
+-                           object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ }
+ 
+diff --git a/hw/net/allwinner_emac.c b/hw/net/allwinner_emac.c
+index ddddf35c45..b3d73143bf 100644
+--- a/hw/net/allwinner_emac.c
++++ b/hw/net/allwinner_emac.c
+@@ -453,7 +453,8 @@ static void aw_emac_realize(DeviceState *dev, Error **errp)
+ 
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_aw_emac_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ 
+     fifo8_create(&s->rx_fifo, RX_FIFO_SIZE);
+diff --git a/hw/net/cadence_gem.c b/hw/net/cadence_gem.c
+index 24b3a0ff66..cb61a76417 100644
+--- a/hw/net/cadence_gem.c
++++ b/hw/net/cadence_gem.c
+@@ -1633,7 +1633,8 @@ static void gem_realize(DeviceState *dev, Error **errp)
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+ 
+     s->nic = qemu_new_nic(&net_gem_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+ 
+     if (s->jumbo_max_len > MAX_FRAME_SIZE) {
+         error_setg(errp, "jumbo-max-len is greater than %d",
+diff --git a/hw/net/dp8393x.c b/hw/net/dp8393x.c
+index 45b954e46c..abfcc6f69f 100644
+--- a/hw/net/dp8393x.c
++++ b/hw/net/dp8393x.c
+@@ -943,7 +943,8 @@ static void dp8393x_realize(DeviceState *dev, Error **errp)
+                           "dp8393x-regs", SONIC_REG_COUNT << s->it_shift);
+ 
+     s->nic = qemu_new_nic(&net_dp83932_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ 
+     s->watchdog = timer_new_ns(QEMU_CLOCK_VIRTUAL, dp8393x_watchdog, s);
+diff --git a/hw/net/e1000.c b/hw/net/e1000.c
+index 0dfdf47313..0a78ad3a58 100644
+--- a/hw/net/e1000.c
++++ b/hw/net/e1000.c
+@@ -1735,7 +1735,8 @@ static void pci_e1000_realize(PCIDevice *pci_dev, Error **errp)
+                                macaddr);
+ 
+     d->nic = qemu_new_nic(&net_e1000_info, &d->conf,
+-                          object_get_typename(OBJECT(d)), dev->id, d);
++                          object_get_typename(OBJECT(d)), dev->id,
++                          &dev->mem_reentrancy_guard, d);
+ 
+     qemu_format_nic_info_str(qemu_get_queue(d->nic), macaddr);
+ 
+diff --git a/hw/net/e1000e.c b/hw/net/e1000e.c
+index 7523e9f5d2..6573cc3cc3 100644
+--- a/hw/net/e1000e.c
++++ b/hw/net/e1000e.c
+@@ -319,7 +319,7 @@ e1000e_init_net_peer(E1000EState *s, PCIDevice *pci_dev, uint8_t *macaddr)
+     int i;
+ 
+     s->nic = qemu_new_nic(&net_e1000e_info, &s->conf,
+-        object_get_typename(OBJECT(s)), dev->id, s);
++        object_get_typename(OBJECT(s)), dev->id, &dev->mem_reentrancy_guard, s);
+ 
+     s->core.max_queue_num = s->conf.peers.queues ? s->conf.peers.queues - 1 : 0;
+ 
+diff --git a/hw/net/eepro100.c b/hw/net/eepro100.c
+index 679f52f80f..871d9a0950 100644
+--- a/hw/net/eepro100.c
++++ b/hw/net/eepro100.c
+@@ -1874,7 +1874,9 @@ static void e100_nic_realize(PCIDevice *pci_dev, Error **errp)
+     nic_reset(s);
+ 
+     s->nic = qemu_new_nic(&net_eepro100_info, &s->conf,
+-                          object_get_typename(OBJECT(pci_dev)), pci_dev->qdev.id, s);
++                          object_get_typename(OBJECT(pci_dev)),
++                          pci_dev->qdev.id,
++                          &pci_dev->qdev.mem_reentrancy_guard, s);
+ 
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+     TRACE(OTHER, logout("%s\n", qemu_get_queue(s->nic)->info_str));
+diff --git a/hw/net/etraxfs_eth.c b/hw/net/etraxfs_eth.c
+index 1b82aec794..ba57a978d1 100644
+--- a/hw/net/etraxfs_eth.c
++++ b/hw/net/etraxfs_eth.c
+@@ -618,7 +618,8 @@ static void etraxfs_eth_realize(DeviceState *dev, Error **errp)
+ 
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_etraxfs_info, &s->conf,
+-                          object_get_typename(OBJECT(s)), dev->id, s);
++                          object_get_typename(OBJECT(s)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ 
+     s->phy.read = tdk_read;
+diff --git a/hw/net/fsl_etsec/etsec.c b/hw/net/fsl_etsec/etsec.c
+index b75d8e3dce..102ba69658 100644
+--- a/hw/net/fsl_etsec/etsec.c
++++ b/hw/net/fsl_etsec/etsec.c
+@@ -390,7 +390,8 @@ static void etsec_realize(DeviceState *dev, Error **errp)
+     eTSEC        *etsec = ETSEC_COMMON(dev);
+ 
+     etsec->nic = qemu_new_nic(&net_etsec_info, &etsec->conf,
+-                              object_get_typename(OBJECT(dev)), dev->id, etsec);
++                              object_get_typename(OBJECT(dev)), dev->id,
++                              &dev->mem_reentrancy_guard, etsec);
+     qemu_format_nic_info_str(qemu_get_queue(etsec->nic), etsec->conf.macaddr.a);
+ 
+     etsec->ptimer = ptimer_init(etsec_timer_hit, etsec, PTIMER_POLICY_LEGACY);
+diff --git a/hw/net/ftgmac100.c b/hw/net/ftgmac100.c
+index 83ef0a783e..346485ab49 100644
+--- a/hw/net/ftgmac100.c
++++ b/hw/net/ftgmac100.c
+@@ -1118,7 +1118,8 @@ static void ftgmac100_realize(DeviceState *dev, Error **errp)
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+ 
+     s->nic = qemu_new_nic(&net_ftgmac100_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ }
+ 
+diff --git a/hw/net/i82596.c b/hw/net/i82596.c
+index ec21e2699a..dc64246f75 100644
+--- a/hw/net/i82596.c
++++ b/hw/net/i82596.c
+@@ -743,7 +743,7 @@ void i82596_common_init(DeviceState *dev, I82596State *s, NetClientInfo *info)
+         qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     }
+     s->nic = qemu_new_nic(info, &s->conf, object_get_typename(OBJECT(dev)),
+-                dev->id, s);
++                dev->id, &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ 
+     if (USE_TIMER) {
+diff --git a/hw/net/imx_fec.c b/hw/net/imx_fec.c
+index 8c11b237de..7eb2fef626 100644
+--- a/hw/net/imx_fec.c
++++ b/hw/net/imx_fec.c
+@@ -1318,7 +1318,7 @@ static void imx_eth_realize(DeviceState *dev, Error **errp)
+ 
+     s->nic = qemu_new_nic(&imx_eth_net_info, &s->conf,
+                           object_get_typename(OBJECT(dev)),
+-                          dev->id, s);
++                          dev->id, &dev->mem_reentrancy_guard, s);
+ 
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ }
+diff --git a/hw/net/lan9118.c b/hw/net/lan9118.c
+index f1cba55967..00a6d82efb 100644
+--- a/hw/net/lan9118.c
++++ b/hw/net/lan9118.c
+@@ -1362,7 +1362,8 @@ static void lan9118_realize(DeviceState *dev, Error **errp)
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+ 
+     s->nic = qemu_new_nic(&net_lan9118_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+     s->eeprom[0] = 0xa5;
+     for (i = 0; i < 6; i++) {
+diff --git a/hw/net/mcf_fec.c b/hw/net/mcf_fec.c
+index 8aa27bd322..57dd49abea 100644
+--- a/hw/net/mcf_fec.c
++++ b/hw/net/mcf_fec.c
+@@ -643,7 +643,8 @@ static void mcf_fec_realize(DeviceState *dev, Error **errp)
+     mcf_fec_state *s = MCF_FEC_NET(dev);
+ 
+     s->nic = qemu_new_nic(&net_mcf_fec_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ }
+ 
+diff --git a/hw/net/mipsnet.c b/hw/net/mipsnet.c
+index 2ade72dea0..8e925de867 100644
+--- a/hw/net/mipsnet.c
++++ b/hw/net/mipsnet.c
+@@ -255,7 +255,8 @@ static void mipsnet_realize(DeviceState *dev, Error **errp)
+     sysbus_init_irq(sbd, &s->irq);
+ 
+     s->nic = qemu_new_nic(&net_mipsnet_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ }
+ 
+diff --git a/hw/net/msf2-emac.c b/hw/net/msf2-emac.c
+index db3a04deb1..145a5e46ab 100644
+--- a/hw/net/msf2-emac.c
++++ b/hw/net/msf2-emac.c
+@@ -530,7 +530,8 @@ static void msf2_emac_realize(DeviceState *dev, Error **errp)
+ 
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_msf2_emac_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ }
+ 
+diff --git a/hw/net/mv88w8618_eth.c b/hw/net/mv88w8618_eth.c
+index ef30b0d4a6..2185f1131a 100644
+--- a/hw/net/mv88w8618_eth.c
++++ b/hw/net/mv88w8618_eth.c
+@@ -350,7 +350,8 @@ static void mv88w8618_eth_realize(DeviceState *dev, Error **errp)
+ 
+     address_space_init(&s->dma_as, s->dma_mr, "emac-dma");
+     s->nic = qemu_new_nic(&net_mv88w8618_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+ }
+ 
+ static const VMStateDescription mv88w8618_eth_vmsd = {
+diff --git a/hw/net/ne2000-isa.c b/hw/net/ne2000-isa.c
+index 6ced6775ff..a79f7fad1f 100644
+--- a/hw/net/ne2000-isa.c
++++ b/hw/net/ne2000-isa.c
+@@ -74,7 +74,8 @@ static void isa_ne2000_realizefn(DeviceState *dev, Error **errp)
+     ne2000_reset(s);
+ 
+     s->nic = qemu_new_nic(&net_ne2000_isa_info, &s->c,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->c.macaddr.a);
+ }
+ 
+diff --git a/hw/net/ne2000-pci.c b/hw/net/ne2000-pci.c
+index 9e5d10859a..4f8a699081 100644
+--- a/hw/net/ne2000-pci.c
++++ b/hw/net/ne2000-pci.c
+@@ -71,7 +71,8 @@ static void pci_ne2000_realize(PCIDevice *pci_dev, Error **errp)
+ 
+     s->nic = qemu_new_nic(&net_ne2000_info, &s->c,
+                           object_get_typename(OBJECT(pci_dev)),
+-                          pci_dev->qdev.id, s);
++                          pci_dev->qdev.id,
++                          &pci_dev->qdev.mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->c.macaddr.a);
+ }
+ 
+diff --git a/hw/net/npcm7xx_emc.c b/hw/net/npcm7xx_emc.c
+index 7c86bb52e5..4bb4e7147d 100644
+--- a/hw/net/npcm7xx_emc.c
++++ b/hw/net/npcm7xx_emc.c
+@@ -803,7 +803,8 @@ static void npcm7xx_emc_realize(DeviceState *dev, Error **errp)
+ 
+     qemu_macaddr_default_if_unset(&emc->conf.macaddr);
+     emc->nic = qemu_new_nic(&net_npcm7xx_emc_info, &emc->conf,
+-                            object_get_typename(OBJECT(dev)), dev->id, emc);
++                            object_get_typename(OBJECT(dev)), dev->id,
++                            &dev->mem_reentrancy_guard, emc);
+     qemu_format_nic_info_str(qemu_get_queue(emc->nic), emc->conf.macaddr.a);
+ }
+ 
+diff --git a/hw/net/opencores_eth.c b/hw/net/opencores_eth.c
+index 0b3dc3146e..f96d6ea2cc 100644
+--- a/hw/net/opencores_eth.c
++++ b/hw/net/opencores_eth.c
+@@ -732,7 +732,8 @@ static void sysbus_open_eth_realize(DeviceState *dev, Error **errp)
+     sysbus_init_irq(sbd, &s->irq);
+ 
+     s->nic = qemu_new_nic(&net_open_eth_info, &s->conf,
+-                          object_get_typename(OBJECT(s)), dev->id, s);
++                          object_get_typename(OBJECT(s)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+ }
+ 
+ static void qdev_open_eth_reset(DeviceState *dev)
+diff --git a/hw/net/pcnet.c b/hw/net/pcnet.c
+index e63e524913..56c3d14ad6 100644
+--- a/hw/net/pcnet.c
++++ b/hw/net/pcnet.c
+@@ -1718,7 +1718,8 @@ void pcnet_common_init(DeviceState *dev, PCNetState *s, NetClientInfo *info)
+     s->poll_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, pcnet_poll_timer, s);
+ 
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+-    s->nic = qemu_new_nic(info, &s->conf, object_get_typename(OBJECT(dev)), dev->id, s);
++    s->nic = qemu_new_nic(info, &s->conf, object_get_typename(OBJECT(dev)),
++                          dev->id, &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ 
+     /* Initialize the PROM */
+diff --git a/hw/net/rocker/rocker_fp.c b/hw/net/rocker/rocker_fp.c
+index cbeed65bd5..0d21948ada 100644
+--- a/hw/net/rocker/rocker_fp.c
++++ b/hw/net/rocker/rocker_fp.c
+@@ -241,8 +241,8 @@ FpPort *fp_port_alloc(Rocker *r, char *sw_name,
+     port->conf.bootindex = -1;
+     port->conf.peers = *peers;
+ 
+-    port->nic = qemu_new_nic(&fp_port_info, &port->conf,
+-                             sw_name, NULL, port);
++    port->nic = qemu_new_nic(&fp_port_info, &port->conf, sw_name, NULL,
++                             &DEVICE(r)->mem_reentrancy_guard, port);
+     qemu_format_nic_info_str(qemu_get_queue(port->nic),
+                              port->conf.macaddr.a);
+ 
+diff --git a/hw/net/rtl8139.c b/hw/net/rtl8139.c
+index eb679d7c40..a4462af431 100644
+--- a/hw/net/rtl8139.c
++++ b/hw/net/rtl8139.c
+@@ -3400,7 +3400,8 @@ static void pci_rtl8139_realize(PCIDevice *dev, Error **errp)
+     s->eeprom.contents[9] = s->conf.macaddr.a[4] | s->conf.macaddr.a[5] << 8;
+ 
+     s->nic = qemu_new_nic(&net_rtl8139_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), d->id, s);
++                          object_get_typename(OBJECT(dev)), d->id,
++                          &d->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ 
+     s->cplus_txbuffer = NULL;
+diff --git a/hw/net/smc91c111.c b/hw/net/smc91c111.c
+index ad778cd8fc..4eda971ef3 100644
+--- a/hw/net/smc91c111.c
++++ b/hw/net/smc91c111.c
+@@ -783,7 +783,8 @@ static void smc91c111_realize(DeviceState *dev, Error **errp)
+     sysbus_init_irq(sbd, &s->irq);
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_smc91c111_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+     /* ??? Save/restore.  */
+ }
+diff --git a/hw/net/spapr_llan.c b/hw/net/spapr_llan.c
+index a6876a936d..475d5f3a34 100644
+--- a/hw/net/spapr_llan.c
++++ b/hw/net/spapr_llan.c
+@@ -325,7 +325,8 @@ static void spapr_vlan_realize(SpaprVioDevice *sdev, Error **errp)
+     memcpy(&dev->perm_mac.a, &dev->nicconf.macaddr.a, sizeof(dev->perm_mac.a));
+ 
+     dev->nic = qemu_new_nic(&net_spapr_vlan_info, &dev->nicconf,
+-                            object_get_typename(OBJECT(sdev)), sdev->qdev.id, dev);
++                            object_get_typename(OBJECT(sdev)), sdev->qdev.id,
++                            &sdev->qdev.mem_reentrancy_guard, dev);
+     qemu_format_nic_info_str(qemu_get_queue(dev->nic), dev->nicconf.macaddr.a);
+ 
+     dev->rxp_timer = timer_new_us(QEMU_CLOCK_VIRTUAL, spapr_vlan_flush_rx_queue,
+diff --git a/hw/net/stellaris_enet.c b/hw/net/stellaris_enet.c
+index 8dd60783d8..6768a6912f 100644
+--- a/hw/net/stellaris_enet.c
++++ b/hw/net/stellaris_enet.c
+@@ -492,7 +492,8 @@ static void stellaris_enet_realize(DeviceState *dev, Error **errp)
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+ 
+     s->nic = qemu_new_nic(&net_stellaris_enet_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ }
+ 
+diff --git a/hw/net/sungem.c b/hw/net/sungem.c
+index 3684a4d733..c12d44e9dc 100644
+--- a/hw/net/sungem.c
++++ b/hw/net/sungem.c
+@@ -1361,7 +1361,7 @@ static void sungem_realize(PCIDevice *pci_dev, Error **errp)
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_sungem_info, &s->conf,
+                           object_get_typename(OBJECT(dev)),
+-                          dev->id, s);
++                          dev->id, &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic),
+                              s->conf.macaddr.a);
+ }
+diff --git a/hw/net/sunhme.c b/hw/net/sunhme.c
+index fc34905f87..fa98528d71 100644
+--- a/hw/net/sunhme.c
++++ b/hw/net/sunhme.c
+@@ -892,7 +892,8 @@ static void sunhme_realize(PCIDevice *pci_dev, Error **errp)
+ 
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_sunhme_info, &s->conf,
+-                          object_get_typename(OBJECT(d)), d->id, s);
++                          object_get_typename(OBJECT(d)), d->id,
++                          &d->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ }
+ 
+diff --git a/hw/net/tulip.c b/hw/net/tulip.c
+index c2b3b1bdfa..956093abd7 100644
+--- a/hw/net/tulip.c
++++ b/hw/net/tulip.c
+@@ -983,7 +983,8 @@ static void pci_tulip_realize(PCIDevice *pci_dev, Error **errp)
+ 
+     s->nic = qemu_new_nic(&net_tulip_info, &s->c,
+                           object_get_typename(OBJECT(pci_dev)),
+-                          pci_dev->qdev.id, s);
++                          pci_dev->qdev.id,
++                          &pci_dev->qdev.mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->c.macaddr.a);
+ }
+ 
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 1b10cdc127..06f35ac2d8 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -3633,10 +3633,12 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
+          * Happen when virtio_net_set_netclient_name has been called.
+          */
+         n->nic = qemu_new_nic(&net_virtio_info, &n->nic_conf,
+-                              n->netclient_type, n->netclient_name, n);
++                              n->netclient_type, n->netclient_name,
++                              &dev->mem_reentrancy_guard, n);
+     } else {
+         n->nic = qemu_new_nic(&net_virtio_info, &n->nic_conf,
+-                              object_get_typename(OBJECT(dev)), dev->id, n);
++                              object_get_typename(OBJECT(dev)), dev->id,
++                              &dev->mem_reentrancy_guard, n);
+     }
+ 
+     for (i = 0; i < n->max_queue_pairs; i++) {
+diff --git a/hw/net/vmxnet3.c b/hw/net/vmxnet3.c
+index 399fc14129..e49b4a7a6c 100644
+--- a/hw/net/vmxnet3.c
++++ b/hw/net/vmxnet3.c
+@@ -2083,7 +2083,7 @@ static void vmxnet3_net_init(VMXNET3State *s)
+ 
+     s->nic = qemu_new_nic(&net_vmxnet3_info, &s->conf,
+                           object_get_typename(OBJECT(s)),
+-                          d->id, s);
++                          d->id, &d->mem_reentrancy_guard, s);
+ 
+     s->peer_has_vhdr = vmxnet3_peer_has_vnet_hdr(s);
+     s->tx_sop = true;
+diff --git a/hw/net/xen_nic.c b/hw/net/xen_nic.c
+index 7d92c2d022..1014e84518 100644
+--- a/hw/net/xen_nic.c
++++ b/hw/net/xen_nic.c
+@@ -294,7 +294,8 @@ static int net_init(struct XenLegacyDevice *xendev)
+     }
+ 
+     netdev->nic = qemu_new_nic(&net_xen_info, &netdev->conf,
+-                               "xen", NULL, netdev);
++                               "xen", NULL,
++                               &xendev->qdev.mem_reentrancy_guard, netdev);
+ 
+     qemu_set_info_str(qemu_get_queue(netdev->nic),
+                       "nic: xenbus vif macaddr=%s", netdev->mac);
+diff --git a/hw/net/xgmac.c b/hw/net/xgmac.c
+index 0ab6ae91aa..1f4f277d84 100644
+--- a/hw/net/xgmac.c
++++ b/hw/net/xgmac.c
+@@ -402,7 +402,8 @@ static void xgmac_enet_realize(DeviceState *dev, Error **errp)
+ 
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_xgmac_enet_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ 
+     s->regs[XGMAC_ADDR_HIGH(0)] = (s->conf.macaddr.a[5] << 8) |
+diff --git a/hw/net/xilinx_axienet.c b/hw/net/xilinx_axienet.c
+index 990ff3a1c2..8a34243803 100644
+--- a/hw/net/xilinx_axienet.c
++++ b/hw/net/xilinx_axienet.c
+@@ -968,7 +968,8 @@ static void xilinx_enet_realize(DeviceState *dev, Error **errp)
+ 
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_xilinx_enet_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ 
+     tdk_init(&s->TEMAC.phy);
+diff --git a/hw/net/xilinx_ethlite.c b/hw/net/xilinx_ethlite.c
+index 6e09f7e422..80cb869e22 100644
+--- a/hw/net/xilinx_ethlite.c
++++ b/hw/net/xilinx_ethlite.c
+@@ -235,7 +235,8 @@ static void xilinx_ethlite_realize(DeviceState *dev, Error **errp)
+ 
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_xilinx_ethlite_info, &s->conf,
+-                          object_get_typename(OBJECT(dev)), dev->id, s);
++                          object_get_typename(OBJECT(dev)), dev->id,
++                          &dev->mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+ }
+ 
+diff --git a/hw/nvram/xlnx-efuse.c b/hw/nvram/xlnx-efuse.c
+index fdfffaab99..aff5254129 100644
+--- a/hw/nvram/xlnx-efuse.c
++++ b/hw/nvram/xlnx-efuse.c
+@@ -217,6 +217,13 @@ static void efuse_realize(DeviceState *dev, Error **errp)
+     }
+ }
+ 
++static void efuse_finalize(Object *obj)
++{
++    XlnxEFuse *s = XLNX_EFUSE(obj);
++
++    g_free(s->ro_bits);
++}
++
+ static void efuse_prop_set_drive(Object *obj, Visitor *v, const char *name,
+                                  void *opaque, Error **errp)
+ {
+@@ -273,6 +280,7 @@ static const TypeInfo efuse_info = {
+     .name          = TYPE_XLNX_EFUSE,
+     .parent        = TYPE_DEVICE,
+     .instance_size = sizeof(XlnxEFuse),
++    .instance_finalize = efuse_finalize,
+     .class_init    = efuse_class_init,
+ };
+ 
+diff --git a/hw/nvram/xlnx-versal-efuse-ctrl.c b/hw/nvram/xlnx-versal-efuse-ctrl.c
+index b35ba65ab5..2d2dc09526 100644
+--- a/hw/nvram/xlnx-versal-efuse-ctrl.c
++++ b/hw/nvram/xlnx-versal-efuse-ctrl.c
+@@ -725,6 +725,13 @@ static void efuse_ctrl_init(Object *obj)
+     sysbus_init_irq(sbd, &s->irq_efuse_imr);
+ }
+ 
++static void efuse_ctrl_finalize(Object *obj)
++{
++    XlnxVersalEFuseCtrl *s = XLNX_VERSAL_EFUSE_CTRL(obj);
++
++    g_free(s->extra_pg0_lock_spec);
++}
++
+ static const VMStateDescription vmstate_efuse_ctrl = {
+     .name = TYPE_XLNX_VERSAL_EFUSE_CTRL,
+     .version_id = 1,
+@@ -762,6 +769,7 @@ static const TypeInfo efuse_ctrl_info = {
+     .instance_size = sizeof(XlnxVersalEFuseCtrl),
+     .class_init    = efuse_ctrl_class_init,
+     .instance_init = efuse_ctrl_init,
++    .instance_finalize = efuse_ctrl_finalize,
+ };
+ 
+ static void efuse_ctrl_register_types(void)
+diff --git a/hw/pci/msix.c b/hw/pci/msix.c
+index 9e70fcd6fa..4b258566d4 100644
+--- a/hw/pci/msix.c
++++ b/hw/pci/msix.c
+@@ -639,6 +639,7 @@ undo:
+     }
+     dev->msix_vector_use_notifier = NULL;
+     dev->msix_vector_release_notifier = NULL;
++    dev->msix_vector_poll_notifier = NULL;
+     return ret;
+ }
+ 
+diff --git a/hw/pci/pcie_sriov.c b/hw/pci/pcie_sriov.c
+index 8e3faf1f59..61a4e06768 100644
+--- a/hw/pci/pcie_sriov.c
++++ b/hw/pci/pcie_sriov.c
+@@ -178,7 +178,6 @@ static void register_vfs(PCIDevice *dev)
+     num_vfs = pci_get_word(dev->config + sriov_cap + PCI_SRIOV_NUM_VF);
+ 
+     dev->exp.sriov_pf.vf = g_new(PCIDevice *, num_vfs);
+-    assert(dev->exp.sriov_pf.vf);
+ 
+     trace_sriov_register_vfs(dev->name, PCI_SLOT(dev->devfn),
+                              PCI_FUNC(dev->devfn), num_vfs);
+diff --git a/hw/usb/dev-network.c b/hw/usb/dev-network.c
+index 5fff487ee5..2c33e36cad 100644
+--- a/hw/usb/dev-network.c
++++ b/hw/usb/dev-network.c
+@@ -1386,7 +1386,8 @@ static void usb_net_realize(USBDevice *dev, Error **errp)
+ 
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+     s->nic = qemu_new_nic(&net_usbnet_info, &s->conf,
+-                          object_get_typename(OBJECT(s)), s->dev.qdev.id, s);
++                          object_get_typename(OBJECT(s)), s->dev.qdev.id,
++                          &s->dev.qdev.mem_reentrancy_guard, s);
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+     snprintf(s->usbstring_mac, sizeof(s->usbstring_mac),
+              "%02x%02x%02x%02x%02x%02x",
+diff --git a/hw/virtio/virtio-iommu-pci.c b/hw/virtio/virtio-iommu-pci.c
+index 7ef2f9dcdb..eab6e1c793 100644
+--- a/hw/virtio/virtio-iommu-pci.c
++++ b/hw/virtio/virtio-iommu-pci.c
+@@ -95,10 +95,18 @@ static void virtio_iommu_pci_instance_init(Object *obj)
+                                 TYPE_VIRTIO_IOMMU);
+ }
+ 
++static void virtio_iommu_pci_instance_finalize(Object *obj)
++{
++    VirtIOIOMMUPCI *dev = VIRTIO_IOMMU_PCI(obj);
++
++    g_free(dev->vdev.reserved_regions);
++}
++
+ static const VirtioPCIDeviceTypeInfo virtio_iommu_pci_info = {
+     .generic_name  = TYPE_VIRTIO_IOMMU_PCI,
+     .instance_size = sizeof(VirtIOIOMMUPCI),
+     .instance_init = virtio_iommu_pci_instance_init,
++    .instance_finalize = virtio_iommu_pci_instance_finalize,
+     .class_init    = virtio_iommu_pci_class_init,
+ };
+ 
+diff --git a/hw/virtio/virtio-pci.c b/hw/virtio/virtio-pci.c
+index 67e771c373..e5e74a7160 100644
+--- a/hw/virtio/virtio-pci.c
++++ b/hw/virtio/virtio-pci.c
+@@ -2174,6 +2174,7 @@ void virtio_pci_types_register(const VirtioPCIDeviceTypeInfo *t)
+         .parent        = t->parent ? t->parent : TYPE_VIRTIO_PCI,
+         .instance_size = t->instance_size,
+         .instance_init = t->instance_init,
++        .instance_finalize = t->instance_finalize,
+         .class_size    = t->class_size,
+         .abstract      = true,
+         .interfaces    = t->interfaces,
+diff --git a/include/hw/virtio/virtio-pci.h b/include/hw/virtio/virtio-pci.h
+index 938799e8f6..c4676ff4d4 100644
+--- a/include/hw/virtio/virtio-pci.h
++++ b/include/hw/virtio/virtio-pci.h
+@@ -241,6 +241,7 @@ typedef struct VirtioPCIDeviceTypeInfo {
+     size_t instance_size;
+     size_t class_size;
+     void (*instance_init)(Object *obj);
++    void (*instance_finalize)(Object *obj);
+     void (*class_init)(ObjectClass *klass, void *data);
+     InterfaceInfo *interfaces;
+ } VirtioPCIDeviceTypeInfo;
+diff --git a/include/net/net.h b/include/net/net.h
+index dc20b31e9f..5a7c0e9ebf 100644
+--- a/include/net/net.h
++++ b/include/net/net.h
+@@ -118,6 +118,7 @@ struct NetClientState {
+ typedef struct NICState {
+     NetClientState *ncs;
+     NICConf *conf;
++    MemReentrancyGuard *reentrancy_guard;
+     void *opaque;
+     bool peer_deleted;
+ } NICState;
+@@ -151,6 +152,7 @@ NICState *qemu_new_nic(NetClientInfo *info,
+                        NICConf *conf,
+                        const char *model,
+                        const char *name,
++                       MemReentrancyGuard *reentrancy_guard,
+                        void *opaque);
+ void qemu_del_nic(NICState *nic);
+ NetClientState *qemu_get_subqueue(NICState *nic, int queue_index);
+diff --git a/linux-user/elfload.c b/linux-user/elfload.c
+index c2c095d383..87895847ec 100644
+--- a/linux-user/elfload.c
++++ b/linux-user/elfload.c
+@@ -3001,7 +3001,7 @@ static void load_elf_image(const char *image_name, int image_fd,
+     for (i = 0; i < ehdr->e_phnum; ++i) {
+         struct elf_phdr *eppnt = phdr + i;
+         if (eppnt->p_type == PT_LOAD) {
+-            abi_ulong a = eppnt->p_vaddr - eppnt->p_offset;
++            abi_ulong a = eppnt->p_vaddr & TARGET_PAGE_MASK;
+             if (a < loaddr) {
+                 loaddr = a;
+             }
+diff --git a/net/net.c b/net/net.c
+index 840ad9dca5..c3391168f6 100644
+--- a/net/net.c
++++ b/net/net.c
+@@ -319,6 +319,7 @@ NICState *qemu_new_nic(NetClientInfo *info,
+                        NICConf *conf,
+                        const char *model,
+                        const char *name,
++                       MemReentrancyGuard *reentrancy_guard,
+                        void *opaque)
+ {
+     NetClientState **peers = conf->peers.ncs;
+@@ -331,6 +332,7 @@ NICState *qemu_new_nic(NetClientInfo *info,
+     nic = g_malloc0(info->size + sizeof(NetClientState) * queues);
+     nic->ncs = (void *)nic + info->size;
+     nic->conf = conf;
++    nic->reentrancy_guard = reentrancy_guard,
+     nic->opaque = opaque;
+ 
+     for (i = 0; i < queues; i++) {
+@@ -786,6 +788,7 @@ static ssize_t qemu_deliver_packet_iov(NetClientState *sender,
+                                        int iovcnt,
+                                        void *opaque)
+ {
++    MemReentrancyGuard *owned_reentrancy_guard;
+     NetClientState *nc = opaque;
+     int ret;
+ 
+@@ -798,12 +801,24 @@ static ssize_t qemu_deliver_packet_iov(NetClientState *sender,
+         return 0;
+     }
+ 
++    if (nc->info->type != NET_CLIENT_DRIVER_NIC ||
++        qemu_get_nic(nc)->reentrancy_guard->engaged_in_io) {
++        owned_reentrancy_guard = NULL;
++    } else {
++        owned_reentrancy_guard = qemu_get_nic(nc)->reentrancy_guard;
++        owned_reentrancy_guard->engaged_in_io = true;
++    }
++
+     if (nc->info->receive_iov && !(flags & QEMU_NET_PACKET_FLAG_RAW)) {
+         ret = nc->info->receive_iov(nc, iov, iovcnt);
+     } else {
+         ret = nc_sendv_compat(nc, iov, iovcnt, flags);
+     }
+ 
++    if (owned_reentrancy_guard) {
++        owned_reentrancy_guard->engaged_in_io = false;
++    }
++
+     if (ret == 0) {
+         nc->receive_disabled = 1;
+     }
+diff --git a/softmmu/memory.c b/softmmu/memory.c
+index 61569f8306..2b03596bc7 100644
+--- a/softmmu/memory.c
++++ b/softmmu/memory.c
+@@ -1326,22 +1326,7 @@ static uint64_t memory_region_ram_device_read(void *opaque,
+                                               hwaddr addr, unsigned size)
+ {
+     MemoryRegion *mr = opaque;
+-    uint64_t data = (uint64_t)~0;
+-
+-    switch (size) {
+-    case 1:
+-        data = *(uint8_t *)(mr->ram_block->host + addr);
+-        break;
+-    case 2:
+-        data = *(uint16_t *)(mr->ram_block->host + addr);
+-        break;
+-    case 4:
+-        data = *(uint32_t *)(mr->ram_block->host + addr);
+-        break;
+-    case 8:
+-        data = *(uint64_t *)(mr->ram_block->host + addr);
+-        break;
+-    }
++    uint64_t data = ldn_he_p(mr->ram_block->host + addr, size);
+ 
+     trace_memory_region_ram_device_read(get_cpu_index(), mr, addr, data, size);
+ 
+@@ -1355,20 +1340,7 @@ static void memory_region_ram_device_write(void *opaque, hwaddr addr,
+ 
+     trace_memory_region_ram_device_write(get_cpu_index(), mr, addr, data, size);
+ 
+-    switch (size) {
+-    case 1:
+-        *(uint8_t *)(mr->ram_block->host + addr) = (uint8_t)data;
+-        break;
+-    case 2:
+-        *(uint16_t *)(mr->ram_block->host + addr) = (uint16_t)data;
+-        break;
+-    case 4:
+-        *(uint32_t *)(mr->ram_block->host + addr) = (uint32_t)data;
+-        break;
+-    case 8:
+-        *(uint64_t *)(mr->ram_block->host + addr) = data;
+-        break;
+-    }
++    stn_he_p(mr->ram_block->host + addr, size, data);
+ }
+ 
+ static const MemoryRegionOps ram_device_mem_ops = {
+diff --git a/target/arm/cpu.c b/target/arm/cpu.c
+index 38d066c294..6cf7a33591 100644
+--- a/target/arm/cpu.c
++++ b/target/arm/cpu.c
+@@ -1498,6 +1498,16 @@ void arm_cpu_finalize_features(ARMCPU *cpu, Error **errp)
+             return;
+         }
+ 
++        /*
++         * FEAT_SME is not architecturally dependent on FEAT_SVE (unless
++         * FEAT_SME_FA64 is present). However our implementation currently
++         * assumes it, so if the user asked for sve=off then turn off SME also.
++         * (KVM doesn't currently support SME at all.)
++         */
++        if (cpu_isar_feature(aa64_sme, cpu) && !cpu_isar_feature(aa64_sve, cpu)) {
++            object_property_set_bool(OBJECT(cpu), "sme", false, &error_abort);
++        }
++
+         arm_cpu_sme_finalize(cpu, &local_err);
+         if (local_err != NULL) {
+             error_propagate(errp, local_err);
+diff --git a/target/arm/helper.c b/target/arm/helper.c
+index a52ef3dfe4..02cfeece45 100644
+--- a/target/arm/helper.c
++++ b/target/arm/helper.c
+@@ -1431,6 +1431,22 @@ static void pmcr_write(CPUARMState *env, const ARMCPRegInfo *ri,
+     pmu_op_finish(env);
+ }
+ 
++static uint64_t pmcr_read(CPUARMState *env, const ARMCPRegInfo *ri)
++{
++    uint64_t pmcr = env->cp15.c9_pmcr;
++
++    /*
++     * If EL2 is implemented and enabled for the current security state, reads
++     * of PMCR.N from EL1 or EL0 return the value of MDCR_EL2.HPMN or HDCR.HPMN.
++     */
++    if (arm_current_el(env) <= 1 && arm_is_el2_enabled(env)) {
++        pmcr &= ~PMCRN_MASK;
++        pmcr |= (env->cp15.mdcr_el2 & MDCR_HPMN) << PMCRN_SHIFT;
++    }
++
++    return pmcr;
++}
++
+ static void pmswinc_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                           uint64_t value)
+ {
+@@ -6499,8 +6515,9 @@ static void define_pmu_regs(ARMCPU *cpu)
+         .access = PL0_RW,
+         .type = ARM_CP_IO | ARM_CP_ALIAS,
+         .fieldoffset = offsetoflow32(CPUARMState, cp15.c9_pmcr),
+-        .accessfn = pmreg_access, .writefn = pmcr_write,
+-        .raw_writefn = raw_write,
++        .accessfn = pmreg_access,
++        .readfn = pmcr_read, .raw_readfn = raw_read,
++        .writefn = pmcr_write, .raw_writefn = raw_write,
+     };
+     ARMCPRegInfo pmcr64 = {
+         .name = "PMCR_EL0", .state = ARM_CP_STATE_AA64,
+@@ -6509,6 +6526,7 @@ static void define_pmu_regs(ARMCPU *cpu)
+         .type = ARM_CP_IO,
+         .fieldoffset = offsetof(CPUARMState, cp15.c9_pmcr),
+         .resetvalue = cpu->isar.reset_pmcr_el0,
++        .readfn = pmcr_read, .raw_readfn = raw_read,
+         .writefn = pmcr_write, .raw_writefn = raw_write,
+     };
+ 
+diff --git a/target/arm/sme_helper.c b/target/arm/sme_helper.c
+index 73dd838330..8856773635 100644
+--- a/target/arm/sme_helper.c
++++ b/target/arm/sme_helper.c
+@@ -1070,10 +1070,9 @@ void HELPER(sme_fmopa_h)(void *vza, void *vzn, void *vzm, void *vpn,
+ 
+                         m = f16mop_adj_pair(m, pcol, 0);
+                         *a = f16_dotadd(*a, n, m, &fpst_std, &fpst_odd);
+-
+-                        col += 4;
+-                        pcol >>= 4;
+                     }
++                    col += 4;
++                    pcol >>= 4;
+                 } while (col & 15);
+             }
+             row += 4;
+@@ -1106,10 +1105,9 @@ void HELPER(sme_bfmopa)(void *vza, void *vzn, void *vzm, void *vpn,
+ 
+                         m = f16mop_adj_pair(m, pcol, 0);
+                         *a = bfdotadd(*a, n, m);
+-
+-                        col += 4;
+-                        pcol >>= 4;
+                     }
++                    col += 4;
++                    pcol >>= 4;
+                 } while (col & 15);
+             }
+             row += 4;
+diff --git a/target/arm/syndrome.h b/target/arm/syndrome.h
+index 73df5e3793..15334a3d15 100644
+--- a/target/arm/syndrome.h
++++ b/target/arm/syndrome.h
+@@ -212,7 +212,7 @@ static inline uint32_t syn_simd_access_trap(int cv, int cond, bool is_16bit)
+ 
+ static inline uint32_t syn_sve_access_trap(void)
+ {
+-    return EC_SVEACCESSTRAP << ARM_EL_EC_SHIFT;
++    return (EC_SVEACCESSTRAP << ARM_EL_EC_SHIFT) | ARM_EL_IL;
+ }
+ 
+ static inline uint32_t syn_smetrap(SMEExceptionType etype, bool is_16bit)
+@@ -223,12 +223,12 @@ static inline uint32_t syn_smetrap(SMEExceptionType etype, bool is_16bit)
+ 
+ static inline uint32_t syn_pactrap(void)
+ {
+-    return EC_PACTRAP << ARM_EL_EC_SHIFT;
++    return (EC_PACTRAP << ARM_EL_EC_SHIFT) | ARM_EL_IL;
+ }
+ 
+ static inline uint32_t syn_btitrap(int btype)
+ {
+-    return (EC_BTITRAP << ARM_EL_EC_SHIFT) | btype;
++    return (EC_BTITRAP << ARM_EL_EC_SHIFT) | ARM_EL_IL | btype;
+ }
+ 
+ static inline uint32_t syn_bxjtrap(int cv, int cond, int rm)
+diff --git a/tests/avocado/cpu_queries.py b/tests/avocado/cpu_queries.py
+index cf69f69b11..295642772e 100644
+--- a/tests/avocado/cpu_queries.py
++++ b/tests/avocado/cpu_queries.py
+@@ -31,4 +31,4 @@ def test(self):
+         for c in cpus:
+             model = {'name': c['name']}
+             e = self.vm.command('query-cpu-model-expansion', model=model, type='full')
+-            self.assertEquals(e['model']['name'], c['name'])
++            self.assertEqual(e['model']['name'], c['name'])
+diff --git a/tests/avocado/empty_cpu_model.py b/tests/avocado/empty_cpu_model.py
+index 22f504418d..d906ef3d3c 100644
+--- a/tests/avocado/empty_cpu_model.py
++++ b/tests/avocado/empty_cpu_model.py
+@@ -15,5 +15,5 @@ def test(self):
+         self.vm.set_qmp_monitor(enabled=False)
+         self.vm.launch()
+         self.vm.wait()
+-        self.assertEquals(self.vm.exitcode(), 1, "QEMU exit code should be 1")
++        self.assertEqual(self.vm.exitcode(), 1, "QEMU exit code should be 1")
+         self.assertRegex(self.vm.get_log(), r'-cpu option cannot be empty')
+diff --git a/tests/avocado/pc_cpu_hotplug_props.py b/tests/avocado/pc_cpu_hotplug_props.py
+index 52b878188e..6100fb7760 100644
+--- a/tests/avocado/pc_cpu_hotplug_props.py
++++ b/tests/avocado/pc_cpu_hotplug_props.py
+@@ -32,4 +32,4 @@ def test_no_die_id(self):
+         self.vm.add_args('-smp', '1,sockets=2,cores=2,threads=2,maxcpus=8')
+         self.vm.add_args('-device', 'qemu64-x86_64-cpu,socket-id=1,core-id=0,thread-id=0')
+         self.vm.launch()
+-        self.assertEquals(len(self.vm.command('query-cpus-fast')), 2)
++        self.assertEqual(len(self.vm.command('query-cpus-fast')), 2)
+diff --git a/tests/avocado/version.py b/tests/avocado/version.py
+index ded7f039c1..5f88ff300b 100644
+--- a/tests/avocado/version.py
++++ b/tests/avocado/version.py
+@@ -21,4 +21,4 @@ def test_qmp_human_info_version(self):
+         self.vm.launch()
+         res = self.vm.command('human-monitor-command',
+                               command_line='info version')
+-        self.assertRegexpMatches(res, r'^(\d+\.\d+\.\d)')
++        self.assertRegex(res, r'^(\d+\.\d+\.\d)')
+diff --git a/tests/avocado/x86_cpu_model_versions.py b/tests/avocado/x86_cpu_model_versions.py
+index a6edf74c1c..262d6a77fb 100644
+--- a/tests/avocado/x86_cpu_model_versions.py
++++ b/tests/avocado/x86_cpu_model_versions.py
+@@ -119,94 +119,95 @@ def test_4_1_alias(self):
+ 
+         self.assertFalse(cpus['Cascadelake-Server']['static'],
+                          'unversioned Cascadelake-Server CPU model must not be static')
+-        self.assertEquals(cpus['Cascadelake-Server'].get('alias-of'), 'Cascadelake-Server-v1',
+-                          'Cascadelake-Server must be an alias of Cascadelake-Server-v1')
++        self.assertEqual(cpus['Cascadelake-Server'].get('alias-of'),
++                         'Cascadelake-Server-v1',
++                         'Cascadelake-Server must be an alias of Cascadelake-Server-v1')
+         self.assertNotIn('alias-of', cpus['Cascadelake-Server-v1'],
+                          'Cascadelake-Server-v1 must not be an alias')
+ 
+         self.assertFalse(cpus['qemu64']['static'],
+                          'unversioned qemu64 CPU model must not be static')
+-        self.assertEquals(cpus['qemu64'].get('alias-of'), 'qemu64-v1',
+-                          'qemu64 must be an alias of qemu64-v1')
++        self.assertEqual(cpus['qemu64'].get('alias-of'), 'qemu64-v1',
++                         'qemu64 must be an alias of qemu64-v1')
+         self.assertNotIn('alias-of', cpus['qemu64-v1'],
+                          'qemu64-v1 must not be an alias')
+ 
+         self.validate_variant_aliases(cpus)
+ 
+         # On pc-*-4.1, -noTSX and -IBRS models should be aliases:
+-        self.assertEquals(cpus["Haswell"].get('alias-of'),
+-                          "Haswell-v1",
++        self.assertEqual(cpus["Haswell"].get('alias-of'),
++                         "Haswell-v1",
+                          "Haswell must be an alias")
+-        self.assertEquals(cpus["Haswell-noTSX"].get('alias-of'),
+-                          "Haswell-v2",
++        self.assertEqual(cpus["Haswell-noTSX"].get('alias-of'),
++                         "Haswell-v2",
+                          "Haswell-noTSX must be an alias")
+-        self.assertEquals(cpus["Haswell-IBRS"].get('alias-of'),
+-                          "Haswell-v3",
++        self.assertEqual(cpus["Haswell-IBRS"].get('alias-of'),
++                         "Haswell-v3",
+                          "Haswell-IBRS must be an alias")
+-        self.assertEquals(cpus["Haswell-noTSX-IBRS"].get('alias-of'),
+-                          "Haswell-v4",
++        self.assertEqual(cpus["Haswell-noTSX-IBRS"].get('alias-of'),
++                         "Haswell-v4",
+                          "Haswell-noTSX-IBRS must be an alias")
+ 
+-        self.assertEquals(cpus["Broadwell"].get('alias-of'),
+-                          "Broadwell-v1",
++        self.assertEqual(cpus["Broadwell"].get('alias-of'),
++                         "Broadwell-v1",
+                          "Broadwell must be an alias")
+-        self.assertEquals(cpus["Broadwell-noTSX"].get('alias-of'),
+-                          "Broadwell-v2",
++        self.assertEqual(cpus["Broadwell-noTSX"].get('alias-of'),
++                         "Broadwell-v2",
+                          "Broadwell-noTSX must be an alias")
+-        self.assertEquals(cpus["Broadwell-IBRS"].get('alias-of'),
+-                          "Broadwell-v3",
++        self.assertEqual(cpus["Broadwell-IBRS"].get('alias-of'),
++                         "Broadwell-v3",
+                          "Broadwell-IBRS must be an alias")
+-        self.assertEquals(cpus["Broadwell-noTSX-IBRS"].get('alias-of'),
+-                          "Broadwell-v4",
++        self.assertEqual(cpus["Broadwell-noTSX-IBRS"].get('alias-of'),
++                         "Broadwell-v4",
+                          "Broadwell-noTSX-IBRS must be an alias")
+ 
+-        self.assertEquals(cpus["Nehalem"].get('alias-of'),
+-                          "Nehalem-v1",
++        self.assertEqual(cpus["Nehalem"].get('alias-of'),
++                         "Nehalem-v1",
+                          "Nehalem must be an alias")
+-        self.assertEquals(cpus["Nehalem-IBRS"].get('alias-of'),
+-                          "Nehalem-v2",
++        self.assertEqual(cpus["Nehalem-IBRS"].get('alias-of'),
++                         "Nehalem-v2",
+                          "Nehalem-IBRS must be an alias")
+ 
+-        self.assertEquals(cpus["Westmere"].get('alias-of'),
+-                          "Westmere-v1",
++        self.assertEqual(cpus["Westmere"].get('alias-of'),
++                         "Westmere-v1",
+                          "Westmere must be an alias")
+-        self.assertEquals(cpus["Westmere-IBRS"].get('alias-of'),
+-                          "Westmere-v2",
++        self.assertEqual(cpus["Westmere-IBRS"].get('alias-of'),
++                         "Westmere-v2",
+                          "Westmere-IBRS must be an alias")
+ 
+-        self.assertEquals(cpus["SandyBridge"].get('alias-of'),
+-                          "SandyBridge-v1",
++        self.assertEqual(cpus["SandyBridge"].get('alias-of'),
++                         "SandyBridge-v1",
+                          "SandyBridge must be an alias")
+-        self.assertEquals(cpus["SandyBridge-IBRS"].get('alias-of'),
+-                          "SandyBridge-v2",
++        self.assertEqual(cpus["SandyBridge-IBRS"].get('alias-of'),
++                         "SandyBridge-v2",
+                          "SandyBridge-IBRS must be an alias")
+ 
+-        self.assertEquals(cpus["IvyBridge"].get('alias-of'),
+-                          "IvyBridge-v1",
++        self.assertEqual(cpus["IvyBridge"].get('alias-of'),
++                         "IvyBridge-v1",
+                          "IvyBridge must be an alias")
+-        self.assertEquals(cpus["IvyBridge-IBRS"].get('alias-of'),
+-                          "IvyBridge-v2",
++        self.assertEqual(cpus["IvyBridge-IBRS"].get('alias-of'),
++                         "IvyBridge-v2",
+                          "IvyBridge-IBRS must be an alias")
+ 
+-        self.assertEquals(cpus["Skylake-Client"].get('alias-of'),
+-                          "Skylake-Client-v1",
++        self.assertEqual(cpus["Skylake-Client"].get('alias-of'),
++                         "Skylake-Client-v1",
+                          "Skylake-Client must be an alias")
+-        self.assertEquals(cpus["Skylake-Client-IBRS"].get('alias-of'),
+-                          "Skylake-Client-v2",
++        self.assertEqual(cpus["Skylake-Client-IBRS"].get('alias-of'),
++                         "Skylake-Client-v2",
+                          "Skylake-Client-IBRS must be an alias")
+ 
+-        self.assertEquals(cpus["Skylake-Server"].get('alias-of'),
+-                          "Skylake-Server-v1",
++        self.assertEqual(cpus["Skylake-Server"].get('alias-of'),
++                         "Skylake-Server-v1",
+                          "Skylake-Server must be an alias")
+-        self.assertEquals(cpus["Skylake-Server-IBRS"].get('alias-of'),
+-                          "Skylake-Server-v2",
++        self.assertEqual(cpus["Skylake-Server-IBRS"].get('alias-of'),
++                         "Skylake-Server-v2",
+                          "Skylake-Server-IBRS must be an alias")
+ 
+-        self.assertEquals(cpus["EPYC"].get('alias-of'),
+-                          "EPYC-v1",
++        self.assertEqual(cpus["EPYC"].get('alias-of'),
++                         "EPYC-v1",
+                          "EPYC must be an alias")
+-        self.assertEquals(cpus["EPYC-IBPB"].get('alias-of'),
+-                          "EPYC-v2",
++        self.assertEqual(cpus["EPYC-IBPB"].get('alias-of'),
++                         "EPYC-v2",
+                          "EPYC-IBPB must be an alias")
+ 
+         self.validate_aliases(cpus)
+diff --git a/tests/qemu-iotests/059 b/tests/qemu-iotests/059
+index e8be217e1f..9bcf1e7525 100755
+--- a/tests/qemu-iotests/059
++++ b/tests/qemu-iotests/059
+@@ -84,6 +84,8 @@ echo
+ echo "=== Testing big twoGbMaxExtentFlat ==="
+ _make_test_img -o "subformat=twoGbMaxExtentFlat" 1000G
+ _img_info --format-specific | _filter_img_info --format-specific
++$QEMU_IO -c "write 990G 512 -P 89" "$TEST_IMG" | _filter_qemu_io
++$QEMU_IO -c "read 990G 512 -P 89" "$TEST_IMG" | _filter_qemu_io
+ _cleanup_test_img
+ 
+ echo
+diff --git a/tests/qemu-iotests/059.out b/tests/qemu-iotests/059.out
+index 2b83c0c8b6..275ee7c778 100644
+--- a/tests/qemu-iotests/059.out
++++ b/tests/qemu-iotests/059.out
+@@ -2032,6 +2032,10 @@ Format specific information:
+             virtual size: 2147483648
+             filename: TEST_DIR/t-f500.IMGFMT
+             format: FLAT
++wrote 512/512 bytes at offset 1063004405760
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
++read 512/512 bytes at offset 1063004405760
++512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+ 
+ === Testing malformed VMFS extent description line ===
+ qemu-img: Could not open 'TEST_DIR/t.IMGFMT': Invalid extent line: RW 12582912 VMFS "dummy.IMGFMT" 1
+diff --git a/ui/gtk-egl.c b/ui/gtk-egl.c
+index 52c6246a33..7ff9f1648c 100644
+--- a/ui/gtk-egl.c
++++ b/ui/gtk-egl.c
+@@ -234,6 +234,13 @@ void gd_egl_scanout_texture(DisplayChangeListener *dcl,
+     vc->gfx.h = h;
+     vc->gfx.y0_top = backing_y_0_top;
+ 
++    if (!vc->gfx.esurface) {
++        gd_egl_init(vc);
++        if (!vc->gfx.esurface) {
++            return;
++        }
++    }
++
+     eglMakeCurrent(qemu_egl_display, vc->gfx.esurface,
+                    vc->gfx.esurface, vc->gfx.ectx);
+ 
+diff --git a/ui/vnc-clipboard.c b/ui/vnc-clipboard.c
+index c759be3438..124b6fbd9c 100644
+--- a/ui/vnc-clipboard.c
++++ b/ui/vnc-clipboard.c
+@@ -69,6 +69,11 @@ static uint8_t *inflate_buffer(uint8_t *in, uint32_t in_len, uint32_t *size)
+         }
+     }
+ 
++    *size = stream.total_out;
++    inflateEnd(&stream);
++
++    return out;
++
+ err_end:
+     inflateEnd(&stream);
+ err:
