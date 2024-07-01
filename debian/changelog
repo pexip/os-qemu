@@ -1,3 +1,9 @@
+qemu (1:7.2+dfsg-7+deb12u6+pexip24u1) pexip; urgency=medium
+
+  * New upstream release
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Mon, 01 Jul 2024 09:13:09 +0000
+
 qemu (1:7.2+dfsg-7+deb12u6) bookworm; urgency=medium
 
   * update to upstream 7.2.11 stable/bugfix release, v7.2.11.diff,
