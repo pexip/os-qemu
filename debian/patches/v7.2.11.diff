@@ -1,0 +1,2353 @@
+Subject: v7.2.11
+Date: Wed Apr 24 06:02:50 2024 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.10
+and upstream qemu v7.2.11.
+
+
+ .gitlab-ci.d/cirrus.yml              |   4 +-
+ VERSION                              |   2 +-
+ backends/cryptodev-builtin.c         |   4 +-
+ hw/acpi/hmat.c                       |   6 +-
+ hw/block/nand.c                      |  55 +++++++----
+ hw/char/virtio-serial-bus.c          |   3 +-
+ hw/core/machine.c                    |   1 +
+ hw/display/virtio-gpu.c              |   6 +-
+ hw/intc/arm_gicv3_cpuif.c            |   4 +-
+ hw/misc/applesmc.c                   |   1 +
+ hw/net/e1000e_core.c                 |  60 ++----------
+ hw/net/e1000e_core.h                 |   2 -
+ hw/net/lan9118.c                     |  28 +++++-
+ hw/net/pcnet.c                       |   2 +-
+ hw/net/virtio-net.c                  |   8 +-
+ hw/nvme/ctrl.c                       | 178 +++++++++++++++++++----------------
+ hw/nvme/nvme.h                       |   1 +
+ hw/pci/pcie_sriov.c                  |   8 ++
+ hw/ppc/spapr.c                       |   9 +-
+ hw/ppc/spapr_irq.c                   |   6 +-
+ hw/rtc/sun4v-rtc.c                   |   2 +-
+ hw/scsi/lsi53c895a.c                 |  60 +++++++++---
+ hw/scsi/scsi-generic.c               |   1 -
+ hw/scsi/trace-events                 |   2 +
+ hw/sd/sdhci.c                        |   8 ++
+ hw/virtio/virtio-crypto.c            |   4 +-
+ hw/virtio/virtio.c                   |  22 ++++-
+ include/hw/pci/pcie_sriov.h          |   3 +
+ include/hw/ppc/spapr_irq.h           |  14 ++-
+ include/hw/rtc/sun4v-rtc.h           |   2 +-
+ include/hw/virtio/virtio.h           |   7 ++
+ linux-user/syscall.c                 |  22 +++--
+ migration/block.c                    |   5 +-
+ monitor/misc.c                       |   2 +-
+ qemu-options.hx                      |   6 +-
+ scripts/make-release                 |   2 +-
+ softmmu/qdev-monitor.c               |  23 +++--
+ target/arm/helper.c                  |  96 +++++++++++++++----
+ target/arm/translate-sme.c           |  24 +++--
+ target/hppa/translate.c              |   1 +
+ target/i386/cpu-param.h              |   2 +-
+ target/i386/cpu.h                    |  50 +++++++---
+ target/i386/helper.c                 |   2 +-
+ target/i386/tcg/sysemu/excp_helper.c |   7 +-
+ target/loongarch/cpu.c               |  72 +++++++-------
+ target/sh4/translate.c               |   3 +
+ tcg/optimize.c                       |  19 ++--
+ tests/tcg/aarch64/Makefile.target    |  12 ++-
+ tests/tcg/aarch64/sme-outprod1.c     |  83 ++++++++++++++++
+ tests/tcg/aarch64/sysregs.c          |  27 ++++--
+ tests/tcg/aarch64/test-2150.c        |  12 +++
+ tests/tcg/aarch64/test-2248.c        |  28 ++++++
+ tests/unit/meson.build               |   8 +-
+ ui/cocoa.m                           |   7 ++
+ 54 files changed, 708 insertions(+), 318 deletions(-)
+
+diff --git a/.gitlab-ci.d/cirrus.yml b/.gitlab-ci.d/cirrus.yml
+index 634a73a742..c86487da5b 100644
+--- a/.gitlab-ci.d/cirrus.yml
++++ b/.gitlab-ci.d/cirrus.yml
+@@ -13,7 +13,7 @@
+ .cirrus_build_job:
+   extends: .base_job_template
+   stage: build
+-  image: registry.gitlab.com/libvirt/libvirt-ci/cirrus-run:master
++  image: registry.gitlab.com/libvirt/libvirt-ci/cirrus-run:latest
+   needs: []
+   timeout: 80m
+   allow_failure: true
+@@ -63,7 +63,7 @@ x64-freebsd-13-build:
+     NAME: freebsd-13
+     CIRRUS_VM_INSTANCE_TYPE: freebsd_instance
+     CIRRUS_VM_IMAGE_SELECTOR: image_family
+-    CIRRUS_VM_IMAGE_NAME: freebsd-13-1
++    CIRRUS_VM_IMAGE_NAME: freebsd-13-3
+     CIRRUS_VM_CPUS: 8
+     CIRRUS_VM_RAM: 8G
+     UPDATE_COMMAND: pkg update
+diff --git a/VERSION b/VERSION
+index 6bfb3a0ba9..971381d35b 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.10
++7.2.11
+diff --git a/backends/cryptodev-builtin.c b/backends/cryptodev-builtin.c
+index cda6ca3b71..2e792be756 100644
+--- a/backends/cryptodev-builtin.c
++++ b/backends/cryptodev-builtin.c
+@@ -416,7 +416,9 @@ static int cryptodev_builtin_close_session(
+                       CRYPTODEV_BACKEND_BUILTIN(backend);
+     CryptoDevBackendBuiltinSession *session;
+ 
+-    assert(session_id < MAX_NUM_SESSIONS && builtin->sessions[session_id]);
++    if (session_id >= MAX_NUM_SESSIONS || !builtin->sessions[session_id]) {
++        return -VIRTIO_CRYPTO_INVSESS;
++    }
+ 
+     session = builtin->sessions[session_id];
+     if (session->cipher) {
+diff --git a/hw/acpi/hmat.c b/hw/acpi/hmat.c
+index 3a6d51282a..768038e0da 100644
+--- a/hw/acpi/hmat.c
++++ b/hw/acpi/hmat.c
+@@ -77,6 +77,7 @@ static void build_hmat_lb(GArray *table_data, HMAT_LB_Info *hmat_lb,
+                           uint32_t *initiator_list)
+ {
+     int i, index;
++    uint32_t initiator_to_index[MAX_NODES] = {};
+     HMAT_LB_Data *lb_data;
+     uint16_t *entry_list;
+     uint32_t base;
+@@ -120,6 +121,8 @@ static void build_hmat_lb(GArray *table_data, HMAT_LB_Info *hmat_lb,
+     /* Initiator Proximity Domain List */
+     for (i = 0; i < num_initiator; i++) {
+         build_append_int_noprefix(table_data, initiator_list[i], 4);
++        /* Reverse mapping for array possitions */
++        initiator_to_index[initiator_list[i]] = i;
+     }
+ 
+     /* Target Proximity Domain List */
+@@ -131,7 +134,8 @@ static void build_hmat_lb(GArray *table_data, HMAT_LB_Info *hmat_lb,
+     entry_list = g_new0(uint16_t, num_initiator * num_target);
+     for (i = 0; i < hmat_lb->list->len; i++) {
+         lb_data = &g_array_index(hmat_lb->list, HMAT_LB_Data, i);
+-        index = lb_data->initiator * num_target + lb_data->target;
++        index = initiator_to_index[lb_data->initiator] * num_target +
++            lb_data->target;
+ 
+         entry_list[index] = (uint16_t)(lb_data->data / hmat_lb->base);
+     }
+diff --git a/hw/block/nand.c b/hw/block/nand.c
+index 1aee1cb2b1..d994bfe372 100644
+--- a/hw/block/nand.c
++++ b/hw/block/nand.c
+@@ -84,7 +84,11 @@ struct NANDFlashState {
+ 
+     void (*blk_write)(NANDFlashState *s);
+     void (*blk_erase)(NANDFlashState *s);
+-    void (*blk_load)(NANDFlashState *s, uint64_t addr, int offset);
++    /*
++     * Returns %true when block containing (@addr + @offset) is
++     * successfully loaded, otherwise %false.
++     */
++    bool (*blk_load)(NANDFlashState *s, uint64_t addr, unsigned offset);
+ 
+     uint32_t ioaddr_vmstate;
+ };
+@@ -243,9 +247,30 @@ static inline void nand_pushio_byte(NANDFlashState *s, uint8_t value)
+     }
+ }
+ 
++/*
++ * nand_load_block: Load block containing (s->addr + @offset).
++ * Returns length of data available at @offset in this block.
++ */
++static unsigned nand_load_block(NANDFlashState *s, unsigned offset)
++{
++    unsigned iolen;
++
++    if (!s->blk_load(s, s->addr, offset)) {
++        return 0;
++    }
++
++    iolen = (1 << s->page_shift);
++    if (s->gnd) {
++        iolen += 1 << s->oob_shift;
++    }
++    assert(offset <= iolen);
++    iolen -= offset;
++
++    return iolen;
++}
++
+ static void nand_command(NANDFlashState *s)
+ {
+-    unsigned int offset;
+     switch (s->cmd) {
+     case NAND_CMD_READ0:
+         s->iolen = 0;
+@@ -271,12 +296,7 @@ static void nand_command(NANDFlashState *s)
+     case NAND_CMD_NOSERIALREAD2:
+         if (!(nand_flash_ids[s->chip_id].options & NAND_SAMSUNG_LP))
+             break;
+-        offset = s->addr & ((1 << s->addr_shift) - 1);
+-        s->blk_load(s, s->addr, offset);
+-        if (s->gnd)
+-            s->iolen = (1 << s->page_shift) - offset;
+-        else
+-            s->iolen = (1 << s->page_shift) + (1 << s->oob_shift) - offset;
++        s->iolen = nand_load_block(s, s->addr & ((1 << s->addr_shift) - 1));
+         break;
+ 
+     case NAND_CMD_RESET:
+@@ -597,12 +617,7 @@ uint32_t nand_getio(DeviceState *dev)
+     if (!s->iolen && s->cmd == NAND_CMD_READ0) {
+         offset = (int) (s->addr & ((1 << s->addr_shift) - 1)) + s->offset;
+         s->offset = 0;
+-
+-        s->blk_load(s, s->addr, offset);
+-        if (s->gnd)
+-            s->iolen = (1 << s->page_shift) - offset;
+-        else
+-            s->iolen = (1 << s->page_shift) + (1 << s->oob_shift) - offset;
++        s->iolen = nand_load_block(s, offset);
+     }
+ 
+     if (s->ce || s->iolen <= 0) {
+@@ -763,11 +778,15 @@ static void glue(nand_blk_erase_, NAND_PAGE_SIZE)(NANDFlashState *s)
+     }
+ }
+ 
+-static void glue(nand_blk_load_, NAND_PAGE_SIZE)(NANDFlashState *s,
+-                uint64_t addr, int offset)
++static bool glue(nand_blk_load_, NAND_PAGE_SIZE)(NANDFlashState *s,
++                                                 uint64_t addr, unsigned offset)
+ {
+     if (PAGE(addr) >= s->pages) {
+-        return;
++        return false;
++    }
++
++    if (offset > NAND_PAGE_SIZE + OOB_SIZE) {
++        return false;
+     }
+ 
+     if (s->blk) {
+@@ -795,6 +814,8 @@ static void glue(nand_blk_load_, NAND_PAGE_SIZE)(NANDFlashState *s,
+                         offset, NAND_PAGE_SIZE + OOB_SIZE - offset);
+         s->ioaddr = s->io;
+     }
++
++    return true;
+ }
+ 
+ static void glue(nand_init_, NAND_PAGE_SIZE)(NANDFlashState *s)
+diff --git a/hw/char/virtio-serial-bus.c b/hw/char/virtio-serial-bus.c
+index dd619f0731..1221fb7f15 100644
+--- a/hw/char/virtio-serial-bus.c
++++ b/hw/char/virtio-serial-bus.c
+@@ -985,8 +985,7 @@ static void virtser_port_device_realize(DeviceState *dev, Error **errp)
+         return;
+     }
+ 
+-    port->bh = qemu_bh_new_guarded(flush_queued_data_bh, port,
+-                                   &dev->mem_reentrancy_guard);
++    port->bh = virtio_bh_new_guarded(dev, flush_queued_data_bh, port);
+     port->elem = NULL;
+ }
+ 
+diff --git a/hw/core/machine.c b/hw/core/machine.c
+index 19f42450f5..1daaace9a3 100644
+--- a/hw/core/machine.c
++++ b/hw/core/machine.c
+@@ -80,6 +80,7 @@ GlobalProperty hw_compat_5_2[] = {
+     { "PIIX4_PM", "smm-compat", "on"},
+     { "virtio-blk-device", "report-discard-granularity", "off" },
+     { "virtio-net-pci-base", "vectors", "3"},
++    { "nvme", "msix-exclusive-bar", "on"},
+ };
+ const size_t hw_compat_5_2_len = G_N_ELEMENTS(hw_compat_5_2);
+ 
+diff --git a/hw/display/virtio-gpu.c b/hw/display/virtio-gpu.c
+index 7c13b056b9..d353b99e93 100644
+--- a/hw/display/virtio-gpu.c
++++ b/hw/display/virtio-gpu.c
+@@ -1356,10 +1356,8 @@ void virtio_gpu_device_realize(DeviceState *qdev, Error **errp)
+ 
+     g->ctrl_vq = virtio_get_queue(vdev, 0);
+     g->cursor_vq = virtio_get_queue(vdev, 1);
+-    g->ctrl_bh = qemu_bh_new_guarded(virtio_gpu_ctrl_bh, g,
+-                                     &qdev->mem_reentrancy_guard);
+-    g->cursor_bh = qemu_bh_new_guarded(virtio_gpu_cursor_bh, g,
+-                                       &qdev->mem_reentrancy_guard);
++    g->ctrl_bh = virtio_bh_new_guarded(qdev, virtio_gpu_ctrl_bh, g);
++    g->cursor_bh = virtio_bh_new_guarded(qdev, virtio_gpu_cursor_bh, g);
+     QTAILQ_INIT(&g->reslist);
+     QTAILQ_INIT(&g->cmdq);
+     QTAILQ_INIT(&g->fenceq);
+diff --git a/hw/intc/arm_gicv3_cpuif.c b/hw/intc/arm_gicv3_cpuif.c
+index f71b3b07d8..ddfbc69d65 100644
+--- a/hw/intc/arm_gicv3_cpuif.c
++++ b/hw/intc/arm_gicv3_cpuif.c
+@@ -1065,7 +1065,7 @@ static uint64_t icc_hppir0_value(GICv3CPUState *cs, CPUARMState *env)
+      */
+     bool irq_is_secure;
+ 
+-    if (cs->hppi.prio == 0xff) {
++    if (icc_no_enabled_hppi(cs)) {
+         return INTID_SPURIOUS;
+     }
+ 
+@@ -1102,7 +1102,7 @@ static uint64_t icc_hppir1_value(GICv3CPUState *cs, CPUARMState *env)
+      */
+     bool irq_is_secure;
+ 
+-    if (cs->hppi.prio == 0xff) {
++    if (icc_no_enabled_hppi(cs)) {
+         return INTID_SPURIOUS;
+     }
+ 
+diff --git a/hw/misc/applesmc.c b/hw/misc/applesmc.c
+index 5f9c742e50..80642efc57 100644
+--- a/hw/misc/applesmc.c
++++ b/hw/misc/applesmc.c
+@@ -273,6 +273,7 @@ static void qdev_applesmc_isa_reset(DeviceState *dev)
+     /* Remove existing entries */
+     QLIST_FOREACH_SAFE(d, &s->data_def, node, next) {
+         QLIST_REMOVE(d, node);
++        g_free(d);
+     }
+     s->status = 0x00;
+     s->status_1e = 0x00;
+diff --git a/hw/net/e1000e_core.c b/hw/net/e1000e_core.c
+index c71d82ce1d..742f5ec800 100644
+--- a/hw/net/e1000e_core.c
++++ b/hw/net/e1000e_core.c
+@@ -108,14 +108,6 @@ e1000e_intmgr_timer_resume(E1000IntrDelayTimer *timer)
+     }
+ }
+ 
+-static void
+-e1000e_intmgr_timer_pause(E1000IntrDelayTimer *timer)
+-{
+-    if (timer->running) {
+-        timer_del(timer->timer);
+-    }
+-}
+-
+ static inline void
+ e1000e_intrmgr_stop_timer(E1000IntrDelayTimer *timer)
+ {
+@@ -397,24 +389,6 @@ e1000e_intrmgr_resume(E1000ECore *core)
+     }
+ }
+ 
+-static void
+-e1000e_intrmgr_pause(E1000ECore *core)
+-{
+-    int i;
+-
+-    e1000e_intmgr_timer_pause(&core->radv);
+-    e1000e_intmgr_timer_pause(&core->rdtr);
+-    e1000e_intmgr_timer_pause(&core->raid);
+-    e1000e_intmgr_timer_pause(&core->tidv);
+-    e1000e_intmgr_timer_pause(&core->tadv);
+-
+-    e1000e_intmgr_timer_pause(&core->itr);
+-
+-    for (i = 0; i < E1000E_MSIX_VEC_NUM; i++) {
+-        e1000e_intmgr_timer_pause(&core->eitr[i]);
+-    }
+-}
+-
+ static void
+ e1000e_intrmgr_reset(E1000ECore *core)
+ {
+@@ -3336,12 +3310,6 @@ e1000e_core_read(E1000ECore *core, hwaddr addr, unsigned size)
+     return 0;
+ }
+ 
+-static inline void
+-e1000e_autoneg_pause(E1000ECore *core)
+-{
+-    timer_del(core->autoneg_timer);
+-}
+-
+ static void
+ e1000e_autoneg_resume(E1000ECore *core)
+ {
+@@ -3353,22 +3321,6 @@ e1000e_autoneg_resume(E1000ECore *core)
+     }
+ }
+ 
+-static void
+-e1000e_vm_state_change(void *opaque, bool running, RunState state)
+-{
+-    E1000ECore *core = opaque;
+-
+-    if (running) {
+-        trace_e1000e_vm_state_running();
+-        e1000e_intrmgr_resume(core);
+-        e1000e_autoneg_resume(core);
+-    } else {
+-        trace_e1000e_vm_state_stopped();
+-        e1000e_autoneg_pause(core);
+-        e1000e_intrmgr_pause(core);
+-    }
+-}
+-
+ void
+ e1000e_core_pci_realize(E1000ECore     *core,
+                         const uint16_t *eeprom_templ,
+@@ -3381,9 +3333,6 @@ e1000e_core_pci_realize(E1000ECore     *core,
+                                        e1000e_autoneg_timer, core);
+     e1000e_intrmgr_pci_realize(core);
+ 
+-    core->vmstate =
+-        qemu_add_vm_change_state_handler(e1000e_vm_state_change, core);
+-
+     for (i = 0; i < E1000E_NUM_QUEUES; i++) {
+         net_tx_pkt_init(&core->tx[i].tx_pkt, core->owner,
+                         E1000E_MAX_TX_FRAGS, core->has_vnet);
+@@ -3408,8 +3357,6 @@ e1000e_core_pci_uninit(E1000ECore *core)
+ 
+     e1000e_intrmgr_pci_unint(core);
+ 
+-    qemu_del_vm_change_state_handler(core->vmstate);
+-
+     for (i = 0; i < E1000E_NUM_QUEUES; i++) {
+         net_tx_pkt_reset(core->tx[i].tx_pkt);
+         net_tx_pkt_uninit(core->tx[i].tx_pkt);
+@@ -3561,5 +3508,12 @@ e1000e_core_post_load(E1000ECore *core)
+      */
+     nc->link_down = (core->mac[STATUS] & E1000_STATUS_LU) == 0;
+ 
++    /*
++     * we need to restart intrmgr timers, as an older version of
++     * QEMU can have stopped them before migration
++     */
++    e1000e_intrmgr_resume(core);
++    e1000e_autoneg_resume(core);
++
+     return 0;
+ }
+diff --git a/hw/net/e1000e_core.h b/hw/net/e1000e_core.h
+index 4ddb4d2c39..f2a8ff4a33 100644
+--- a/hw/net/e1000e_core.h
++++ b/hw/net/e1000e_core.h
+@@ -100,8 +100,6 @@ struct E1000Core {
+     E1000IntrDelayTimer eitr[E1000E_MSIX_VEC_NUM];
+     bool eitr_intr_pending[E1000E_MSIX_VEC_NUM];
+ 
+-    VMChangeStateEntry *vmstate;
+-
+     uint32_t itr_guest_value;
+     uint32_t eitr_guest_value[E1000E_MSIX_VEC_NUM];
+ 
+diff --git a/hw/net/lan9118.c b/hw/net/lan9118.c
+index 00a6d82efb..f269d72d9e 100644
+--- a/hw/net/lan9118.c
++++ b/hw/net/lan9118.c
+@@ -155,6 +155,12 @@ do { fprintf(stderr, "lan9118: error: " fmt , ## __VA_ARGS__);} while (0)
+ 
+ #define GPT_TIMER_EN    0x20000000
+ 
++/*
++ * The MAC Interface Layer (MIL), within the MAC, contains a 2K Byte transmit
++ * and a 128 Byte receive FIFO which is separate from the TX and RX FIFOs.
++ */
++#define MIL_TXFIFO_SIZE         2048
++
+ enum tx_state {
+     TX_IDLE,
+     TX_B,
+@@ -171,7 +177,7 @@ typedef struct {
+     int32_t pad;
+     int32_t fifo_used;
+     int32_t len;
+-    uint8_t data[2048];
++    uint8_t data[MIL_TXFIFO_SIZE];
+ } LAN9118Packet;
+ 
+ static const VMStateDescription vmstate_lan9118_packet = {
+@@ -187,7 +193,7 @@ static const VMStateDescription vmstate_lan9118_packet = {
+         VMSTATE_INT32(pad, LAN9118Packet),
+         VMSTATE_INT32(fifo_used, LAN9118Packet),
+         VMSTATE_INT32(len, LAN9118Packet),
+-        VMSTATE_UINT8_ARRAY(data, LAN9118Packet, 2048),
++        VMSTATE_UINT8_ARRAY(data, LAN9118Packet, MIL_TXFIFO_SIZE),
+         VMSTATE_END_OF_LIST()
+     }
+ };
+@@ -549,7 +555,7 @@ static ssize_t lan9118_receive(NetClientState *nc, const uint8_t *buf,
+         return -1;
+     }
+ 
+-    if (size >= 2048 || size < 14) {
++    if (size >= MIL_TXFIFO_SIZE || size < 14) {
+         return -1;
+     }
+ 
+@@ -798,8 +804,22 @@ static void tx_fifo_push(lan9118_state *s, uint32_t val)
+             /* Documentation is somewhat unclear on the ordering of bytes
+                in FIFO words.  Empirical results show it to be little-endian.
+                */
+-            /* TODO: FIFO overflow checking.  */
+             while (n--) {
++                if (s->txp->len == MIL_TXFIFO_SIZE) {
++                    /*
++                     * No more space in the FIFO. The datasheet is not
++                     * precise about this case. We choose what is easiest
++                     * to model: the packet is truncated, and TXE is raised.
++                     *
++                     * Note, it could be a fragmented packet, but we currently
++                     * do not handle that (see earlier TX_B case).
++                     */
++                    qemu_log_mask(LOG_GUEST_ERROR,
++                                  "MIL TX FIFO overrun, discarding %u byte%s\n",
++                                  n, n > 1 ? "s" : "");
++                    s->int_sts |= TXE_INT;
++                    break;
++                }
+                 s->txp->data[s->txp->len] = val & 0xff;
+                 s->txp->len++;
+                 val >>= 8;
+diff --git a/hw/net/pcnet.c b/hw/net/pcnet.c
+index 56c3d14ad6..05ce8310ef 100644
+--- a/hw/net/pcnet.c
++++ b/hw/net/pcnet.c
+@@ -632,7 +632,7 @@ static inline int ladr_match(PCNetState *s, const uint8_t *buf, int size)
+ {
+     struct qemu_ether_header *hdr = (void *)buf;
+     if ((*(hdr->ether_dhost)&0x01) &&
+-        ((uint64_t *)&s->csr[8])[0] != 0LL) {
++        (s->csr[8] | s->csr[9] | s->csr[10] | s->csr[11]) != 0) {
+         uint8_t ladr[8] = {
+             s->csr[8] & 0xff, s->csr[8] >> 8,
+             s->csr[9] & 0xff, s->csr[9] >> 8,
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 412cba4927..b6177a6afe 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -2746,6 +2746,10 @@ static void virtio_net_handle_tx_bh(VirtIODevice *vdev, VirtQueue *vq)
+     VirtIONet *n = VIRTIO_NET(vdev);
+     VirtIONetQueue *q = &n->vqs[vq2q(virtio_get_queue_index(vq))];
+ 
++    if (unlikely(n->vhost_started)) {
++        return;
++    }
++
+     if (unlikely((n->status & VIRTIO_NET_S_LINK_UP) == 0)) {
+         virtio_net_drop_tx_queue_data(vdev, vq);
+         return;
+@@ -3307,7 +3311,7 @@ static bool virtio_net_guest_notifier_pending(VirtIODevice *vdev, int idx)
+     VirtIONet *n = VIRTIO_NET(vdev);
+     NetClientState *nc;
+     assert(n->vhost_started);
+-    if (!virtio_vdev_has_feature(vdev, VIRTIO_NET_F_MQ) && idx == 2) {
++    if (!n->multiqueue && idx == 2) {
+         /* Must guard against invalid features and bogus queue index
+          * from being set by malicious guest, or penetrated through
+          * buggy migration stream.
+@@ -3330,7 +3334,7 @@ static void virtio_net_guest_notifier_mask(VirtIODevice *vdev, int idx,
+     VirtIONet *n = VIRTIO_NET(vdev);
+     NetClientState *nc;
+     assert(n->vhost_started);
+-    if (!virtio_vdev_has_feature(vdev, VIRTIO_NET_F_MQ) && idx == 2) {
++    if (!n->multiqueue && idx == 2) {
+         /* Must guard against invalid features and bogus queue index
+          * from being set by malicious guest, or penetrated through
+          * buggy migration stream.
+diff --git a/hw/nvme/ctrl.c b/hw/nvme/ctrl.c
+index a87f79296c..027d67f10b 100644
+--- a/hw/nvme/ctrl.c
++++ b/hw/nvme/ctrl.c
+@@ -6980,7 +6980,7 @@ static const MemoryRegionOps nvme_cmb_ops = {
+     },
+ };
+ 
+-static void nvme_check_constraints(NvmeCtrl *n, Error **errp)
++static bool nvme_check_params(NvmeCtrl *n, Error **errp)
+ {
+     NvmeParams *params = &n->params;
+ 
+@@ -6994,38 +6994,43 @@ static void nvme_check_constraints(NvmeCtrl *n, Error **errp)
+     if (n->namespace.blkconf.blk && n->subsys) {
+         error_setg(errp, "subsystem support is unavailable with legacy "
+                    "namespace ('drive' property)");
+-        return;
++        return false;
+     }
+ 
+     if (params->max_ioqpairs < 1 ||
+         params->max_ioqpairs > NVME_MAX_IOQPAIRS) {
+         error_setg(errp, "max_ioqpairs must be between 1 and %d",
+                    NVME_MAX_IOQPAIRS);
+-        return;
++        return false;
+     }
+ 
+     if (params->msix_qsize < 1 ||
+         params->msix_qsize > PCI_MSIX_FLAGS_QSIZE + 1) {
+         error_setg(errp, "msix_qsize must be between 1 and %d",
+                    PCI_MSIX_FLAGS_QSIZE + 1);
+-        return;
++        return false;
+     }
+ 
+     if (!params->serial) {
+         error_setg(errp, "serial property not set");
+-        return;
++        return false;
+     }
+ 
+     if (n->pmr.dev) {
++        if (params->msix_exclusive_bar) {
++            error_setg(errp, "not enough BARs available to enable PMR");
++            return false;
++        }
++
+         if (host_memory_backend_is_mapped(n->pmr.dev)) {
+             error_setg(errp, "can't use already busy memdev: %s",
+                        object_get_canonical_path_component(OBJECT(n->pmr.dev)));
+-            return;
++            return false;
+         }
+ 
+         if (!is_power_of_2(n->pmr.dev->size)) {
+             error_setg(errp, "pmr backend size needs to be power of 2 in size");
+-            return;
++            return false;
+         }
+ 
+         host_memory_backend_set_mapped(n->pmr.dev, true);
+@@ -7034,64 +7039,64 @@ static void nvme_check_constraints(NvmeCtrl *n, Error **errp)
+     if (n->params.zasl > n->params.mdts) {
+         error_setg(errp, "zoned.zasl (Zone Append Size Limit) must be less "
+                    "than or equal to mdts (Maximum Data Transfer Size)");
+-        return;
++        return false;
+     }
+ 
+     if (!n->params.vsl) {
+         error_setg(errp, "vsl must be non-zero");
+-        return;
++        return false;
+     }
+ 
+     if (params->sriov_max_vfs) {
+         if (!n->subsys) {
+             error_setg(errp, "subsystem is required for the use of SR-IOV");
+-            return;
++            return false;
+         }
+ 
+         if (params->sriov_max_vfs > NVME_MAX_VFS) {
+             error_setg(errp, "sriov_max_vfs must be between 0 and %d",
+                        NVME_MAX_VFS);
+-            return;
++            return false;
+         }
+ 
+         if (params->cmb_size_mb) {
+             error_setg(errp, "CMB is not supported with SR-IOV");
+-            return;
++            return false;
+         }
+ 
+         if (n->pmr.dev) {
+             error_setg(errp, "PMR is not supported with SR-IOV");
+-            return;
++            return false;
+         }
+ 
+         if (!params->sriov_vq_flexible || !params->sriov_vi_flexible) {
+             error_setg(errp, "both sriov_vq_flexible and sriov_vi_flexible"
+                        " must be set for the use of SR-IOV");
+-            return;
++            return false;
+         }
+ 
+         if (params->sriov_vq_flexible < params->sriov_max_vfs * 2) {
+             error_setg(errp, "sriov_vq_flexible must be greater than or equal"
+                        " to %d (sriov_max_vfs * 2)", params->sriov_max_vfs * 2);
+-            return;
++            return false;
+         }
+ 
+         if (params->max_ioqpairs < params->sriov_vq_flexible + 2) {
+             error_setg(errp, "(max_ioqpairs - sriov_vq_flexible) must be"
+                        " greater than or equal to 2");
+-            return;
++            return false;
+         }
+ 
+         if (params->sriov_vi_flexible < params->sriov_max_vfs) {
+             error_setg(errp, "sriov_vi_flexible must be greater than or equal"
+                        " to %d (sriov_max_vfs)", params->sriov_max_vfs);
+-            return;
++            return false;
+         }
+ 
+         if (params->msix_qsize < params->sriov_vi_flexible + 1) {
+             error_setg(errp, "(msix_qsize - sriov_vi_flexible) must be"
+                        " greater than or equal to 1");
+-            return;
++            return false;
+         }
+ 
+         if (params->sriov_max_vi_per_vf &&
+@@ -7099,7 +7104,7 @@ static void nvme_check_constraints(NvmeCtrl *n, Error **errp)
+             error_setg(errp, "sriov_max_vi_per_vf must meet:"
+                        " (sriov_max_vi_per_vf - 1) %% %d == 0 and"
+                        " sriov_max_vi_per_vf >= 1", NVME_VF_RES_GRANULARITY);
+-            return;
++            return false;
+         }
+ 
+         if (params->sriov_max_vq_per_vf &&
+@@ -7108,9 +7113,11 @@ static void nvme_check_constraints(NvmeCtrl *n, Error **errp)
+             error_setg(errp, "sriov_max_vq_per_vf must meet:"
+                        " (sriov_max_vq_per_vf - 1) %% %d == 0 and"
+                        " sriov_max_vq_per_vf >= 2", NVME_VF_RES_GRANULARITY);
+-            return;
++            return false;
+         }
+     }
++
++    return true;
+ }
+ 
+ static void nvme_init_state(NvmeCtrl *n)
+@@ -7219,13 +7226,18 @@ static void nvme_init_pmr(NvmeCtrl *n, PCIDevice *pci_dev)
+     memory_region_set_enabled(&n->pmr.dev->mr, false);
+ }
+ 
+-static uint64_t nvme_bar_size(unsigned total_queues, unsigned total_irqs,
+-                              unsigned *msix_table_offset,
+-                              unsigned *msix_pba_offset)
++static uint64_t nvme_mbar_size(unsigned total_queues, unsigned total_irqs,
++                               unsigned *msix_table_offset,
++                               unsigned *msix_pba_offset)
+ {
+-    uint64_t bar_size, msix_table_size, msix_pba_size;
++    uint64_t bar_size, msix_table_size;
+ 
+     bar_size = sizeof(NvmeBar) + 2 * total_queues * NVME_DB_SIZE;
++
++    if (total_irqs == 0) {
++        goto out;
++    }
++
+     bar_size = QEMU_ALIGN_UP(bar_size, 4 * KiB);
+ 
+     if (msix_table_offset) {
+@@ -7240,11 +7252,10 @@ static uint64_t nvme_bar_size(unsigned total_queues, unsigned total_irqs,
+         *msix_pba_offset = bar_size;
+     }
+ 
+-    msix_pba_size = QEMU_ALIGN_UP(total_irqs, 64) / 8;
+-    bar_size += msix_pba_size;
++    bar_size += QEMU_ALIGN_UP(total_irqs, 64) / 8;
+ 
+-    bar_size = pow2ceil(bar_size);
+-    return bar_size;
++out:
++    return pow2ceil(bar_size);
+ }
+ 
+ static void nvme_init_sriov(NvmeCtrl *n, PCIDevice *pci_dev, uint16_t offset)
+@@ -7252,7 +7263,7 @@ static void nvme_init_sriov(NvmeCtrl *n, PCIDevice *pci_dev, uint16_t offset)
+     uint16_t vf_dev_id = n->params.use_intel_id ?
+                          PCI_DEVICE_ID_INTEL_NVME : PCI_DEVICE_ID_REDHAT_NVME;
+     NvmePriCtrlCap *cap = &n->pri_ctrl_cap;
+-    uint64_t bar_size = nvme_bar_size(le16_to_cpu(cap->vqfrsm),
++    uint64_t bar_size = nvme_mbar_size(le16_to_cpu(cap->vqfrsm),
+                                       le16_to_cpu(cap->vifrsm),
+                                       NULL, NULL);
+ 
+@@ -7286,15 +7297,14 @@ static int nvme_add_pm_capability(PCIDevice *pci_dev, uint8_t offset)
+     return 0;
+ }
+ 
+-static int nvme_init_pci(NvmeCtrl *n, PCIDevice *pci_dev, Error **errp)
++static bool nvme_init_pci(NvmeCtrl *n, PCIDevice *pci_dev, Error **errp)
+ {
++    ERRP_GUARD();
+     uint8_t *pci_conf = pci_dev->config;
+     uint64_t bar_size;
+-    unsigned msix_table_offset, msix_pba_offset;
++    unsigned msix_table_offset = 0, msix_pba_offset = 0;
+     int ret;
+ 
+-    Error *err = NULL;
+-
+     pci_conf[PCI_INTERRUPT_PIN] = 1;
+     pci_config_set_prog_interface(pci_conf, 0x2);
+ 
+@@ -7314,31 +7324,45 @@ static int nvme_init_pci(NvmeCtrl *n, PCIDevice *pci_dev, Error **errp)
+         pcie_ari_init(pci_dev, 0x100, 1);
+     }
+ 
+-    /* add one to max_ioqpairs to account for the admin queue pair */
+-    bar_size = nvme_bar_size(n->params.max_ioqpairs + 1, n->params.msix_qsize,
+-                             &msix_table_offset, &msix_pba_offset);
++    if (n->params.msix_exclusive_bar && !pci_is_vf(pci_dev)) {
++        bar_size = nvme_mbar_size(n->params.max_ioqpairs + 1, 0, NULL, NULL);
++        memory_region_init_io(&n->iomem, OBJECT(n), &nvme_mmio_ops, n, "nvme",
++                              bar_size);
++        pci_register_bar(pci_dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY |
++                         PCI_BASE_ADDRESS_MEM_TYPE_64, &n->iomem);
++        ret = msix_init_exclusive_bar(pci_dev, n->params.msix_qsize, 4, errp);
++    } else {
++        assert(n->params.msix_qsize >= 1);
+ 
+-    memory_region_init(&n->bar0, OBJECT(n), "nvme-bar0", bar_size);
+-    memory_region_init_io(&n->iomem, OBJECT(n), &nvme_mmio_ops, n, "nvme",
+-                          msix_table_offset);
+-    memory_region_add_subregion(&n->bar0, 0, &n->iomem);
++        /* add one to max_ioqpairs to account for the admin queue pair */
++        bar_size = nvme_mbar_size(n->params.max_ioqpairs + 1,
++                                  n->params.msix_qsize, &msix_table_offset,
++                                  &msix_pba_offset);
+ 
+-    if (pci_is_vf(pci_dev)) {
+-        pcie_sriov_vf_register_bar(pci_dev, 0, &n->bar0);
+-    } else {
+-        pci_register_bar(pci_dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY |
+-                         PCI_BASE_ADDRESS_MEM_TYPE_64, &n->bar0);
+-    }
+-    ret = msix_init(pci_dev, n->params.msix_qsize,
+-                    &n->bar0, 0, msix_table_offset,
+-                    &n->bar0, 0, msix_pba_offset, 0, &err);
+-    if (ret < 0) {
+-        if (ret == -ENOTSUP) {
+-            warn_report_err(err);
++        memory_region_init(&n->bar0, OBJECT(n), "nvme-bar0", bar_size);
++        memory_region_init_io(&n->iomem, OBJECT(n), &nvme_mmio_ops, n, "nvme",
++                              msix_table_offset);
++        memory_region_add_subregion(&n->bar0, 0, &n->iomem);
++
++        if (pci_is_vf(pci_dev)) {
++            pcie_sriov_vf_register_bar(pci_dev, 0, &n->bar0);
+         } else {
+-            error_propagate(errp, err);
+-            return ret;
++            pci_register_bar(pci_dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY |
++                             PCI_BASE_ADDRESS_MEM_TYPE_64, &n->bar0);
+         }
++
++        ret = msix_init(pci_dev, n->params.msix_qsize,
++                        &n->bar0, 0, msix_table_offset,
++                        &n->bar0, 0, msix_pba_offset, 0, errp);
++    }
++
++    if (ret == -ENOTSUP) {
++        /* report that msix is not supported, but do not error out */
++        warn_report_err(*errp);
++        *errp = NULL;
++    } else if (ret < 0) {
++        /* propagate error to caller */
++        return false;
+     }
+ 
+     nvme_update_msixcap_ts(pci_dev, n->conf_msix_qsize);
+@@ -7355,7 +7379,7 @@ static int nvme_init_pci(NvmeCtrl *n, PCIDevice *pci_dev, Error **errp)
+         nvme_init_sriov(n, pci_dev, 0x120);
+     }
+ 
+-    return 0;
++    return true;
+ }
+ 
+ static void nvme_init_subnqn(NvmeCtrl *n)
+@@ -7509,21 +7533,24 @@ static void nvme_realize(PCIDevice *pci_dev, Error **errp)
+ {
+     NvmeCtrl *n = NVME(pci_dev);
+     NvmeNamespace *ns;
+-    Error *local_err = NULL;
+     NvmeCtrl *pn = NVME(pcie_sriov_get_pf(pci_dev));
+ 
+     if (pci_is_vf(pci_dev)) {
+         /*
+          * VFs derive settings from the parent. PF's lifespan exceeds
+-         * that of VF's, so it's safe to share params.serial.
++         * that of VF's.
+          */
+         memcpy(&n->params, &pn->params, sizeof(NvmeParams));
++
++        /*
++         * Set PF's serial value to a new string memory to prevent 'serial'
++         * property object release of PF when a VF is removed from the system.
++         */
++        n->params.serial = g_strdup(pn->params.serial);
+         n->subsys = pn->subsys;
+     }
+ 
+-    nvme_check_constraints(n, &local_err);
+-    if (local_err) {
+-        error_propagate(errp, local_err);
++    if (!nvme_check_params(n, errp)) {
+         return;
+     }
+ 
+@@ -7531,11 +7558,10 @@ static void nvme_realize(PCIDevice *pci_dev, Error **errp)
+               &pci_dev->qdev, n->parent_obj.qdev.id);
+ 
+     if (nvme_init_subsys(n, errp)) {
+-        error_propagate(errp, local_err);
+         return;
+     }
+     nvme_init_state(n);
+-    if (nvme_init_pci(n, pci_dev, errp)) {
++    if (!nvme_init_pci(n, pci_dev, errp)) {
+         return;
+     }
+     nvme_init_ctrl(n, pci_dev);
+@@ -7622,6 +7648,8 @@ static Property nvme_props[] = {
+                       params.sriov_max_vi_per_vf, 0),
+     DEFINE_PROP_UINT8("sriov_max_vq_per_vf", NvmeCtrl,
+                       params.sriov_max_vq_per_vf, 0),
++    DEFINE_PROP_BOOL("msix-exclusive-bar", NvmeCtrl, params.msix_exclusive_bar,
++                     false),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+@@ -7676,36 +7704,26 @@ static void nvme_pci_reset(DeviceState *qdev)
+     nvme_ctrl_reset(n, NVME_RESET_FUNCTION);
+ }
+ 
+-static void nvme_sriov_pre_write_ctrl(PCIDevice *dev, uint32_t address,
+-                                      uint32_t val, int len)
++static void nvme_sriov_post_write_config(PCIDevice *dev, uint16_t old_num_vfs)
+ {
+     NvmeCtrl *n = NVME(dev);
+     NvmeSecCtrlEntry *sctrl;
+-    uint16_t sriov_cap = dev->exp.sriov_cap;
+-    uint32_t off = address - sriov_cap;
+-    int i, num_vfs;
+-
+-    if (!sriov_cap) {
+-        return;
+-    }
++    int i;
+ 
+-    if (range_covers_byte(off, len, PCI_SRIOV_CTRL)) {
+-        if (!(val & PCI_SRIOV_CTRL_VFE)) {
+-            num_vfs = pci_get_word(dev->config + sriov_cap + PCI_SRIOV_NUM_VF);
+-            for (i = 0; i < num_vfs; i++) {
+-                sctrl = &n->sec_ctrl_list.sec[i];
+-                nvme_virt_set_state(n, le16_to_cpu(sctrl->scid), false);
+-            }
+-        }
++    for (i = pcie_sriov_num_vfs(dev); i < old_num_vfs; i++) {
++        sctrl = &n->sec_ctrl_list.sec[i];
++        nvme_virt_set_state(n, le16_to_cpu(sctrl->scid), false);
+     }
+ }
+ 
+ static void nvme_pci_write_config(PCIDevice *dev, uint32_t address,
+                                   uint32_t val, int len)
+ {
+-    nvme_sriov_pre_write_ctrl(dev, address, val, len);
++    uint16_t old_num_vfs = pcie_sriov_num_vfs(dev);
++
+     pci_default_write_config(dev, address, val, len);
+     pcie_cap_flr_write_config(dev, address, val, len);
++    nvme_sriov_post_write_config(dev, old_num_vfs);
+ }
+ 
+ static const VMStateDescription nvme_vmstate = {
+diff --git a/hw/nvme/nvme.h b/hw/nvme/nvme.h
+index 7adf042ec3..4d5e42b669 100644
+--- a/hw/nvme/nvme.h
++++ b/hw/nvme/nvme.h
+@@ -427,6 +427,7 @@ typedef struct NvmeParams {
+     uint16_t sriov_vi_flexible;
+     uint8_t  sriov_max_vq_per_vf;
+     uint8_t  sriov_max_vi_per_vf;
++    bool     msix_exclusive_bar;
+ } NvmeParams;
+ 
+ typedef struct NvmeCtrl {
+diff --git a/hw/pci/pcie_sriov.c b/hw/pci/pcie_sriov.c
+index 61a4e06768..0d58e4db43 100644
+--- a/hw/pci/pcie_sriov.c
++++ b/hw/pci/pcie_sriov.c
+@@ -176,6 +176,9 @@ static void register_vfs(PCIDevice *dev)
+ 
+     assert(sriov_cap > 0);
+     num_vfs = pci_get_word(dev->config + sriov_cap + PCI_SRIOV_NUM_VF);
++    if (num_vfs > pci_get_word(dev->config + sriov_cap + PCI_SRIOV_TOTAL_VF)) {
++        return;
++    }
+ 
+     dev->exp.sriov_pf.vf = g_new(PCIDevice *, num_vfs);
+ 
+@@ -299,3 +302,8 @@ PCIDevice *pcie_sriov_get_vf_at_index(PCIDevice *dev, int n)
+     }
+     return NULL;
+ }
++
++uint16_t pcie_sriov_num_vfs(PCIDevice *dev)
++{
++    return dev->exp.sriov_pf.num_vfs;
++}
+diff --git a/hw/ppc/spapr.c b/hw/ppc/spapr.c
+index 66b414d2e9..9e860f5047 100644
+--- a/hw/ppc/spapr.c
++++ b/hw/ppc/spapr.c
+@@ -4602,13 +4602,10 @@ static void spapr_machine_class_init(ObjectClass *oc, void *data)
+     mc->block_default_type = IF_SCSI;
+ 
+     /*
+-     * Setting max_cpus to INT32_MAX. Both KVM and TCG max_cpus values
+-     * should be limited by the host capability instead of hardcoded.
+-     * max_cpus for KVM guests will be checked in kvm_init(), and TCG
+-     * guests are welcome to have as many CPUs as the host are capable
+-     * of emulate.
++     * While KVM determines max cpus in kvm_init() using kvm_max_vcpus(),
++     * In TCG the limit is restricted by the range of CPU IPIs available.
+      */
+-    mc->max_cpus = INT32_MAX;
++    mc->max_cpus = SPAPR_IRQ_NR_IPIS;
+ 
+     mc->no_parallel = 1;
+     mc->default_boot_order = "";
+diff --git a/hw/ppc/spapr_irq.c b/hw/ppc/spapr_irq.c
+index a0d1e1298e..97b2fc42ab 100644
+--- a/hw/ppc/spapr_irq.c
++++ b/hw/ppc/spapr_irq.c
+@@ -23,6 +23,8 @@
+ 
+ #include "trace.h"
+ 
++QEMU_BUILD_BUG_ON(SPAPR_IRQ_NR_IPIS > SPAPR_XIRQ_BASE);
++
+ static const TypeInfo spapr_intc_info = {
+     .name = TYPE_SPAPR_INTC,
+     .parent = TYPE_INTERFACE,
+@@ -329,7 +331,7 @@ void spapr_irq_init(SpaprMachineState *spapr, Error **errp)
+         int i;
+ 
+         dev = qdev_new(TYPE_SPAPR_XIVE);
+-        qdev_prop_set_uint32(dev, "nr-irqs", smc->nr_xirqs + SPAPR_XIRQ_BASE);
++        qdev_prop_set_uint32(dev, "nr-irqs", smc->nr_xirqs + SPAPR_IRQ_NR_IPIS);
+         /*
+          * 8 XIVE END structures per CPU. One for each available
+          * priority
+@@ -356,7 +358,7 @@ void spapr_irq_init(SpaprMachineState *spapr, Error **errp)
+     }
+ 
+     spapr->qirqs = qemu_allocate_irqs(spapr_set_irq, spapr,
+-                                      smc->nr_xirqs + SPAPR_XIRQ_BASE);
++                                      smc->nr_xirqs + SPAPR_IRQ_NR_IPIS);
+ 
+     /*
+      * Mostly we don't actually need this until reset, except that not
+diff --git a/hw/rtc/sun4v-rtc.c b/hw/rtc/sun4v-rtc.c
+index e037acd1b5..ffcc0aa25d 100644
+--- a/hw/rtc/sun4v-rtc.c
++++ b/hw/rtc/sun4v-rtc.c
+@@ -5,7 +5,7 @@
+  *
+  * Copyright (c) 2016 Artyom Tarasenko
+  *
+- * This code is licensed under the GNU GPL v3 or (at your option) any later
++ * This code is licensed under the GNU GPL v2 or (at your option) any later
+  * version.
+  */
+ 
+diff --git a/hw/scsi/lsi53c895a.c b/hw/scsi/lsi53c895a.c
+index ca619ed564..48c85d479c 100644
+--- a/hw/scsi/lsi53c895a.c
++++ b/hw/scsi/lsi53c895a.c
+@@ -188,7 +188,7 @@ static const char *names[] = {
+ #define LSI_TAG_VALID     (1 << 16)
+ 
+ /* Maximum instructions to process. */
+-#define LSI_MAX_INSN    10000
++#define LSI_MAX_INSN    100
+ 
+ typedef struct lsi_request {
+     SCSIRequest *req;
+@@ -205,6 +205,7 @@ enum {
+     LSI_WAIT_RESELECT, /* Wait Reselect instruction has been issued */
+     LSI_DMA_SCRIPTS, /* processing DMA from lsi_execute_script */
+     LSI_DMA_IN_PROGRESS, /* DMA operation is in progress */
++    LSI_WAIT_SCRIPTS, /* SCRIPTS stopped because of instruction count limit */
+ };
+ 
+ enum {
+@@ -224,6 +225,7 @@ struct LSIState {
+     MemoryRegion ram_io;
+     MemoryRegion io_io;
+     AddressSpace pci_io_as;
++    QEMUTimer *scripts_timer;
+ 
+     int carry; /* ??? Should this be an a visible register somewhere?  */
+     int status;
+@@ -415,6 +417,7 @@ static void lsi_soft_reset(LSIState *s)
+     s->sbr = 0;
+     assert(QTAILQ_EMPTY(&s->queue));
+     assert(!s->current);
++    timer_del(s->scripts_timer);
+ }
+ 
+ static int lsi_dma_40bit(LSIState *s)
+@@ -570,8 +573,9 @@ static inline void lsi_set_phase(LSIState *s, int phase)
+     s->sstat1 = (s->sstat1 & ~PHASE_MASK) | phase;
+ }
+ 
+-static void lsi_bad_phase(LSIState *s, int out, int new_phase)
++static int lsi_bad_phase(LSIState *s, int out, int new_phase)
+ {
++    int ret = 0;
+     /* Trigger a phase mismatch.  */
+     if (s->ccntl0 & LSI_CCNTL0_ENPMJ) {
+         if ((s->ccntl0 & LSI_CCNTL0_PMJCTL)) {
+@@ -584,8 +588,10 @@ static void lsi_bad_phase(LSIState *s, int out, int new_phase)
+         trace_lsi_bad_phase_interrupt();
+         lsi_script_scsi_interrupt(s, LSI_SIST0_MA, 0);
+         lsi_stop_script(s);
++        ret = 1;
+     }
+     lsi_set_phase(s, new_phase);
++    return ret;
+ }
+ 
+ 
+@@ -789,7 +795,7 @@ static int lsi_queue_req(LSIState *s, SCSIRequest *req, uint32_t len)
+ static void lsi_command_complete(SCSIRequest *req, size_t resid)
+ {
+     LSIState *s = LSI53C895A(req->bus->qbus.parent);
+-    int out;
++    int out, stop = 0;
+ 
+     out = (s->sstat1 & PHASE_MASK) == PHASE_DO;
+     trace_lsi_command_complete(req->status);
+@@ -797,7 +803,10 @@ static void lsi_command_complete(SCSIRequest *req, size_t resid)
+     s->command_complete = 2;
+     if (s->waiting && s->dbc != 0) {
+         /* Raise phase mismatch for short transfers.  */
+-        lsi_bad_phase(s, out, PHASE_ST);
++        stop = lsi_bad_phase(s, out, PHASE_ST);
++        if (stop) {
++            s->waiting = 0;
++        }
+     } else {
+         lsi_set_phase(s, PHASE_ST);
+     }
+@@ -807,7 +816,9 @@ static void lsi_command_complete(SCSIRequest *req, size_t resid)
+         lsi_request_free(s, s->current);
+         scsi_req_unref(req);
+     }
+-    lsi_resume_script(s);
++    if (!stop) {
++        lsi_resume_script(s);
++    }
+ }
+ 
+  /* Callback to indicate that the SCSI layer has completed a transfer.  */
+@@ -1127,6 +1138,12 @@ static void lsi_wait_reselect(LSIState *s)
+     }
+ }
+ 
++static void lsi_scripts_timer_start(LSIState *s)
++{
++    trace_lsi_scripts_timer_start();
++    timer_mod(s->scripts_timer, qemu_clock_get_us(QEMU_CLOCK_VIRTUAL) + 500);
++}
++
+ static void lsi_execute_script(LSIState *s)
+ {
+     PCIDevice *pci_dev = PCI_DEVICE(s);
+@@ -1136,6 +1153,11 @@ static void lsi_execute_script(LSIState *s)
+     int insn_processed = 0;
+     static int reentrancy_level;
+ 
++    if (s->waiting == LSI_WAIT_SCRIPTS) {
++        timer_del(s->scripts_timer);
++        s->waiting = LSI_NOWAIT;
++    }
++
+     reentrancy_level++;
+ 
+     s->istat1 |= LSI_ISTAT1_SRUN;
+@@ -1143,8 +1165,8 @@ again:
+     /*
+      * Some windows drivers make the device spin waiting for a memory location
+      * to change. If we have executed more than LSI_MAX_INSN instructions then
+-     * assume this is the case and force an unexpected device disconnect. This
+-     * is apparently sufficient to beat the drivers into submission.
++     * assume this is the case and start a timer. Until the timer fires, the
++     * host CPU has a chance to run and change the memory location.
+      *
+      * Another issue (CVE-2023-0330) can occur if the script is programmed to
+      * trigger itself again and again. Avoid this problem by stopping after
+@@ -1152,13 +1174,9 @@ again:
+      * which should be enough for all valid use cases).
+      */
+     if (++insn_processed > LSI_MAX_INSN || reentrancy_level > 8) {
+-        if (!(s->sien0 & LSI_SIST0_UDC)) {
+-            qemu_log_mask(LOG_GUEST_ERROR,
+-                          "lsi_scsi: inf. loop with UDC masked");
+-        }
+-        lsi_script_scsi_interrupt(s, LSI_SIST0_UDC, 0);
+-        lsi_disconnect(s);
+-        trace_lsi_execute_script_stop();
++        s->waiting = LSI_WAIT_SCRIPTS;
++        lsi_scripts_timer_start(s);
++        reentrancy_level--;
+         return;
+     }
+     insn = read_dword(s, s->dsp);
+@@ -2196,6 +2214,9 @@ static int lsi_post_load(void *opaque, int version_id)
+         return -EINVAL;
+     }
+ 
++    if (s->waiting == LSI_WAIT_SCRIPTS) {
++        lsi_scripts_timer_start(s);
++    }
+     return 0;
+ }
+ 
+@@ -2293,6 +2314,15 @@ static const struct SCSIBusInfo lsi_scsi_info = {
+     .cancel = lsi_request_cancelled
+ };
+ 
++static void scripts_timer_cb(void *opaque)
++{
++    LSIState *s = opaque;
++
++    trace_lsi_scripts_timer_triggered();
++    s->waiting = LSI_NOWAIT;
++    lsi_execute_script(s);
++}
++
+ static void lsi_scsi_realize(PCIDevice *dev, Error **errp)
+ {
+     LSIState *s = LSI53C895A(dev);
+@@ -2312,6 +2342,7 @@ static void lsi_scsi_realize(PCIDevice *dev, Error **errp)
+                           "lsi-ram", 0x2000);
+     memory_region_init_io(&s->io_io, OBJECT(s), &lsi_io_ops, s,
+                           "lsi-io", 256);
++    s->scripts_timer = timer_new_us(QEMU_CLOCK_VIRTUAL, scripts_timer_cb, s);
+ 
+     /*
+      * Since we use the address-space API to interact with ram_io, disable the
+@@ -2336,6 +2367,7 @@ static void lsi_scsi_exit(PCIDevice *dev)
+     LSIState *s = LSI53C895A(dev);
+ 
+     address_space_destroy(&s->pci_io_as);
++    timer_del(s->scripts_timer);
+ }
+ 
+ static void lsi_class_init(ObjectClass *klass, void *data)
+diff --git a/hw/scsi/scsi-generic.c b/hw/scsi/scsi-generic.c
+index d513870181..87d84ee68e 100644
+--- a/hw/scsi/scsi-generic.c
++++ b/hw/scsi/scsi-generic.c
+@@ -765,7 +765,6 @@ static void scsi_generic_realize(SCSIDevice *s, Error **errp)
+ 
+     /* Only used by scsi-block, but initialize it nevertheless to be clean.  */
+     s->default_scsi_version = -1;
+-    s->io_timeout = DEFAULT_IO_TIMEOUT;
+     scsi_generic_read_device_inquiry(s);
+ }
+ 
+diff --git a/hw/scsi/trace-events b/hw/scsi/trace-events
+index ab238293f0..131af99d91 100644
+--- a/hw/scsi/trace-events
++++ b/hw/scsi/trace-events
+@@ -299,6 +299,8 @@ lsi_execute_script_stop(void) "SCRIPTS execution stopped"
+ lsi_awoken(void) "Woken by SIGP"
+ lsi_reg_read(const char *name, int offset, uint8_t ret) "Read reg %s 0x%x = 0x%02x"
+ lsi_reg_write(const char *name, int offset, uint8_t val) "Write reg %s 0x%x = 0x%02x"
++lsi_scripts_timer_triggered(void) "SCRIPTS timer triggered"
++lsi_scripts_timer_start(void) "SCRIPTS timer started"
+ 
+ # virtio-scsi.c
+ virtio_scsi_cmd_req(int lun, uint32_t tag, uint8_t cmd) "virtio_scsi_cmd_req lun=%u tag=0x%x cmd=0x%x"
+diff --git a/hw/sd/sdhci.c b/hw/sd/sdhci.c
+index ef60badc6b..abd503d168 100644
+--- a/hw/sd/sdhci.c
++++ b/hw/sd/sdhci.c
+@@ -473,6 +473,7 @@ static uint32_t sdhci_read_dataport(SDHCIState *s, unsigned size)
+     }
+ 
+     for (i = 0; i < size; i++) {
++        assert(s->data_count < s->buf_maxsz);
+         value |= s->fifo_buffer[s->data_count] << i * 8;
+         s->data_count++;
+         /* check if we've read all valid data (blksize bytes) from buffer */
+@@ -561,6 +562,7 @@ static void sdhci_write_dataport(SDHCIState *s, uint32_t value, unsigned size)
+     }
+ 
+     for (i = 0; i < size; i++) {
++        assert(s->data_count < s->buf_maxsz);
+         s->fifo_buffer[s->data_count] = value & 0xFF;
+         s->data_count++;
+         value >>= 8;
+@@ -1208,6 +1210,12 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
+         if (!(s->capareg & R_SDHC_CAPAB_SDMA_MASK)) {
+             value &= ~SDHC_TRNS_DMA;
+         }
++
++        /* TRNMOD writes are inhibited while Command Inhibit (DAT) is true */
++        if (s->prnsts & SDHC_DATA_INHIBIT) {
++            mask |= 0xffff;
++        }
++
+         MASKED_WRITE(s->trnmod, mask, value & SDHC_TRNMOD_MASK);
+         MASKED_WRITE(s->cmdreg, mask >> 16, value >> 16);
+ 
+diff --git a/hw/virtio/virtio-crypto.c b/hw/virtio/virtio-crypto.c
+index b2e0646d9a..ce995c66d8 100644
+--- a/hw/virtio/virtio-crypto.c
++++ b/hw/virtio/virtio-crypto.c
+@@ -1057,8 +1057,8 @@ static void virtio_crypto_device_realize(DeviceState *dev, Error **errp)
+         vcrypto->vqs[i].dataq =
+                  virtio_add_queue(vdev, 1024, virtio_crypto_handle_dataq_bh);
+         vcrypto->vqs[i].dataq_bh =
+-                 qemu_bh_new_guarded(virtio_crypto_dataq_bh, &vcrypto->vqs[i],
+-                                     &dev->mem_reentrancy_guard);
++                 virtio_bh_new_guarded(dev, virtio_crypto_dataq_bh,
++                                       &vcrypto->vqs[i]);
+         vcrypto->vqs[i].vcrypto = vcrypto;
+     }
+ 
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index b7da7f074d..4a35d7cb0c 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -1367,12 +1367,20 @@ static void virtqueue_packed_flush(VirtQueue *vq, unsigned int count)
+         return;
+     }
+ 
++    /*
++     * For indirect element's 'ndescs' is 1.
++     * For all other elemment's 'ndescs' is the
++     * number of descriptors chained by NEXT (as set in virtqueue_packed_pop).
++     * So When the 'elem' be filled into the descriptor ring,
++     * The 'idx' of this 'elem' shall be
++     * the value of 'vq->used_idx' plus the 'ndescs'.
++     */
++    ndescs += vq->used_elems[0].ndescs;
+     for (i = 1; i < count; i++) {
+-        virtqueue_packed_fill_desc(vq, &vq->used_elems[i], i, false);
++        virtqueue_packed_fill_desc(vq, &vq->used_elems[i], ndescs, false);
+         ndescs += vq->used_elems[i].ndescs;
+     }
+     virtqueue_packed_fill_desc(vq, &vq->used_elems[0], 0, true);
+-    ndescs += vq->used_elems[0].ndescs;
+ 
+     vq->inuse -= ndescs;
+     vq->used_idx += ndescs;
+@@ -5021,3 +5029,13 @@ static void virtio_register_types(void)
+ }
+ 
+ type_init(virtio_register_types)
++
++QEMUBH *virtio_bh_new_guarded_full(DeviceState *dev,
++                                   QEMUBHFunc *cb, void *opaque,
++                                   const char *name)
++{
++    DeviceState *transport = qdev_get_parent_bus(dev)->parent;
++
++    return qemu_bh_new_full(cb, opaque, name,
++                            &transport->mem_reentrancy_guard);
++}
+diff --git a/include/hw/pci/pcie_sriov.h b/include/hw/pci/pcie_sriov.h
+index 80f5c84e75..072a583405 100644
+--- a/include/hw/pci/pcie_sriov.h
++++ b/include/hw/pci/pcie_sriov.h
+@@ -74,4 +74,7 @@ PCIDevice *pcie_sriov_get_pf(PCIDevice *dev);
+  */
+ PCIDevice *pcie_sriov_get_vf_at_index(PCIDevice *dev, int n);
+ 
++/* Returns the current number of virtual functions. */
++uint16_t pcie_sriov_num_vfs(PCIDevice *dev);
++
+ #endif /* QEMU_PCIE_SRIOV_H */
+diff --git a/include/hw/ppc/spapr_irq.h b/include/hw/ppc/spapr_irq.h
+index c22a72c9e2..4fd2d5853d 100644
+--- a/include/hw/ppc/spapr_irq.h
++++ b/include/hw/ppc/spapr_irq.h
+@@ -14,9 +14,21 @@
+ #include "qom/object.h"
+ 
+ /*
+- * IRQ range offsets per device type
++ * The XIVE IRQ backend uses the same layout as the XICS backend but
++ * covers the full range of the IRQ number space. The IRQ numbers for
++ * the CPU IPIs are allocated at the bottom of this space, below 4K,
++ * to preserve compatibility with XICS which does not use that range.
++ */
++
++/*
++ * CPU IPI range (XIVE only)
+  */
+ #define SPAPR_IRQ_IPI        0x0
++#define SPAPR_IRQ_NR_IPIS    0x1000
++
++/*
++ * IRQ range offsets per device type
++ */
+ 
+ #define SPAPR_XIRQ_BASE      XICS_IRQ_BASE /* 0x1000 */
+ #define SPAPR_IRQ_EPOW       (SPAPR_XIRQ_BASE + 0x0000)
+diff --git a/include/hw/rtc/sun4v-rtc.h b/include/hw/rtc/sun4v-rtc.h
+index fc54dfcba4..26a9eb6196 100644
+--- a/include/hw/rtc/sun4v-rtc.h
++++ b/include/hw/rtc/sun4v-rtc.h
+@@ -5,7 +5,7 @@
+  *
+  * Copyright (c) 2016 Artyom Tarasenko
+  *
+- * This code is licensed under the GNU GPL v3 or (at your option) any later
++ * This code is licensed under the GNU GPL v2 or (at your option) any later
+  * version.
+  */
+ 
+diff --git a/include/hw/virtio/virtio.h b/include/hw/virtio/virtio.h
+index 96a56430a6..c1a7c9bd3b 100644
+--- a/include/hw/virtio/virtio.h
++++ b/include/hw/virtio/virtio.h
+@@ -23,6 +23,7 @@
+ #include "standard-headers/linux/virtio_ring.h"
+ #include "qom/object.h"
+ #include "hw/virtio/vhost.h"
++#include "block/aio.h"
+ 
+ /*
+  * A guest should never accept this. It implies negotiation is broken
+@@ -463,4 +464,10 @@ static inline bool virtio_device_disabled(VirtIODevice *vdev)
+ bool virtio_legacy_allowed(VirtIODevice *vdev);
+ bool virtio_legacy_check_disabled(VirtIODevice *vdev);
+ 
++QEMUBH *virtio_bh_new_guarded_full(DeviceState *dev,
++                                   QEMUBHFunc *cb, void *opaque,
++                                   const char *name);
++#define virtio_bh_new_guarded(dev, cb, opaque) \
++    virtio_bh_new_guarded_full((dev), (cb), (opaque), (stringify(cb)))
++
+ #endif
+diff --git a/linux-user/syscall.c b/linux-user/syscall.c
+index aead0f6ac9..41017b0df2 100644
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -8759,14 +8759,24 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
+ #ifdef TARGET_NR_waitid
+     case TARGET_NR_waitid:
+         {
++            struct rusage ru;
+             siginfo_t info;
+-            info.si_pid = 0;
+-            ret = get_errno(safe_waitid(arg1, arg2, &info, arg4, NULL));
+-            if (!is_error(ret) && arg3 && info.si_pid != 0) {
+-                if (!(p = lock_user(VERIFY_WRITE, arg3, sizeof(target_siginfo_t), 0)))
++
++            ret = get_errno(safe_waitid(arg1, arg2, (arg3 ? &info : NULL),
++                                        arg4, (arg5 ? &ru : NULL)));
++            if (!is_error(ret)) {
++                if (arg3) {
++                    p = lock_user(VERIFY_WRITE, arg3,
++                                  sizeof(target_siginfo_t), 0);
++                    if (!p) {
++                        return -TARGET_EFAULT;
++                    }
++                    host_to_target_siginfo(p, &info);
++                    unlock_user(p, arg3, sizeof(target_siginfo_t));
++                }
++                if (arg5 && host_to_target_rusage(arg5, &ru)) {
+                     return -TARGET_EFAULT;
+-                host_to_target_siginfo(p, &info);
+-                unlock_user(p, arg3, sizeof(target_siginfo_t));
++                }
+             }
+         }
+         return ret;
+diff --git a/migration/block.c b/migration/block.c
+index 4026b73f75..867901d2b1 100644
+--- a/migration/block.c
++++ b/migration/block.c
+@@ -415,7 +415,10 @@ static int init_blk_migration(QEMUFile *f)
+         }
+ 
+         sectors = bdrv_nb_sectors(bs);
+-        if (sectors <= 0) {
++        if (sectors == 0) {
++            continue;
++        }
++        if (sectors < 0) {
+             ret = sectors;
+             bdrv_next_cleanup(&it);
+             goto out;
+diff --git a/monitor/misc.c b/monitor/misc.c
+index 205487e2b9..80dd1fa8e6 100644
+--- a/monitor/misc.c
++++ b/monitor/misc.c
+@@ -668,7 +668,7 @@ void *gpa2hva(MemoryRegion **p_mr, hwaddr addr, uint64_t size, Error **errp)
+     }
+ 
+     if (!memory_region_is_ram(mrs.mr) && !memory_region_is_romd(mrs.mr)) {
+-        error_setg(errp, "Memory at address 0x%" HWADDR_PRIx "is not RAM", addr);
++        error_setg(errp, "Memory at address 0x%" HWADDR_PRIx " is not RAM", addr);
+         memory_region_unref(mrs.mr);
+         return NULL;
+     }
+diff --git a/qemu-options.hx b/qemu-options.hx
+index 7f798ce47e..2c00ceac83 100644
+--- a/qemu-options.hx
++++ b/qemu-options.hx
+@@ -149,14 +149,14 @@ SRST
+         platform and configuration dependent.
+ 
+         ``interleave-granularity=granularity`` sets the granularity of
+-        interleave. Default 256KiB. Only 256KiB, 512KiB, 1024KiB, 2048KiB
+-        4096KiB, 8192KiB and 16384KiB granularities supported.
++        interleave. Default 256 (bytes). Only 256, 512, 1k, 2k,
++        4k, 8k and 16k granularities supported.
+ 
+         Example:
+ 
+         ::
+ 
+-            -machine cxl-fmw.0.targets.0=cxl.0,cxl-fmw.0.targets.1=cxl.1,cxl-fmw.0.size=128G,cxl-fmw.0.interleave-granularity=512k
++            -machine cxl-fmw.0.targets.0=cxl.0,cxl-fmw.0.targets.1=cxl.1,cxl-fmw.0.size=128G,cxl-fmw.0.interleave-granularity=512
+ ERST
+ 
+ DEF("M", HAS_ARG, QEMU_OPTION_M,
+diff --git a/scripts/make-release b/scripts/make-release
+index 05b14ecc95..43689064fb 100755
+--- a/scripts/make-release
++++ b/scripts/make-release
+@@ -34,5 +34,5 @@ git submodule update --init
+         CryptoPkg/Library/OpensslLib/openssl \
+         MdeModulePkg/Library/BrotliCustomDecompressLib/brotli)
+ popd
+-tar --exclude=.git -cjf ${destination}.tar.bz2 ${destination}
++tar --exclude=.git -cJf ${destination}.tar.xz ${destination}
+ rm -rf ${destination}
+diff --git a/softmmu/qdev-monitor.c b/softmmu/qdev-monitor.c
+index 4b0ef65780..f4348443b0 100644
+--- a/softmmu/qdev-monitor.c
++++ b/softmmu/qdev-monitor.c
+@@ -853,19 +853,18 @@ void qmp_device_add(QDict *qdict, QObject **ret_data, Error **errp)
+         return;
+     }
+     dev = qdev_device_add(opts, errp);
+-
+-    /*
+-     * Drain all pending RCU callbacks. This is done because
+-     * some bus related operations can delay a device removal
+-     * (in this case this can happen if device is added and then
+-     * removed due to a configuration error)
+-     * to a RCU callback, but user might expect that this interface
+-     * will finish its job completely once qmp command returns result
+-     * to the user
+-     */
+-    drain_call_rcu();
+-
+     if (!dev) {
++        /*
++         * Drain all pending RCU callbacks. This is done because
++         * some bus related operations can delay a device removal
++         * (in this case this can happen if device is added and then
++         * removed due to a configuration error)
++         * to a RCU callback, but user might expect that this interface
++         * will finish its job completely once qmp command returns result
++         * to the user
++         */
++        drain_call_rcu();
++
+         qemu_opts_del(opts);
+         return;
+     }
+diff --git a/target/arm/helper.c b/target/arm/helper.c
+index 2e284e048c..acc0470e86 100644
+--- a/target/arm/helper.c
++++ b/target/arm/helper.c
+@@ -7852,31 +7852,89 @@ void register_cp_regs_for_features(ARMCPU *cpu)
+ #ifdef CONFIG_USER_ONLY
+         static const ARMCPRegUserSpaceInfo v8_user_idregs[] = {
+             { .name = "ID_AA64PFR0_EL1",
+-              .exported_bits = 0x000f000f00ff0000,
+-              .fixed_bits    = 0x0000000000000011 },
++              .exported_bits = R_ID_AA64PFR0_FP_MASK |
++                               R_ID_AA64PFR0_ADVSIMD_MASK |
++                               R_ID_AA64PFR0_SVE_MASK |
++                               R_ID_AA64PFR0_DIT_MASK,
++              .fixed_bits = (0x1u << R_ID_AA64PFR0_EL0_SHIFT) |
++                            (0x1u << R_ID_AA64PFR0_EL1_SHIFT) },
+             { .name = "ID_AA64PFR1_EL1",
+-              .exported_bits = 0x00000000000000f0 },
++              .exported_bits = R_ID_AA64PFR1_BT_MASK |
++                               R_ID_AA64PFR1_SSBS_MASK |
++                               R_ID_AA64PFR1_MTE_MASK |
++                               R_ID_AA64PFR1_SME_MASK },
+             { .name = "ID_AA64PFR*_EL1_RESERVED",
+-              .is_glob = true                     },
+-            { .name = "ID_AA64ZFR0_EL1"           },
++              .is_glob = true },
++            { .name = "ID_AA64ZFR0_EL1",
++              .exported_bits = R_ID_AA64ZFR0_SVEVER_MASK |
++                               R_ID_AA64ZFR0_AES_MASK |
++                               R_ID_AA64ZFR0_BITPERM_MASK |
++                               R_ID_AA64ZFR0_BFLOAT16_MASK |
++                               R_ID_AA64ZFR0_SHA3_MASK |
++                               R_ID_AA64ZFR0_SM4_MASK |
++                               R_ID_AA64ZFR0_I8MM_MASK |
++                               R_ID_AA64ZFR0_F32MM_MASK |
++                               R_ID_AA64ZFR0_F64MM_MASK },
++            { .name = "ID_AA64SMFR0_EL1",
++              .exported_bits = R_ID_AA64SMFR0_F32F32_MASK |
++                               R_ID_AA64SMFR0_B16F32_MASK |
++                               R_ID_AA64SMFR0_F16F32_MASK |
++                               R_ID_AA64SMFR0_I8I32_MASK |
++                               R_ID_AA64SMFR0_F64F64_MASK |
++                               R_ID_AA64SMFR0_I16I64_MASK |
++                               R_ID_AA64SMFR0_FA64_MASK },
+             { .name = "ID_AA64MMFR0_EL1",
+-              .fixed_bits    = 0x00000000ff000000 },
+-            { .name = "ID_AA64MMFR1_EL1"          },
++              .exported_bits = R_ID_AA64MMFR0_ECV_MASK,
++              .fixed_bits = (0xfu << R_ID_AA64MMFR0_TGRAN64_SHIFT) |
++                            (0xfu << R_ID_AA64MMFR0_TGRAN4_SHIFT) },
++            { .name = "ID_AA64MMFR1_EL1",
++              .exported_bits = R_ID_AA64MMFR1_AFP_MASK },
++            { .name = "ID_AA64MMFR2_EL1",
++              .exported_bits = R_ID_AA64MMFR2_AT_MASK },
+             { .name = "ID_AA64MMFR*_EL1_RESERVED",
+-              .is_glob = true                     },
++              .is_glob = true },
+             { .name = "ID_AA64DFR0_EL1",
+-              .fixed_bits    = 0x0000000000000006 },
+-            { .name = "ID_AA64DFR1_EL1"           },
++              .fixed_bits = (0x6u << R_ID_AA64DFR0_DEBUGVER_SHIFT) },
++            { .name = "ID_AA64DFR1_EL1" },
+             { .name = "ID_AA64DFR*_EL1_RESERVED",
+-              .is_glob = true                     },
++              .is_glob = true },
+             { .name = "ID_AA64AFR*",
+-              .is_glob = true                     },
++              .is_glob = true },
+             { .name = "ID_AA64ISAR0_EL1",
+-              .exported_bits = 0x00fffffff0fffff0 },
++              .exported_bits = R_ID_AA64ISAR0_AES_MASK |
++                               R_ID_AA64ISAR0_SHA1_MASK |
++                               R_ID_AA64ISAR0_SHA2_MASK |
++                               R_ID_AA64ISAR0_CRC32_MASK |
++                               R_ID_AA64ISAR0_ATOMIC_MASK |
++                               R_ID_AA64ISAR0_RDM_MASK |
++                               R_ID_AA64ISAR0_SHA3_MASK |
++                               R_ID_AA64ISAR0_SM3_MASK |
++                               R_ID_AA64ISAR0_SM4_MASK |
++                               R_ID_AA64ISAR0_DP_MASK |
++                               R_ID_AA64ISAR0_FHM_MASK |
++                               R_ID_AA64ISAR0_TS_MASK |
++                               R_ID_AA64ISAR0_RNDR_MASK },
+             { .name = "ID_AA64ISAR1_EL1",
+-              .exported_bits = 0x000000f0ffffffff },
++              .exported_bits = R_ID_AA64ISAR1_DPB_MASK |
++                               R_ID_AA64ISAR1_APA_MASK |
++                               R_ID_AA64ISAR1_API_MASK |
++                               R_ID_AA64ISAR1_JSCVT_MASK |
++                               R_ID_AA64ISAR1_FCMA_MASK |
++                               R_ID_AA64ISAR1_LRCPC_MASK |
++                               R_ID_AA64ISAR1_GPA_MASK |
++                               R_ID_AA64ISAR1_GPI_MASK |
++                               R_ID_AA64ISAR1_FRINTTS_MASK |
++                               R_ID_AA64ISAR1_SB_MASK |
++                               R_ID_AA64ISAR1_BF16_MASK |
++                               R_ID_AA64ISAR1_DGH_MASK |
++                               R_ID_AA64ISAR1_I8MM_MASK },
++            { .name = "ID_AA64ISAR2_EL1",
++              .exported_bits = R_ID_AA64ISAR2_WFXT_MASK |
++                               R_ID_AA64ISAR2_RPRES_MASK |
++                               R_ID_AA64ISAR2_GPA3_MASK |
++                               R_ID_AA64ISAR2_APA3_MASK },
+             { .name = "ID_AA64ISAR*_EL1_RESERVED",
+-              .is_glob = true                     },
++              .is_glob = true },
+         };
+         modify_arm_cp_regs(v8_idregs, v8_user_idregs);
+ #endif
+@@ -8194,8 +8252,12 @@ void register_cp_regs_for_features(ARMCPU *cpu)
+ #ifdef CONFIG_USER_ONLY
+         static const ARMCPRegUserSpaceInfo id_v8_user_midr_cp_reginfo[] = {
+             { .name = "MIDR_EL1",
+-              .exported_bits = 0x00000000ffffffff },
+-            { .name = "REVIDR_EL1"                },
++              .exported_bits = R_MIDR_EL1_REVISION_MASK |
++                               R_MIDR_EL1_PARTNUM_MASK |
++                               R_MIDR_EL1_ARCHITECTURE_MASK |
++                               R_MIDR_EL1_VARIANT_MASK |
++                               R_MIDR_EL1_IMPLEMENTER_MASK },
++            { .name = "REVIDR_EL1" },
+         };
+         modify_arm_cp_regs(id_v8_midr_cp_reginfo, id_v8_user_midr_cp_reginfo);
+ #endif
+diff --git a/target/arm/translate-sme.c b/target/arm/translate-sme.c
+index 7b87a9df63..65f8495bdd 100644
+--- a/target/arm/translate-sme.c
++++ b/target/arm/translate-sme.c
+@@ -103,6 +103,21 @@ static TCGv_ptr get_tile_rowcol(DisasContext *s, int esz, int rs,
+     return addr;
+ }
+ 
++/*
++ * Resolve tile.size[0] to a host pointer.
++ * Used by e.g. outer product insns where we require the entire tile.
++ */
++static TCGv_ptr get_tile(DisasContext *s, int esz, int tile)
++{
++    TCGv_ptr addr = tcg_temp_new_ptr();
++    int offset;
++
++    offset = tile * sizeof(ARMVectorReg) + offsetof(CPUARMState, zarray);
++
++    tcg_gen_addi_ptr(addr, cpu_env, offset);
++    return addr;
++}
++
+ static bool trans_ZERO(DisasContext *s, arg_ZERO *a)
+ {
+     if (!dc_isar_feature(aa64_sme, s)) {
+@@ -279,8 +294,7 @@ static bool do_adda(DisasContext *s, arg_adda *a, MemOp esz,
+         return true;
+     }
+ 
+-    /* Sum XZR+zad to find ZAd. */
+-    za = get_tile_rowcol(s, esz, 31, a->zad, false);
++    za = get_tile(s, esz, a->zad);
+     zn = vec_full_reg_ptr(s, a->zn);
+     pn = pred_full_reg_ptr(s, a->pn);
+     pm = pred_full_reg_ptr(s, a->pm);
+@@ -310,8 +324,7 @@ static bool do_outprod(DisasContext *s, arg_op *a, MemOp esz,
+         return true;
+     }
+ 
+-    /* Sum XZR+zad to find ZAd. */
+-    za = get_tile_rowcol(s, esz, 31, a->zad, false);
++    za = get_tile(s, esz, a->zad);
+     zn = vec_full_reg_ptr(s, a->zn);
+     zm = vec_full_reg_ptr(s, a->zm);
+     pn = pred_full_reg_ptr(s, a->pn);
+@@ -337,8 +350,7 @@ static bool do_outprod_fpst(DisasContext *s, arg_op *a, MemOp esz,
+         return true;
+     }
+ 
+-    /* Sum XZR+zad to find ZAd. */
+-    za = get_tile_rowcol(s, esz, 31, a->zad, false);
++    za = get_tile(s, esz, a->zad);
+     zn = vec_full_reg_ptr(s, a->zn);
+     zm = vec_full_reg_ptr(s, a->zm);
+     pn = pred_full_reg_ptr(s, a->pn);
+diff --git a/target/hppa/translate.c b/target/hppa/translate.c
+index 1af77473da..ee68d2f834 100644
+--- a/target/hppa/translate.c
++++ b/target/hppa/translate.c
+@@ -3473,6 +3473,7 @@ static bool trans_be(DisasContext *ctx, arg_be *a)
+         tcg_gen_addi_reg(cpu_iaoq_b, cpu_iaoq_f, 4);
+         tcg_gen_mov_i64(cpu_iasq_f, new_spc);
+         tcg_gen_mov_i64(cpu_iasq_b, cpu_iasq_f);
++        nullify_set(ctx, 0);
+     } else {
+         copy_iaoq_entry(cpu_iaoq_f, ctx->iaoq_b, cpu_iaoq_b);
+         if (ctx->iaoq_b == -1) {
+diff --git a/target/i386/cpu-param.h b/target/i386/cpu-param.h
+index f579b16bd2..e21e472e1e 100644
+--- a/target/i386/cpu-param.h
++++ b/target/i386/cpu-param.h
+@@ -23,7 +23,7 @@
+ # define TARGET_VIRT_ADDR_SPACE_BITS  32
+ #endif
+ #define TARGET_PAGE_BITS 12
+-#define NB_MMU_MODES 5
++#define NB_MMU_MODES 8
+ 
+ #ifndef CONFIG_USER_ONLY
+ # define TARGET_TB_PCREL 1
+diff --git a/target/i386/cpu.h b/target/i386/cpu.h
+index 7be047ce33..326649ca99 100644
+--- a/target/i386/cpu.h
++++ b/target/i386/cpu.h
+@@ -2182,17 +2182,42 @@ uint64_t cpu_get_tsc(CPUX86State *env);
+ #define cpu_list x86_cpu_list
+ 
+ /* MMU modes definitions */
+-#define MMU_KSMAP_IDX   0
+-#define MMU_USER_IDX    1
+-#define MMU_KNOSMAP_IDX 2
+-#define MMU_NESTED_IDX  3
+-#define MMU_PHYS_IDX    4
++#define MMU_KSMAP64_IDX    0
++#define MMU_KSMAP32_IDX    1
++#define MMU_USER64_IDX     2
++#define MMU_USER32_IDX     3
++#define MMU_KNOSMAP64_IDX  4
++#define MMU_KNOSMAP32_IDX  5
++#define MMU_PHYS_IDX       6
++#define MMU_NESTED_IDX     7
++
++#ifdef CONFIG_USER_ONLY
++#ifdef TARGET_X86_64
++#define MMU_USER_IDX MMU_USER64_IDX
++#else
++#define MMU_USER_IDX MMU_USER32_IDX
++#endif
++#endif
+ 
+ static inline int cpu_mmu_index(CPUX86State *env, bool ifetch)
+ {
+-    return (env->hflags & HF_CPL_MASK) == 3 ? MMU_USER_IDX :
+-        (!(env->hflags & HF_SMAP_MASK) || (env->eflags & AC_MASK))
+-        ? MMU_KNOSMAP_IDX : MMU_KSMAP_IDX;
++    int mmu_index_32 = (env->hflags & HF_CS64_MASK) ? 0 : 1;
++    int mmu_index_base =
++        (env->hflags & HF_CPL_MASK) == 3 ? MMU_USER64_IDX :
++        !(env->hflags & HF_SMAP_MASK) ? MMU_KNOSMAP64_IDX :
++        (env->eflags & AC_MASK) ? MMU_KNOSMAP64_IDX : MMU_KSMAP64_IDX;
++
++    return mmu_index_base + mmu_index_32;
++}
++
++static inline bool is_mmu_index_smap(int mmu_index)
++{
++    return (mmu_index & ~1) == MMU_KSMAP64_IDX;
++}
++
++static inline bool is_mmu_index_user(int mmu_index)
++{
++    return (mmu_index & ~1) == MMU_USER64_IDX;
+ }
+ 
+ static inline bool is_mmu_index_32(int mmu_index)
+@@ -2203,9 +2228,12 @@ static inline bool is_mmu_index_32(int mmu_index)
+ 
+ static inline int cpu_mmu_index_kernel(CPUX86State *env)
+ {
+-    return !(env->hflags & HF_SMAP_MASK) ? MMU_KNOSMAP_IDX :
+-        ((env->hflags & HF_CPL_MASK) < 3 && (env->eflags & AC_MASK))
+-        ? MMU_KNOSMAP_IDX : MMU_KSMAP_IDX;
++    int mmu_index_32 = (env->hflags & HF_LMA_MASK) ? 0 : 1;
++    int mmu_index_base =
++        !(env->hflags & HF_SMAP_MASK) ? MMU_KNOSMAP64_IDX :
++        ((env->hflags & HF_CPL_MASK) < 3 && (env->eflags & AC_MASK)) ? MMU_KNOSMAP64_IDX : MMU_KSMAP64_IDX;
++
++    return mmu_index_base + mmu_index_32;
+ }
+ 
+ #define CC_DST  (env->cc_dst)
+diff --git a/target/i386/helper.c b/target/i386/helper.c
+index 0ac2da066d..290d9d309c 100644
+--- a/target/i386/helper.c
++++ b/target/i386/helper.c
+@@ -427,7 +427,7 @@ static void do_inject_x86_mce(CPUState *cs, run_on_cpu_data data)
+         if (need_reset) {
+             emit_guest_memory_failure(MEMORY_FAILURE_ACTION_RESET, ar,
+                                       recursive);
+-            monitor_puts(params->mon, msg);
++            monitor_printf(params->mon, "%s", msg);
+             qemu_log_mask(CPU_LOG_RESET, "%s\n", msg);
+             qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+             return;
+diff --git a/target/i386/tcg/sysemu/excp_helper.c b/target/i386/tcg/sysemu/excp_helper.c
+index 5999cdedf5..5f13252d68 100644
+--- a/target/i386/tcg/sysemu/excp_helper.c
++++ b/target/i386/tcg/sysemu/excp_helper.c
+@@ -135,7 +135,7 @@ static bool mmu_translate(CPUX86State *env, const TranslateParams *in,
+ {
+     const target_ulong addr = in->addr;
+     const int pg_mode = in->pg_mode;
+-    const bool is_user = (in->mmu_idx == MMU_USER_IDX);
++    const bool is_user = is_mmu_index_user(in->mmu_idx);
+     const MMUAccessType access_type = in->access_type;
+     uint64_t ptep, pte, rsvd_mask;
+     PTETranslate pte_trans = {
+@@ -355,7 +355,7 @@ do_check_protect_pse36:
+     }
+ 
+     int prot = 0;
+-    if (in->mmu_idx != MMU_KSMAP_IDX || !(ptep & PG_USER_MASK)) {
++    if (!is_mmu_index_smap(in->mmu_idx) || !(ptep & PG_USER_MASK)) {
+         prot |= PAGE_READ;
+         if ((ptep & PG_RW_MASK) || !(is_user || (pg_mode & PG_MODE_WP))) {
+             prot |= PAGE_WRITE;
+@@ -541,7 +541,8 @@ static bool get_physical_address(CPUX86State *env, vaddr addr,
+         if (likely(use_stage2)) {
+             in.cr3 = env->nested_cr3;
+             in.pg_mode = env->nested_pg_mode;
+-            in.mmu_idx = MMU_USER_IDX;
++            in.mmu_idx =
++                env->nested_pg_mode & PG_MODE_LMA ? MMU_USER64_IDX : MMU_USER32_IDX;
+             in.ptw_idx = MMU_PHYS_IDX;
+ 
+             if (!mmu_translate(env, &in, out, err)) {
+diff --git a/target/loongarch/cpu.c b/target/loongarch/cpu.c
+index 46b04cbdad..92dd50e15e 100644
+--- a/target/loongarch/cpu.c
++++ b/target/loongarch/cpu.c
+@@ -33,31 +33,45 @@ const char * const fregnames[32] = {
+     "f24", "f25", "f26", "f27", "f28", "f29", "f30", "f31",
+ };
+ 
+-static const char * const excp_names[] = {
+-    [EXCCODE_INT] = "Interrupt",
+-    [EXCCODE_PIL] = "Page invalid exception for load",
+-    [EXCCODE_PIS] = "Page invalid exception for store",
+-    [EXCCODE_PIF] = "Page invalid exception for fetch",
+-    [EXCCODE_PME] = "Page modified exception",
+-    [EXCCODE_PNR] = "Page Not Readable exception",
+-    [EXCCODE_PNX] = "Page Not Executable exception",
+-    [EXCCODE_PPI] = "Page Privilege error",
+-    [EXCCODE_ADEF] = "Address error for instruction fetch",
+-    [EXCCODE_ADEM] = "Address error for Memory access",
+-    [EXCCODE_SYS] = "Syscall",
+-    [EXCCODE_BRK] = "Break",
+-    [EXCCODE_INE] = "Instruction Non-Existent",
+-    [EXCCODE_IPE] = "Instruction privilege error",
+-    [EXCCODE_FPD] = "Floating Point Disabled",
+-    [EXCCODE_FPE] = "Floating Point Exception",
+-    [EXCCODE_DBP] = "Debug breakpoint",
+-    [EXCCODE_BCE] = "Bound Check Exception",
++struct TypeExcp {
++    int32_t exccode;
++    const char * const name;
++};
++
++static const struct TypeExcp excp_names[] = {
++    {EXCCODE_INT, "Interrupt"},
++    {EXCCODE_PIL, "Page invalid exception for load"},
++    {EXCCODE_PIS, "Page invalid exception for store"},
++    {EXCCODE_PIF, "Page invalid exception for fetch"},
++    {EXCCODE_PME, "Page modified exception"},
++    {EXCCODE_PNR, "Page Not Readable exception"},
++    {EXCCODE_PNX, "Page Not Executable exception"},
++    {EXCCODE_PPI, "Page Privilege error"},
++    {EXCCODE_ADEF, "Address error for instruction fetch"},
++    {EXCCODE_ADEM, "Address error for Memory access"},
++    {EXCCODE_SYS, "Syscall"},
++    {EXCCODE_BRK, "Break"},
++    {EXCCODE_INE, "Instruction Non-Existent"},
++    {EXCCODE_IPE, "Instruction privilege error"},
++    {EXCCODE_FPD, "Floating Point Disabled"},
++    {EXCCODE_FPE, "Floating Point Exception"},
++    {EXCCODE_DBP, "Debug breakpoint"},
++    {EXCCODE_BCE, "Bound Check Exception"},
++    {EXCCODE_SXD, "128 bit vector instructions Disable exception"},
++    {EXCCODE_ASXD, "256 bit vector instructions Disable exception"},
++    {EXCP_HLT, "EXCP_HLT"},
+ };
+ 
+ const char *loongarch_exception_name(int32_t exception)
+ {
+-    assert(excp_names[exception]);
+-    return excp_names[exception];
++    int i;
++
++    for (i = 0; i < ARRAY_SIZE(excp_names); i++) {
++        if (excp_names[i].exccode == exception) {
++            return excp_names[i].name;
++        }
++    }
++    return "Unknown";
+ }
+ 
+ void G_NORETURN do_raise_exception(CPULoongArchState *env,
+@@ -66,7 +80,7 @@ void G_NORETURN do_raise_exception(CPULoongArchState *env,
+ {
+     CPUState *cs = env_cpu(env);
+ 
+-    qemu_log_mask(CPU_LOG_INT, "%s: %d (%s)\n",
++    qemu_log_mask(CPU_LOG_INT, "%s: expection: %d (%s)\n",
+                   __func__,
+                   exception,
+                   loongarch_exception_name(exception));
+@@ -143,22 +157,16 @@ static void loongarch_cpu_do_interrupt(CPUState *cs)
+     CPULoongArchState *env = &cpu->env;
+     bool update_badinstr = 1;
+     int cause = -1;
+-    const char *name;
+     bool tlbfill = FIELD_EX64(env->CSR_TLBRERA, CSR_TLBRERA, ISTLBR);
+     uint32_t vec_size = FIELD_EX64(env->CSR_ECFG, CSR_ECFG, VS);
+ 
+     if (cs->exception_index != EXCCODE_INT) {
+-        if (cs->exception_index < 0 ||
+-            cs->exception_index >= ARRAY_SIZE(excp_names)) {
+-            name = "unknown";
+-        } else {
+-            name = excp_names[cs->exception_index];
+-        }
+-
+         qemu_log_mask(CPU_LOG_INT,
+                      "%s enter: pc " TARGET_FMT_lx " ERA " TARGET_FMT_lx
+-                     " TLBRERA " TARGET_FMT_lx " %s exception\n", __func__,
+-                     env->pc, env->CSR_ERA, env->CSR_TLBRERA, name);
++                     " TLBRERA " TARGET_FMT_lx " exception: %d (%s)\n",
++                     __func__, env->pc, env->CSR_ERA, env->CSR_TLBRERA,
++                     cs->exception_index,
++                     loongarch_exception_name(cs->exception_index));
+     }
+ 
+     switch (cs->exception_index) {
+diff --git a/target/sh4/translate.c b/target/sh4/translate.c
+index 7db3468b01..8d6eae7ddf 100644
+--- a/target/sh4/translate.c
++++ b/target/sh4/translate.c
+@@ -528,6 +528,7 @@ static void _decode_opc(DisasContext * ctx)
+ 	tcg_gen_movi_i32(REG(B11_8), B7_0s);
+ 	return;
+     case 0x9000:		/* mov.w @(disp,PC),Rn */
++        CHECK_NOT_DELAY_SLOT
+ 	{
+             TCGv addr = tcg_const_i32(ctx->base.pc_next + 4 + B7_0 * 2);
+             tcg_gen_qemu_ld_i32(REG(B11_8), addr, ctx->memidx, MO_TESW);
+@@ -535,6 +536,7 @@ static void _decode_opc(DisasContext * ctx)
+ 	}
+ 	return;
+     case 0xd000:		/* mov.l @(disp,PC),Rn */
++        CHECK_NOT_DELAY_SLOT
+ 	{
+             TCGv addr = tcg_const_i32((ctx->base.pc_next + 4 + B7_0 * 4) & ~3);
+             tcg_gen_qemu_ld_i32(REG(B11_8), addr, ctx->memidx, MO_TESL);
+@@ -1295,6 +1297,7 @@ static void _decode_opc(DisasContext * ctx)
+ 	}
+ 	return;
+     case 0xc700:		/* mova @(disp,PC),R0 */
++        CHECK_NOT_DELAY_SLOT
+         tcg_gen_movi_i32(REG(0), ((ctx->base.pc_next & 0xfffffffc) +
+                                   4 + B7_0 * 4) & ~3);
+ 	return;
+diff --git a/tcg/optimize.c b/tcg/optimize.c
+index ae081ab29c..100b75efd8 100644
+--- a/tcg/optimize.c
++++ b/tcg/optimize.c
+@@ -1634,16 +1634,10 @@ static bool fold_nand(OptContext *ctx, TCGOp *op)
+     return false;
+ }
+ 
+-static bool fold_neg(OptContext *ctx, TCGOp *op)
++static bool fold_neg_no_const(OptContext *ctx, TCGOp *op)
+ {
+-    uint64_t z_mask;
+-
+-    if (fold_const1(ctx, op)) {
+-        return true;
+-    }
+-
+     /* Set to 1 all bits to the left of the rightmost.  */
+-    z_mask = arg_info(op->args[1])->z_mask;
++    uint64_t z_mask = arg_info(op->args[1])->z_mask;
+     ctx->z_mask = -(z_mask & -z_mask);
+ 
+     /*
+@@ -1654,6 +1648,11 @@ static bool fold_neg(OptContext *ctx, TCGOp *op)
+     return true;
+ }
+ 
++static bool fold_neg(OptContext *ctx, TCGOp *op)
++{
++    return fold_const1(ctx, op) || fold_neg_no_const(ctx, op);
++}
++
+ static bool fold_nor(OptContext *ctx, TCGOp *op)
+ {
+     if (fold_const2_commutative(ctx, op) ||
+@@ -1907,7 +1906,7 @@ static bool fold_shift(OptContext *ctx, TCGOp *op)
+          * will not reduced the number of input sign repetitions.
+          */
+         sign = (s_mask & -s_mask) >> 1;
+-        if (!(z_mask & sign)) {
++        if (sign && !(z_mask & sign)) {
+             ctx->s_mask = s_mask;
+         }
+         break;
+@@ -1949,7 +1948,7 @@ static bool fold_sub_to_neg(OptContext *ctx, TCGOp *op)
+     if (have_neg) {
+         op->opc = neg_op;
+         op->args[1] = op->args[2];
+-        return fold_neg(ctx, op);
++        return fold_neg_no_const(ctx, op);
+     }
+     return false;
+ }
+diff --git a/tests/tcg/aarch64/Makefile.target b/tests/tcg/aarch64/Makefile.target
+index a72578fccb..bd29446835 100644
+--- a/tests/tcg/aarch64/Makefile.target
++++ b/tests/tcg/aarch64/Makefile.target
+@@ -10,6 +10,7 @@ VPATH 		+= $(AARCH64_SRC)
+ 
+ # Base architecture tests
+ AARCH64_TESTS=fcvt pcalign-a64
++AARCH64_TESTS += test-2248 test-2150
+ 
+ fcvt: LDFLAGS+=-lm
+ 
+@@ -23,7 +24,8 @@ config-cc.mak: Makefile
+ 	    $(call cc-option,-march=armv8.1-a+sve2,         CROSS_CC_HAS_SVE2); \
+ 	    $(call cc-option,-march=armv8.3-a,              CROSS_CC_HAS_ARMV8_3); \
+ 	    $(call cc-option,-mbranch-protection=standard,  CROSS_CC_HAS_ARMV8_BTI); \
+-	    $(call cc-option,-march=armv8.5-a+memtag,       CROSS_CC_HAS_ARMV8_MTE)) 3> config-cc.mak
++	    $(call cc-option,-march=armv8.5-a+memtag,       CROSS_CC_HAS_ARMV8_MTE); \
++	    $(call cc-option,-Wa$(COMMA)-march=armv9-a+sme, CROSS_AS_HAS_ARMV9_SME)) 3> config-cc.mak
+ -include config-cc.mak
+ 
+ # Pauth Tests
+@@ -50,11 +52,15 @@ AARCH64_TESTS += mte-1 mte-2 mte-3 mte-4 mte-5 mte-6 mte-7
+ mte-%: CFLAGS += -march=armv8.5-a+memtag
+ endif
+ 
+-ifneq ($(CROSS_CC_HAS_SVE),)
++# SME Tests
++ifneq ($(CROSS_AS_HAS_ARMV9_SME),)
++AARCH64_TESTS += sme-outprod1
++endif
++
+ # System Registers Tests
+ AARCH64_TESTS += sysregs
+-sysregs: CFLAGS+=-march=armv8.1-a+sve
+ 
++ifneq ($(CROSS_CC_HAS_SVE),)
+ # SVE ioctl test
+ AARCH64_TESTS += sve-ioctls
+ sve-ioctls: CFLAGS+=-march=armv8.1-a+sve
+diff --git a/tests/tcg/aarch64/sme-outprod1.c b/tests/tcg/aarch64/sme-outprod1.c
+new file mode 100644
+index 0000000000..6e5972d75e
+--- /dev/null
++++ b/tests/tcg/aarch64/sme-outprod1.c
+@@ -0,0 +1,83 @@
++/*
++ * SME outer product, 1 x 1.
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include <stdio.h>
++
++extern void foo(float *dst);
++
++asm(
++"	.arch_extension sme\n"
++"	.type foo, @function\n"
++"foo:\n"
++"	stp x29, x30, [sp, -80]!\n"
++"	mov x29, sp\n"
++"	stp d8, d9, [sp, 16]\n"
++"	stp d10, d11, [sp, 32]\n"
++"	stp d12, d13, [sp, 48]\n"
++"	stp d14, d15, [sp, 64]\n"
++"	smstart\n"
++"	ptrue p0.s, vl4\n"
++"	fmov z0.s, #1.0\n"
++/*
++ * An outer product of a vector of 1.0 by itself should be a matrix of 1.0.
++ * Note that we are using tile 1 here (za1.s) rather than tile 0.
++ */
++"	zero {za}\n"
++"	fmopa za1.s, p0/m, p0/m, z0.s, z0.s\n"
++/*
++ * Read the first 4x4 sub-matrix of elements from tile 1:
++ * Note that za1h should be interchangable here.
++ */
++"	mov w12, #0\n"
++"	mova z0.s, p0/m, za1v.s[w12, #0]\n"
++"	mova z1.s, p0/m, za1v.s[w12, #1]\n"
++"	mova z2.s, p0/m, za1v.s[w12, #2]\n"
++"	mova z3.s, p0/m, za1v.s[w12, #3]\n"
++/*
++ * And store them to the input pointer (dst in the C code):
++ */
++"	st1w {z0.s}, p0, [x0]\n"
++"	add x0, x0, #16\n"
++"	st1w {z1.s}, p0, [x0]\n"
++"	add x0, x0, #16\n"
++"	st1w {z2.s}, p0, [x0]\n"
++"	add x0, x0, #16\n"
++"	st1w {z3.s}, p0, [x0]\n"
++"	smstop\n"
++"	ldp d8, d9, [sp, 16]\n"
++"	ldp d10, d11, [sp, 32]\n"
++"	ldp d12, d13, [sp, 48]\n"
++"	ldp d14, d15, [sp, 64]\n"
++"	ldp x29, x30, [sp], 80\n"
++"	ret\n"
++"	.size foo, . - foo"
++);
++
++int main()
++{
++    float dst[16];
++    int i, j;
++
++    foo(dst);
++
++    for (i = 0; i < 16; i++) {
++        if (dst[i] != 1.0f) {
++            break;
++        }
++    }
++
++    if (i == 16) {
++        return 0; /* success */
++    }
++
++    /* failure */
++    for (i = 0; i < 4; ++i) {
++        for (j = 0; j < 4; ++j) {
++            printf("%f ", (double)dst[i * 4 + j]);
++        }
++        printf("\n");
++    }
++    return 1;
++}
+diff --git a/tests/tcg/aarch64/sysregs.c b/tests/tcg/aarch64/sysregs.c
+index 40cf8d2877..d8eb06abcf 100644
+--- a/tests/tcg/aarch64/sysregs.c
++++ b/tests/tcg/aarch64/sysregs.c
+@@ -22,6 +22,18 @@
+ #define HWCAP_CPUID (1 << 11)
+ #endif
+ 
++/*
++ * Older assemblers don't recognize newer system register names,
++ * but we can still access them by the Sn_n_Cn_Cn_n syntax.
++ * This also means we don't need to specifically request that the
++ * assembler enables whatever architectural features the ID registers
++ * syntax might be gated behind.
++ */
++#define SYS_ID_AA64ISAR2_EL1 S3_0_C0_C6_2
++#define SYS_ID_AA64MMFR2_EL1 S3_0_C0_C7_2
++#define SYS_ID_AA64ZFR0_EL1 S3_0_C0_C4_4
++#define SYS_ID_AA64SMFR0_EL1 S3_0_C0_C4_5
++
+ int failed_bit_count;
+ 
+ /* Read and print system register `id' value */
+@@ -112,18 +124,21 @@ int main(void)
+      * minimum valid fields - for the purposes of this check allowed
+      * to have non-zero values.
+      */
+-    get_cpu_reg_check_mask(id_aa64isar0_el1, _m(00ff,ffff,f0ff,fff0));
+-    get_cpu_reg_check_mask(id_aa64isar1_el1, _m(0000,00f0,ffff,ffff));
++    get_cpu_reg_check_mask(id_aa64isar0_el1, _m(f0ff,ffff,f0ff,fff0));
++    get_cpu_reg_check_mask(id_aa64isar1_el1, _m(00ff,f0ff,ffff,ffff));
++    get_cpu_reg_check_mask(SYS_ID_AA64ISAR2_EL1, _m(0000,0000,0000,ffff));
+     /* TGran4 & TGran64 as pegged to -1 */
+-    get_cpu_reg_check_mask(id_aa64mmfr0_el1, _m(0000,0000,ff00,0000));
+-    get_cpu_reg_check_zero(id_aa64mmfr1_el1);
++    get_cpu_reg_check_mask(id_aa64mmfr0_el1, _m(f000,0000,ff00,0000));
++    get_cpu_reg_check_mask(id_aa64mmfr1_el1, _m(0000,f000,0000,0000));
++    get_cpu_reg_check_mask(SYS_ID_AA64MMFR2_EL1, _m(0000,000f,0000,0000));
+     /* EL1/EL0 reported as AA64 only */
+     get_cpu_reg_check_mask(id_aa64pfr0_el1,  _m(000f,000f,00ff,0011));
+-    get_cpu_reg_check_mask(id_aa64pfr1_el1,  _m(0000,0000,0000,00f0));
++    get_cpu_reg_check_mask(id_aa64pfr1_el1,  _m(0000,0000,0f00,0fff));
+     /* all hidden, DebugVer fixed to 0x6 (ARMv8 debug architecture) */
+     get_cpu_reg_check_mask(id_aa64dfr0_el1,  _m(0000,0000,0000,0006));
+     get_cpu_reg_check_zero(id_aa64dfr1_el1);
+-    get_cpu_reg_check_zero(id_aa64zfr0_el1);
++    get_cpu_reg_check_mask(SYS_ID_AA64ZFR0_EL1,  _m(0ff0,ff0f,00ff,00ff));
++    get_cpu_reg_check_mask(SYS_ID_AA64SMFR0_EL1, _m(80f1,00fd,0000,0000));
+ 
+     get_cpu_reg_check_zero(id_aa64afr0_el1);
+     get_cpu_reg_check_zero(id_aa64afr1_el1);
+diff --git a/tests/tcg/aarch64/test-2150.c b/tests/tcg/aarch64/test-2150.c
+new file mode 100644
+index 0000000000..fb86c11958
+--- /dev/null
++++ b/tests/tcg/aarch64/test-2150.c
+@@ -0,0 +1,12 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* See https://gitlab.com/qemu-project/qemu/-/issues/2150 */
++
++int main()
++{
++    asm volatile(
++        "movi     v6.4s, #1\n"
++        "movi     v7.4s, #0\n"
++        "sub      v6.2d, v7.2d, v6.2d\n"
++        : : : "v6", "v7");
++    return 0;
++}
+diff --git a/tests/tcg/aarch64/test-2248.c b/tests/tcg/aarch64/test-2248.c
+new file mode 100644
+index 0000000000..aac2e17836
+--- /dev/null
++++ b/tests/tcg/aarch64/test-2248.c
+@@ -0,0 +1,28 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* See https://gitlab.com/qemu-project/qemu/-/issues/2248 */
++
++#include <assert.h>
++
++__attribute__((noinline))
++long test(long x, long y, long sh)
++{
++    long r;
++    asm("cmp   %1, %2\n\t"
++        "cset  x12, lt\n\t"
++        "and   w11, w12, #0xff\n\t"
++        "cmp   w11, #0\n\t"
++        "csetm x14, ne\n\t"
++        "lsr   x13, x14, %3\n\t"
++        "sxtb  %0, w13"
++        : "=r"(r)
++        : "r"(x), "r"(y), "r"(sh)
++        : "x11", "x12", "x13", "x14");
++    return r;
++}
++
++int main()
++{
++    long r = test(0, 1, 2);
++    assert(r == -1);
++    return 0;
++}
+diff --git a/tests/unit/meson.build b/tests/unit/meson.build
+index b497a41378..ca44f45232 100644
+--- a/tests/unit/meson.build
++++ b/tests/unit/meson.build
+@@ -166,8 +166,12 @@ test_env.set('G_TEST_SRCDIR', meson.current_source_dir())
+ test_env.set('G_TEST_BUILDDIR', meson.current_build_dir())
+ 
+ slow_tests = {
+-  'test-crypto-tlscredsx509': 45,
+-  'test-crypto-tlssession': 45
++  'test-aio-multithread' : 120,
++  'test-bufferiszero': 60,
++  'test-crypto-block' : 300,
++  'test-crypto-tlscredsx509': 90,
++  'test-crypto-tlssession': 90,
++  'test-replication': 60,
+ }
+ 
+ foreach test_name, extra: tests
+diff --git a/ui/cocoa.m b/ui/cocoa.m
+index 660d3e0935..c41689e951 100644
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -53,6 +53,10 @@
+ #define MAC_OS_X_VERSION_10_13 101300
+ #endif
+ 
++#ifndef MAC_OS_VERSION_14_0
++#define MAC_OS_VERSION_14_0 140000
++#endif
++
+ /* 10.14 deprecates NSOnState and NSOffState in favor of
+  * NSControlStateValueOn/Off, which were introduced in 10.13.
+  * Define for older versions
+@@ -361,6 +365,9 @@ - (id)initWithFrame:(NSRect)frameRect
+         screen.width = frameRect.size.width;
+         screen.height = frameRect.size.height;
+         kbd = qkbd_state_init(dcl.con);
++#if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_VERSION_14_0
++        [self setClipsToBounds:YES];
++#endif
+ 
+     }
+     return self;

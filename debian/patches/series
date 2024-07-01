@@ -7,6 +7,8 @@ v7.2.6.diff
 v7.2.7.diff
 v7.2.8.diff
 v7.2.9.diff
+v7.2.10.diff
+v7.2.11.diff
 microvm-default-machine-type.patch
 skip-meson-pc-bios.diff
 linux-user-binfmt-P.diff
@@ -23,5 +25,3 @@ spelling.diff
 openbios-spelling-endianess.patch
 slof-spelling-seperator.patch
 ignore-roms-dependency-in-qtest.patch
-ui-clipboard-mark-type-as-not-available-when-no-data-CVE-2023-6683.patch
-revert-monitor-only-run-coroutine-commands-in-qemu_aio_context.patch

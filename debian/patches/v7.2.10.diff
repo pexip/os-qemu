@@ -1,0 +1,1444 @@
+Subject: v7.2.10
+Date: Mon Mar 4 15:14:39 2024 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.9
+and upstream qemu v7.2.10.
+
+ .gitlab-ci.d/cirrus/build.yml        |   2 +-
+ .gitlab-ci.d/windows.yml             |  34 ------------------
+ VERSION                              |   2 +-
+ audio/meson.build                    |   3 +-
+ block/blkio.c                        |   2 +-
+ docs/interop/vhost-user.rst          |   6 ++--
+ docs/system/keys.rst.inc             |  13 +++----
+ hw/arm/smmu-common.c                 |   2 ++
+ hw/cxl/cxl-cdat.c                    |  11 ++++--
+ hw/cxl/cxl-component-utils.c         |   2 +-
+ hw/i386/acpi-build.c                 |   2 +-
+ hw/i386/sgx-stub.c                   |   2 +-
+ hw/nvme/ctrl.c                       |   2 +-
+ hw/pci-host/designware.c             |   2 ++
+ hw/rtc/pl031.c                       |   1 +
+ hw/smbios/smbios.c                   |  12 +++++++
+ hw/usb/bus.c                         |   5 +--
+ hw/virtio/virtio-iommu.c             |   4 +--
+ linux-user/aarch64/target_prctl.h    |  29 +++++++++-------
+ migration/migration.c                |   2 ++
+ qemu-options.hx                      |  14 ++++++--
+ softmmu/vl.c                         |  24 +++++++------
+ target/arm/helper.c                  |  30 ++++++++++++++--
+ target/arm/sme_helper.c              |   8 ++---
+ target/arm/sve_helper.c              |  12 +++----
+ target/arm/syndrome.h                |   8 +++++
+ target/arm/translate-sve.c           |  16 ++++-----
+ target/i386/cpu.c                    |   6 ++--
+ target/i386/cpu.h                    |   6 ++++
+ target/i386/kvm/kvm.c                |   3 +-
+ target/i386/tcg/sysemu/excp_helper.c |  45 +++++++++++-------------
+ target/i386/tcg/sysemu/misc_helper.c |   3 ++
+ target/i386/tcg/sysemu/svm_helper.c  |  27 +++++++++++----
+ target/i386/tcg/translate.c          |  11 +++---
+ target/ppc/translate/vsx-impl.c.inc  |   2 +-
+ tests/data/acpi/q35/DSDT.cxl         | Bin 9636 -> 9637 bytes
+ tests/qemu-iotests/144               |  12 ++++++-
+ tests/qemu-iotests/144.out           |   2 +-
+ tests/qtest/display-vga-test.c       |  65 ++++++++++++++---------------------
+ tests/unit/test-blockjob.c           |   9 ++++-
+ tests/unit/test-util-sockets.c       |   1 +
+ tests/unit/test-vmstate.c            |   5 ++-
+ tests/vm/Makefile.include            |   2 +-
+ tests/vm/basevm.py                   |   4 +--
+ tests/vm/openbsd                     |   9 ++---
+ ui/clipboard.c                       |  26 ++++++++++++--
+ ui/console.c                         |   2 +-
+ ui/meson.build                       |   6 ++--
+ ui/vnc.c                             |   5 +++
+ 49 files changed, 299 insertions(+), 202 deletions(-)
+
+diff --git a/.gitlab-ci.d/cirrus/build.yml b/.gitlab-ci.d/cirrus/build.yml
+index 7ef6af8d33..d8cf08dc14 100644
+--- a/.gitlab-ci.d/cirrus/build.yml
++++ b/.gitlab-ci.d/cirrus/build.yml
+@@ -19,7 +19,7 @@ build_task:
+   install_script:
+     - @UPDATE_COMMAND@
+     - @INSTALL_COMMAND@ @PKGS@
+-    - if test -n "@PYPI_PKGS@" ; then @PIP3@ install @PYPI_PKGS@ ; fi
++    - if test -n "@PYPI_PKGS@" ; then PYLIB=$(@PYTHON@ -c 'import sysconfig; print(sysconfig.get_path("stdlib"))'); rm -f $PYLIB/EXTERNALLY-MANAGED; @PIP3@ install @PYPI_PKGS@ ; fi
+   clone_script:
+     - git clone --depth 100 "$CI_REPOSITORY_URL" .
+     - git fetch origin "$CI_COMMIT_REF_NAME"
+diff --git a/.gitlab-ci.d/windows.yml b/.gitlab-ci.d/windows.yml
+index a3e7a37022..0180261b7f 100644
+--- a/.gitlab-ci.d/windows.yml
++++ b/.gitlab-ci.d/windows.yml
+@@ -63,37 +63,3 @@ msys2-64bit:
+       --enable-capstone --without-default-devices'
+   - .\msys64\usr\bin\bash -lc 'make'
+   - .\msys64\usr\bin\bash -lc 'make check || { cat build/meson-logs/testlog.txt; exit 1; } ;'
+-
+-msys2-32bit:
+-  extends: .shared_msys2_builder
+-  script:
+-  - .\msys64\usr\bin\bash -lc "pacman -Sy --noconfirm --needed
+-      bison diffutils flex
+-      git grep make sed
+-      mingw-w64-i686-capstone
+-      mingw-w64-i686-curl
+-      mingw-w64-i686-cyrus-sasl
+-      mingw-w64-i686-gcc
+-      mingw-w64-i686-glib2
+-      mingw-w64-i686-gnutls
+-      mingw-w64-i686-gtk3
+-      mingw-w64-i686-libgcrypt
+-      mingw-w64-i686-libjpeg-turbo
+-      mingw-w64-i686-libssh
+-      mingw-w64-i686-libtasn1
+-      mingw-w64-i686-libusb
+-      mingw-w64-i686-lzo2
+-      mingw-w64-i686-ninja
+-      mingw-w64-i686-pixman
+-      mingw-w64-i686-pkgconf
+-      mingw-w64-i686-python
+-      mingw-w64-i686-snappy
+-      mingw-w64-i686-usbredir "
+-  - $env:CHERE_INVOKING = 'yes'  # Preserve the current working directory
+-  - $env:MSYSTEM = 'MINGW32'     # Start a 32-bit MinG environment
+-  - $env:MSYS = 'winsymlinks:native' # Enable native Windows symlink
+-  - mkdir output
+-  - cd output
+-  - ..\msys64\usr\bin\bash -lc "../configure --target-list=ppc64-softmmu"
+-  - ..\msys64\usr\bin\bash -lc 'make'
+-  - ..\msys64\usr\bin\bash -lc 'make check || { cat meson-logs/testlog.txt; exit 1; } ;'
+diff --git a/VERSION b/VERSION
+index 672f66a613..6bfb3a0ba9 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.9
++7.2.10
+diff --git a/audio/meson.build b/audio/meson.build
+index 34aed78342..ce171f710d 100644
+--- a/audio/meson.build
++++ b/audio/meson.build
+@@ -29,7 +29,8 @@ endforeach
+ 
+ if dbus_display
+     module_ss = ss.source_set()
+-    module_ss.add(when: gio, if_true: files('dbusaudio.c'))
++    module_ss.add(when: [gio, dbus_display1_dep],
++                  if_true: files('dbusaudio.c'))
+     audio_modules += {'dbus': module_ss}
+ endif
+ 
+diff --git a/block/blkio.c b/block/blkio.c
+index 5eae3adfaf..cb66160268 100644
+--- a/block/blkio.c
++++ b/block/blkio.c
+@@ -74,7 +74,7 @@ typedef struct {
+     CoQueue bounce_available;
+ 
+     /* The value of the "mem-region-alignment" property */
+-    size_t mem_region_alignment;
++    uint64_t mem_region_alignment;
+ 
+     /* Can we skip adding/deleting blkio_mem_regions? */
+     bool needs_mem_regions;
+diff --git a/docs/interop/vhost-user.rst b/docs/interop/vhost-user.rst
+index 3f18ab424e..936de705e1 100644
+--- a/docs/interop/vhost-user.rst
++++ b/docs/interop/vhost-user.rst
+@@ -111,9 +111,9 @@ A vring state description
+ A vring address description
+ ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 
+-+-------+-------+------+------------+------+-----------+-----+
+-| index | flags | size | descriptor | used | available | log |
+-+-------+-------+------+------------+------+-----------+-----+
+++-------+-------+------------+------+-----------+-----+
++| index | flags | descriptor | used | available | log |
+++-------+-------+------------+------+-----------+-----+
+ 
+ :index: a 32-bit vring index
+ 
+diff --git a/docs/system/keys.rst.inc b/docs/system/keys.rst.inc
+index bd9b8e5f6f..59966a3fe7 100644
+--- a/docs/system/keys.rst.inc
++++ b/docs/system/keys.rst.inc
+@@ -1,8 +1,9 @@
+-During the graphical emulation, you can use special key combinations to
+-change modes. The default key mappings are shown below, but if you use
+-``-alt-grab`` then the modifier is Ctrl-Alt-Shift (instead of Ctrl-Alt)
+-and if you use ``-ctrl-grab`` then the modifier is the right Ctrl key
+-(instead of Ctrl-Alt):
++During the graphical emulation, you can use special key combinations from
++the following table to change modes. By default the modifier is Ctrl-Alt
++(used in the table below) which can be changed with ``-display`` suboption
++``mod=`` where appropriate. For example, ``-display sdl,
++grab-mod=lshift-lctrl-lalt`` changes the modifier key to Ctrl-Alt-Shift,
++while ``-display sdl,grab-mod=rctrl`` changes it to the right Ctrl key.
+ 
+ Ctrl-Alt-f
+    Toggle full screen
+@@ -28,7 +29,7 @@ Ctrl-Alt-n
+    *3*
+       Serial port
+ 
+-Ctrl-Alt
++Ctrl-Alt-g
+    Toggle mouse and keyboard grab.
+ 
+ In the virtual consoles, you can use Ctrl-Up, Ctrl-Down, Ctrl-PageUp and
+diff --git a/hw/arm/smmu-common.c b/hw/arm/smmu-common.c
+index bbca3a8db3..7abc166eb3 100644
+--- a/hw/arm/smmu-common.c
++++ b/hw/arm/smmu-common.c
+@@ -529,6 +529,8 @@ static void smmu_base_reset(DeviceState *dev)
+ {
+     SMMUState *s = ARM_SMMU(dev);
+ 
++    memset(s->smmu_pcibus_by_bus_num, 0, sizeof(s->smmu_pcibus_by_bus_num));
++
+     g_hash_table_remove_all(s->configs);
+     g_hash_table_remove_all(s->iotlb);
+ }
+diff --git a/hw/cxl/cxl-cdat.c b/hw/cxl/cxl-cdat.c
+index 3653aa56f0..0cde11854e 100644
+--- a/hw/cxl/cxl-cdat.c
++++ b/hw/cxl/cxl-cdat.c
+@@ -49,6 +49,7 @@ static void ct3_build_cdat(CDATObject *cdat, Error **errp)
+     g_autofree CDATTableHeader *cdat_header = NULL;
+     g_autofree CDATEntry *cdat_st = NULL;
+     uint8_t sum = 0;
++    uint8_t *hdr_buf;
+     int ent, i;
+ 
+     /* Use default table if fopen == NULL */
+@@ -62,7 +63,7 @@ static void ct3_build_cdat(CDATObject *cdat, Error **errp)
+ 
+     cdat->built_buf_len = cdat->build_cdat_table(&cdat->built_buf, cdat->private);
+ 
+-    if (!cdat->built_buf_len) {
++    if (cdat->built_buf_len <= 0) {
+         /* Build later as not all data available yet */
+         cdat->to_update = true;
+         return;
+@@ -94,8 +95,12 @@ static void ct3_build_cdat(CDATObject *cdat, Error **errp)
+     /* For now, no runtime updates */
+     cdat_header->sequence = 0;
+     cdat_header->length += sizeof(CDATTableHeader);
+-    sum += cdat_header->revision + cdat_header->sequence +
+-        cdat_header->length;
++
++    hdr_buf = (uint8_t *)cdat_header;
++    for (i = 0; i < sizeof(*cdat_header); i++) {
++        sum += hdr_buf[i];
++    }
++
+     /* Sum of all bytes including checksum must be 0 */
+     cdat_header->checksum = ~sum + 1;
+ 
+diff --git a/hw/cxl/cxl-component-utils.c b/hw/cxl/cxl-component-utils.c
+index 3edd303a33..5934b95848 100644
+--- a/hw/cxl/cxl-component-utils.c
++++ b/hw/cxl/cxl-component-utils.c
+@@ -126,7 +126,7 @@ void cxl_component_register_block_init(Object *obj,
+     /* io registers controls link which we don't care about in QEMU */
+     memory_region_init_io(&cregs->io, obj, NULL, cregs, ".io",
+                           CXL2_COMPONENT_IO_REGION_SIZE);
+-    memory_region_init_io(&cregs->cache_mem, obj, &cache_mem_ops, cregs,
++    memory_region_init_io(&cregs->cache_mem, obj, &cache_mem_ops, cxl_cstate,
+                           ".cache_mem", CXL2_COMPONENT_CM_REGION_SIZE);
+ 
+     memory_region_add_subregion(&cregs->component_registers, 0, &cregs->io);
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index d9eaa5fc4d..f9cdacadb1 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -1311,7 +1311,7 @@ static void build_acpi0017(Aml *table)
+     aml_append(dev, aml_name_decl("_HID", aml_string("ACPI0017")));
+ 
+     method = aml_method("_STA", 0, AML_NOTSERIALIZED);
+-    aml_append(method, aml_return(aml_int(0x01)));
++    aml_append(method, aml_return(aml_int(0x0B)));
+     aml_append(dev, method);
+ 
+     aml_append(scope, dev);
+diff --git a/hw/i386/sgx-stub.c b/hw/i386/sgx-stub.c
+index 26833eb233..16b1dfd90b 100644
+--- a/hw/i386/sgx-stub.c
++++ b/hw/i386/sgx-stub.c
+@@ -34,5 +34,5 @@ void pc_machine_init_sgx_epc(PCMachineState *pcms)
+ 
+ bool sgx_epc_get_section(int section_nr, uint64_t *addr, uint64_t *size)
+ {
+-    g_assert_not_reached();
++    return true;
+ }
+diff --git a/hw/nvme/ctrl.c b/hw/nvme/ctrl.c
+index 4d29033556..a87f79296c 100644
+--- a/hw/nvme/ctrl.c
++++ b/hw/nvme/ctrl.c
+@@ -7140,7 +7140,7 @@ static void nvme_init_state(NvmeCtrl *n)
+     n->aer_reqs = g_new0(NvmeRequest *, n->params.aerl + 1);
+     QTAILQ_INIT(&n->aer_queue);
+ 
+-    list->numcntl = cpu_to_le16(max_vfs);
++    list->numcntl = max_vfs;
+     for (i = 0; i < max_vfs; i++) {
+         sctrl = &list->sec[i];
+         sctrl->pcid = cpu_to_le16(n->cntlid);
+diff --git a/hw/pci-host/designware.c b/hw/pci-host/designware.c
+index bde3a343a2..c235b9daa3 100644
+--- a/hw/pci-host/designware.c
++++ b/hw/pci-host/designware.c
+@@ -340,6 +340,8 @@ static void designware_pcie_root_config_write(PCIDevice *d, uint32_t address,
+         break;
+ 
+     case DESIGNWARE_PCIE_ATU_VIEWPORT:
++        val &= DESIGNWARE_PCIE_ATU_REGION_INBOUND |
++                (DESIGNWARE_PCIE_NUM_VIEWPORTS - 1);
+         root->atu_viewport = val;
+         break;
+ 
+diff --git a/hw/rtc/pl031.c b/hw/rtc/pl031.c
+index b01d0e75d1..2f3cd04eeb 100644
+--- a/hw/rtc/pl031.c
++++ b/hw/rtc/pl031.c
+@@ -141,6 +141,7 @@ static void pl031_write(void * opaque, hwaddr offset,
+         g_autofree const char *qom_path = object_get_canonical_path(opaque);
+         struct tm tm;
+ 
++        s->lr = value;
+         s->tick_offset += value - pl031_get_count(s);
+ 
+         qemu_get_timedate(&tm, s->tick_offset);
+diff --git a/hw/smbios/smbios.c b/hw/smbios/smbios.c
+index cd43185417..9f4d007d96 100644
+--- a/hw/smbios/smbios.c
++++ b/hw/smbios/smbios.c
+@@ -345,6 +345,11 @@ static const QemuOptDesc qemu_smbios_type4_opts[] = {
+ };
+ 
+ static const QemuOptDesc qemu_smbios_type8_opts[] = {
++    {
++        .name = "type",
++        .type = QEMU_OPT_NUMBER,
++        .help = "SMBIOS element type",
++    },
+     {
+         .name = "internal_reference",
+         .type = QEMU_OPT_STRING,
+@@ -365,9 +370,15 @@ static const QemuOptDesc qemu_smbios_type8_opts[] = {
+         .type = QEMU_OPT_NUMBER,
+         .help = "port type",
+     },
++    { /* end of list */ }
+ };
+ 
+ static const QemuOptDesc qemu_smbios_type11_opts[] = {
++    {
++        .name = "type",
++        .type = QEMU_OPT_NUMBER,
++        .help = "SMBIOS element type",
++    },
+     {
+         .name = "value",
+         .type = QEMU_OPT_STRING,
+@@ -378,6 +389,7 @@ static const QemuOptDesc qemu_smbios_type11_opts[] = {
+         .type = QEMU_OPT_STRING,
+         .help = "OEM string data from file",
+     },
++    { /* end of list */ }
+ };
+ 
+ static const QemuOptDesc qemu_smbios_type17_opts[] = {
+diff --git a/hw/usb/bus.c b/hw/usb/bus.c
+index 92d6ed5626..4d4c671913 100644
+--- a/hw/usb/bus.c
++++ b/hw/usb/bus.c
+@@ -273,13 +273,14 @@ static void usb_qdev_realize(DeviceState *qdev, Error **errp)
+     }
+ 
+     if (dev->pcap_filename) {
+-        int fd = qemu_open_old(dev->pcap_filename, O_CREAT | O_WRONLY | O_TRUNC, 0666);
++        int fd = qemu_open_old(dev->pcap_filename,
++                               O_CREAT | O_WRONLY | O_TRUNC | O_BINARY, 0666);
+         if (fd < 0) {
+             error_setg(errp, "open %s failed", dev->pcap_filename);
+             usb_qdev_unrealize(qdev);
+             return;
+         }
+-        dev->pcap = fdopen(fd, "w");
++        dev->pcap = fdopen(fd, "wb");
+         usb_pcap_init(dev->pcap);
+     }
+ }
+diff --git a/hw/virtio/virtio-iommu.c b/hw/virtio/virtio-iommu.c
+index eb82462c95..95db19f144 100644
+--- a/hw/virtio/virtio-iommu.c
++++ b/hw/virtio/virtio-iommu.c
+@@ -1140,6 +1140,8 @@ static void virtio_iommu_system_reset(void *opaque)
+ 
+     trace_virtio_iommu_system_reset();
+ 
++    memset(s->iommu_pcibus_by_bus_num, 0, sizeof(s->iommu_pcibus_by_bus_num));
++
+     /*
+      * config.bypass is sticky across device reset, but should be restored on
+      * system reset
+@@ -1156,8 +1158,6 @@ static void virtio_iommu_device_realize(DeviceState *dev, Error **errp)
+ 
+     virtio_init(vdev, VIRTIO_ID_IOMMU, sizeof(struct virtio_iommu_config));
+ 
+-    memset(s->iommu_pcibus_by_bus_num, 0, sizeof(s->iommu_pcibus_by_bus_num));
+-
+     s->req_vq = virtio_add_queue(vdev, VIOMMU_DEFAULT_QUEUE_SIZE,
+                              virtio_iommu_handle_command);
+     s->event_vq = virtio_add_queue(vdev, VIOMMU_DEFAULT_QUEUE_SIZE, NULL);
+diff --git a/linux-user/aarch64/target_prctl.h b/linux-user/aarch64/target_prctl.h
+index 907c314146..d9f6648e27 100644
+--- a/linux-user/aarch64/target_prctl.h
++++ b/linux-user/aarch64/target_prctl.h
+@@ -171,21 +171,26 @@ static abi_long do_prctl_set_tagged_addr_ctrl(CPUArchState *env, abi_long arg2)
+     env->tagged_addr_enable = arg2 & PR_TAGGED_ADDR_ENABLE;
+ 
+     if (cpu_isar_feature(aa64_mte, cpu)) {
+-        switch (arg2 & PR_MTE_TCF_MASK) {
+-        case PR_MTE_TCF_NONE:
+-        case PR_MTE_TCF_SYNC:
+-        case PR_MTE_TCF_ASYNC:
+-            break;
+-        default:
+-            return -EINVAL;
+-        }
+-
+         /*
+          * Write PR_MTE_TCF to SCTLR_EL1[TCF0].
+-         * Note that the syscall values are consistent with hw.
++         *
++         * The kernel has a per-cpu configuration for the sysadmin,
++         * /sys/devices/system/cpu/cpu<N>/mte_tcf_preferred,
++         * which qemu does not implement.
++         *
++         * Because there is no performance difference between the modes, and
++         * because SYNC is most useful for debugging MTE errors, choose SYNC
++         * as the preferred mode.  With this preference, and the way the API
++         * uses only two bits, there is no way for the program to select
++         * ASYMM mode.
+          */
+-        env->cp15.sctlr_el[1] =
+-            deposit64(env->cp15.sctlr_el[1], 38, 2, arg2 >> PR_MTE_TCF_SHIFT);
++        unsigned tcf = 0;
++        if (arg2 & PR_MTE_TCF_SYNC) {
++            tcf = 1;
++        } else if (arg2 & PR_MTE_TCF_ASYNC) {
++            tcf = 2;
++        }
++        env->cp15.sctlr_el[1] = deposit64(env->cp15.sctlr_el[1], 38, 2, tcf);
+ 
+         /*
+          * Write PR_MTE_TAG to GCR_EL1[Exclude].
+diff --git a/migration/migration.c b/migration/migration.c
+index c8ca7927b4..9b496cce1d 100644
+--- a/migration/migration.c
++++ b/migration/migration.c
+@@ -572,6 +572,7 @@ static void process_incoming_migration_bh(void *opaque)
+                       MIGRATION_STATUS_COMPLETED);
+     qemu_bh_delete(mis->bh);
+     migration_incoming_state_destroy();
++    object_unref(OBJECT(migrate_get_current()));
+ }
+ 
+ static void coroutine_fn
+@@ -638,6 +639,7 @@ process_incoming_migration_co(void *opaque)
+         goto fail;
+     }
+     mis->bh = qemu_bh_new(process_incoming_migration_bh, mis);
++    object_ref(OBJECT(migrate_get_current()));
+     qemu_bh_schedule(mis->bh);
+     mis->migration_incoming_co = NULL;
+     return;
+diff --git a/qemu-options.hx b/qemu-options.hx
+index 379692da86..7f798ce47e 100644
+--- a/qemu-options.hx
++++ b/qemu-options.hx
+@@ -3968,7 +3968,8 @@ SRST
+     This option can be used several times to simulate up to 4 serial
+     ports.
+ 
+-    Use ``-serial none`` to disable all serial ports.
++    You can use ``-serial none`` to suppress the creation of default
++    serial devices.
+ 
+     Available character devices are:
+ 
+@@ -3990,10 +3991,17 @@ SRST
+         [Linux only] Pseudo TTY (a new PTY is automatically allocated)
+ 
+     ``none``
+-        No device is allocated.
++        No device is allocated. Note that for machine types which
++        emulate systems where a serial device is always present in
++        real hardware, this may be equivalent to the ``null`` option,
++        in that the serial device is still present but all output
++        is discarded. For boards where the number of serial ports is
++        truly variable, this suppresses the creation of the device.
+ 
+     ``null``
+-        void device
++        A guest will see the UART or serial device as present in the
++        machine, but all output is discarded, and there is no input.
++        Conceptually equivalent to redirecting the output to ``/dev/null``.
+ 
+     ``chardev:id``
+         Use a named character device defined with the ``-chardev``
+diff --git a/softmmu/vl.c b/softmmu/vl.c
+index ce88869618..38d76d6e51 100644
+--- a/softmmu/vl.c
++++ b/softmmu/vl.c
+@@ -856,7 +856,7 @@ static void help(int exitcode)
+     printf("\nDuring emulation, the following keys are useful:\n"
+            "ctrl-alt-f      toggle full screen\n"
+            "ctrl-alt-n      switch to virtual console 'n'\n"
+-           "ctrl-alt        toggle mouse and keyboard grab\n"
++           "ctrl-alt-g      toggle mouse and keyboard grab\n"
+            "\n"
+            "When using -nographic, press 'ctrl-a h' to get some help.\n"
+            "\n"
+@@ -1363,18 +1363,22 @@ static void qemu_create_default_devices(void)
+ static int serial_parse(const char *devname)
+ {
+     int index = num_serial_hds;
+-    char label[32];
+ 
+-    if (strcmp(devname, "none") == 0)
+-        return 0;
+-    snprintf(label, sizeof(label), "serial%d", index);
+     serial_hds = g_renew(Chardev *, serial_hds, index + 1);
+ 
+-    serial_hds[index] = qemu_chr_new_mux_mon(label, devname, NULL);
+-    if (!serial_hds[index]) {
+-        error_report("could not connect serial device"
+-                     " to character backend '%s'", devname);
+-        return -1;
++    if (strcmp(devname, "none") == 0) {
++        /* Don't allocate a serial device for this index */
++        serial_hds[index] = NULL;
++    } else {
++        char label[32];
++        snprintf(label, sizeof(label), "serial%d", index);
++
++        serial_hds[index] = qemu_chr_new_mux_mon(label, devname, NULL);
++        if (!serial_hds[index]) {
++            error_report("could not connect serial device"
++                         " to character backend '%s'", devname);
++            return -1;
++        }
+     }
+     num_serial_hds++;
+     return 0;
+diff --git a/target/arm/helper.c b/target/arm/helper.c
+index 02cfeece45..2e284e048c 100644
+--- a/target/arm/helper.c
++++ b/target/arm/helper.c
+@@ -1125,13 +1125,21 @@ static bool pmu_counter_enabled(CPUARMState *env, uint8_t counter)
+     bool enabled, prohibited = false, filtered;
+     bool secure = arm_is_secure(env);
+     int el = arm_current_el(env);
+-    uint64_t mdcr_el2 = arm_mdcr_el2_eff(env);
+-    uint8_t hpmn = mdcr_el2 & MDCR_HPMN;
++    uint64_t mdcr_el2;
++    uint8_t hpmn;
+ 
++    /*
++     * We might be called for M-profile cores where MDCR_EL2 doesn't
++     * exist and arm_mdcr_el2_eff() will assert, so this early-exit check
++     * must be before we read that value.
++     */
+     if (!arm_feature(env, ARM_FEATURE_PMU)) {
+         return false;
+     }
+ 
++    mdcr_el2 = arm_mdcr_el2_eff(env);
++    hpmn = mdcr_el2 & MDCR_HPMN;
++
+     if (!arm_feature(env, ARM_FEATURE_EL2) ||
+             (counter < hpmn || counter == 31)) {
+         e = env->cp15.c9_pmcr & PMCRE;
+@@ -9836,6 +9844,24 @@ static void arm_cpu_do_interrupt_aarch32(CPUState *cs)
+     }
+ 
+     if (env->exception.target_el == 2) {
++        /* Debug exceptions are reported differently on AArch32 */
++        switch (syn_get_ec(env->exception.syndrome)) {
++        case EC_BREAKPOINT:
++        case EC_BREAKPOINT_SAME_EL:
++        case EC_AA32_BKPT:
++        case EC_VECTORCATCH:
++            env->exception.syndrome = syn_insn_abort(arm_current_el(env) == 2,
++                                                     0, 0, 0x22);
++            break;
++        case EC_WATCHPOINT:
++            env->exception.syndrome = syn_set_ec(env->exception.syndrome,
++                                                 EC_DATAABORT);
++            break;
++        case EC_WATCHPOINT_SAME_EL:
++            env->exception.syndrome = syn_set_ec(env->exception.syndrome,
++                                                 EC_DATAABORT_SAME_EL);
++            break;
++        }
+         arm_cpu_do_interrupt_aarch32_hyp(cs);
+         return;
+     }
+diff --git a/target/arm/sme_helper.c b/target/arm/sme_helper.c
+index 8856773635..d592c78ec9 100644
+--- a/target/arm/sme_helper.c
++++ b/target/arm/sme_helper.c
+@@ -606,8 +606,8 @@ void sme_ld1_mte(CPUARMState *env, void *za, uint64_t *vg,
+     desc = extract32(desc, 0, SIMD_DATA_SHIFT + SVE_MTEDESC_SHIFT);
+ 
+     /* Perform gross MTE suppression early. */
+-    if (!tbi_check(desc, bit55) ||
+-        tcma_check(desc, bit55, allocation_tag_from_addr(addr))) {
++    if (!tbi_check(mtedesc, bit55) ||
++        tcma_check(mtedesc, bit55, allocation_tag_from_addr(addr))) {
+         mtedesc = 0;
+     }
+ 
+@@ -783,8 +783,8 @@ void sme_st1_mte(CPUARMState *env, void *za, uint64_t *vg, target_ulong addr,
+     desc = extract32(desc, 0, SIMD_DATA_SHIFT + SVE_MTEDESC_SHIFT);
+ 
+     /* Perform gross MTE suppression early. */
+-    if (!tbi_check(desc, bit55) ||
+-        tcma_check(desc, bit55, allocation_tag_from_addr(addr))) {
++    if (!tbi_check(mtedesc, bit55) ||
++        tcma_check(mtedesc, bit55, allocation_tag_from_addr(addr))) {
+         mtedesc = 0;
+     }
+ 
+diff --git a/target/arm/sve_helper.c b/target/arm/sve_helper.c
+index 27838fb6e2..45a93755fe 100644
+--- a/target/arm/sve_helper.c
++++ b/target/arm/sve_helper.c
+@@ -5803,8 +5803,8 @@ void sve_ldN_r_mte(CPUARMState *env, uint64_t *vg, target_ulong addr,
+     desc = extract32(desc, 0, SIMD_DATA_SHIFT + SVE_MTEDESC_SHIFT);
+ 
+     /* Perform gross MTE suppression early. */
+-    if (!tbi_check(desc, bit55) ||
+-        tcma_check(desc, bit55, allocation_tag_from_addr(addr))) {
++    if (!tbi_check(mtedesc, bit55) ||
++        tcma_check(mtedesc, bit55, allocation_tag_from_addr(addr))) {
+         mtedesc = 0;
+     }
+ 
+@@ -6159,8 +6159,8 @@ void sve_ldnfff1_r_mte(CPUARMState *env, void *vg, target_ulong addr,
+     desc = extract32(desc, 0, SIMD_DATA_SHIFT + SVE_MTEDESC_SHIFT);
+ 
+     /* Perform gross MTE suppression early. */
+-    if (!tbi_check(desc, bit55) ||
+-        tcma_check(desc, bit55, allocation_tag_from_addr(addr))) {
++    if (!tbi_check(mtedesc, bit55) ||
++        tcma_check(mtedesc, bit55, allocation_tag_from_addr(addr))) {
+         mtedesc = 0;
+     }
+ 
+@@ -6413,8 +6413,8 @@ void sve_stN_r_mte(CPUARMState *env, uint64_t *vg, target_ulong addr,
+     desc = extract32(desc, 0, SIMD_DATA_SHIFT + SVE_MTEDESC_SHIFT);
+ 
+     /* Perform gross MTE suppression early. */
+-    if (!tbi_check(desc, bit55) ||
+-        tcma_check(desc, bit55, allocation_tag_from_addr(addr))) {
++    if (!tbi_check(mtedesc, bit55) ||
++        tcma_check(mtedesc, bit55, allocation_tag_from_addr(addr))) {
+         mtedesc = 0;
+     }
+ 
+diff --git a/target/arm/syndrome.h b/target/arm/syndrome.h
+index 15334a3d15..75a3327a30 100644
+--- a/target/arm/syndrome.h
++++ b/target/arm/syndrome.h
+@@ -25,6 +25,8 @@
+ #ifndef TARGET_ARM_SYNDROME_H
+ #define TARGET_ARM_SYNDROME_H
+ 
++#include "qemu/bitops.h"
++
+ /* Valid Syndrome Register EC field values */
+ enum arm_exception_class {
+     EC_UNCATEGORIZED          = 0x00,
+@@ -76,6 +78,7 @@ typedef enum {
+     SME_ET_InactiveZA,
+ } SMEExceptionType;
+ 
++#define ARM_EL_EC_LENGTH 6
+ #define ARM_EL_EC_SHIFT 26
+ #define ARM_EL_IL_SHIFT 25
+ #define ARM_EL_ISV_SHIFT 24
+@@ -87,6 +90,11 @@ static inline uint32_t syn_get_ec(uint32_t syn)
+     return syn >> ARM_EL_EC_SHIFT;
+ }
+ 
++static inline uint32_t syn_set_ec(uint32_t syn, uint32_t ec)
++{
++    return deposit32(syn, ARM_EL_EC_SHIFT, ARM_EL_EC_LENGTH, ec);
++}
++
+ /*
+  * Utility functions for constructing various kinds of syndrome value.
+  * Note that in general we follow the AArch64 syndrome values; in a
+diff --git a/target/arm/translate-sve.c b/target/arm/translate-sve.c
+index 621a2abb22..7388e1dbc7 100644
+--- a/target/arm/translate-sve.c
++++ b/target/arm/translate-sve.c
+@@ -4587,11 +4587,7 @@ static void do_mem_zpa(DisasContext *s, int zt, int pg, TCGv_i64 addr,
+     TCGv_ptr t_pg;
+     int desc = 0;
+ 
+-    /*
+-     * For e.g. LD4, there are not enough arguments to pass all 4
+-     * registers as pointers, so encode the regno into the data field.
+-     * For consistency, do this even for LD1.
+-     */
++    assert(mte_n >= 1 && mte_n <= 4);
+     if (s->mte_active[0]) {
+         int msz = dtype_msz(dtype);
+ 
+@@ -4605,6 +4601,11 @@ static void do_mem_zpa(DisasContext *s, int zt, int pg, TCGv_i64 addr,
+         addr = clean_data_tbi(s, addr);
+     }
+ 
++    /*
++     * For e.g. LD4, there are not enough arguments to pass all 4
++     * registers as pointers, so encode the regno into the data field.
++     * For consistency, do this even for LD1.
++     */
+     desc = simd_desc(vsz, vsz, zt | desc);
+     t_pg = tcg_temp_new_ptr();
+ 
+@@ -4744,7 +4745,7 @@ static void do_ld_zpa(DisasContext *s, int zt, int pg,
+      * accessible via the instruction encoding.
+      */
+     assert(fn != NULL);
+-    do_mem_zpa(s, zt, pg, addr, dtype, nreg, false, fn);
++    do_mem_zpa(s, zt, pg, addr, dtype, nreg + 1, false, fn);
+ }
+ 
+ static bool trans_LD_zprr(DisasContext *s, arg_rprr_load *a)
+@@ -5320,14 +5321,13 @@ static void do_st_zpa(DisasContext *s, int zt, int pg, TCGv_i64 addr,
+     if (nreg == 0) {
+         /* ST1 */
+         fn = fn_single[s->mte_active[0]][be][msz][esz];
+-        nreg = 1;
+     } else {
+         /* ST2, ST3, ST4 -- msz == esz, enforced by encoding */
+         assert(msz == esz);
+         fn = fn_multiple[s->mte_active[0]][be][nreg - 1][msz];
+     }
+     assert(fn != NULL);
+-    do_mem_zpa(s, zt, pg, addr, msz_dtype(s, msz), nreg, true, fn);
++    do_mem_zpa(s, zt, pg, addr, msz_dtype(s, msz), nreg + 1, true, fn);
+ }
+ 
+ static bool trans_ST_zprr(DisasContext *s, arg_rprr_store *a)
+diff --git a/target/i386/cpu.c b/target/i386/cpu.c
+index 0f71ff9fea..52a3020032 100644
+--- a/target/i386/cpu.c
++++ b/target/i386/cpu.c
+@@ -6114,6 +6114,8 @@ static void x86_cpu_enable_xsave_components(X86CPU *cpu)
+     if (!(env->features[FEAT_1_ECX] & CPUID_EXT_XSAVE)) {
+         env->features[FEAT_XSAVE_XCR0_LO] = 0;
+         env->features[FEAT_XSAVE_XCR0_HI] = 0;
++        env->features[FEAT_XSAVE_XSS_LO] = 0;
++        env->features[FEAT_XSAVE_XSS_HI] = 0;
+         return;
+     }
+ 
+@@ -6132,9 +6134,9 @@ static void x86_cpu_enable_xsave_components(X86CPU *cpu)
+     }
+ 
+     env->features[FEAT_XSAVE_XCR0_LO] = mask & CPUID_XSTATE_XCR0_MASK;
+-    env->features[FEAT_XSAVE_XCR0_HI] = mask >> 32;
++    env->features[FEAT_XSAVE_XCR0_HI] = (mask & CPUID_XSTATE_XCR0_MASK) >> 32;
+     env->features[FEAT_XSAVE_XSS_LO] = mask & CPUID_XSTATE_XSS_MASK;
+-    env->features[FEAT_XSAVE_XSS_HI] = mask >> 32;
++    env->features[FEAT_XSAVE_XSS_HI] = (mask & CPUID_XSTATE_XSS_MASK) >> 32;
+ }
+ 
+ /***** Steps involved on loading and filtering CPUID data
+diff --git a/target/i386/cpu.h b/target/i386/cpu.h
+index f67cee477a..7be047ce33 100644
+--- a/target/i386/cpu.h
++++ b/target/i386/cpu.h
+@@ -2195,6 +2195,12 @@ static inline int cpu_mmu_index(CPUX86State *env, bool ifetch)
+         ? MMU_KNOSMAP_IDX : MMU_KSMAP_IDX;
+ }
+ 
++static inline bool is_mmu_index_32(int mmu_index)
++{
++    assert(mmu_index < MMU_PHYS_IDX);
++    return mmu_index & 1;
++}
++
+ static inline int cpu_mmu_index_kernel(CPUX86State *env)
+ {
+     return !(env->hflags & HF_SMAP_MASK) ? MMU_KNOSMAP_IDX :
+diff --git a/target/i386/kvm/kvm.c b/target/i386/kvm/kvm.c
+index 002b699030..4d83bb5784 100644
+--- a/target/i386/kvm/kvm.c
++++ b/target/i386/kvm/kvm.c
+@@ -1859,6 +1859,7 @@ int kvm_arch_init_vcpu(CPUState *cs)
+         }
+         case 0x1f:
+             if (env->nr_dies < 2) {
++                cpuid_i--;
+                 break;
+             }
+             /* fallthrough */
+@@ -1899,7 +1900,6 @@ int kvm_arch_init_vcpu(CPUState *cs)
+                 c = &cpuid_data.entries[cpuid_i++];
+             }
+             break;
+-        case 0x7:
+         case 0x12:
+             for (j = 0; ; j++) {
+                 c->function = i;
+@@ -1919,6 +1919,7 @@ int kvm_arch_init_vcpu(CPUState *cs)
+                 c = &cpuid_data.entries[cpuid_i++];
+             }
+             break;
++        case 0x7:
+         case 0x14:
+         case 0x1d:
+         case 0x1e: {
+diff --git a/target/i386/tcg/sysemu/excp_helper.c b/target/i386/tcg/sysemu/excp_helper.c
+index 55bd1194d3..5999cdedf5 100644
+--- a/target/i386/tcg/sysemu/excp_helper.c
++++ b/target/i386/tcg/sysemu/excp_helper.c
+@@ -133,7 +133,6 @@ static inline bool ptw_setl(const PTETranslate *in, uint32_t old, uint32_t set)
+ static bool mmu_translate(CPUX86State *env, const TranslateParams *in,
+                           TranslateResult *out, TranslateFault *err)
+ {
+-    const int32_t a20_mask = x86_get_a20_mask(env);
+     const target_ulong addr = in->addr;
+     const int pg_mode = in->pg_mode;
+     const bool is_user = (in->mmu_idx == MMU_USER_IDX);
+@@ -162,8 +161,7 @@ static bool mmu_translate(CPUX86State *env, const TranslateParams *in,
+                 /*
+                  * Page table level 5
+                  */
+-                pte_addr = ((in->cr3 & ~0xfff) +
+-                            (((addr >> 48) & 0x1ff) << 3)) & a20_mask;
++                pte_addr = (in->cr3 & ~0xfff) + (((addr >> 48) & 0x1ff) << 3);
+                 if (!ptw_translate(&pte_trans, pte_addr)) {
+                     return false;
+                 }
+@@ -187,8 +185,7 @@ static bool mmu_translate(CPUX86State *env, const TranslateParams *in,
+             /*
+              * Page table level 4
+              */
+-            pte_addr = ((pte & PG_ADDRESS_MASK) +
+-                        (((addr >> 39) & 0x1ff) << 3)) & a20_mask;
++            pte_addr = (pte & PG_ADDRESS_MASK) + (((addr >> 39) & 0x1ff) << 3);
+             if (!ptw_translate(&pte_trans, pte_addr)) {
+                 return false;
+             }
+@@ -208,8 +205,7 @@ static bool mmu_translate(CPUX86State *env, const TranslateParams *in,
+             /*
+              * Page table level 3
+              */
+-            pte_addr = ((pte & PG_ADDRESS_MASK) +
+-                        (((addr >> 30) & 0x1ff) << 3)) & a20_mask;
++            pte_addr = (pte & PG_ADDRESS_MASK) + (((addr >> 30) & 0x1ff) << 3);
+             if (!ptw_translate(&pte_trans, pte_addr)) {
+                 return false;
+             }
+@@ -236,7 +232,7 @@ static bool mmu_translate(CPUX86State *env, const TranslateParams *in,
+             /*
+              * Page table level 3
+              */
+-            pte_addr = ((in->cr3 & ~0x1f) + ((addr >> 27) & 0x18)) & a20_mask;
++            pte_addr = (in->cr3 & 0xffffffe0ULL) + ((addr >> 27) & 0x18);
+             if (!ptw_translate(&pte_trans, pte_addr)) {
+                 return false;
+             }
+@@ -258,8 +254,7 @@ static bool mmu_translate(CPUX86State *env, const TranslateParams *in,
+         /*
+          * Page table level 2
+          */
+-        pte_addr = ((pte & PG_ADDRESS_MASK) +
+-                    (((addr >> 21) & 0x1ff) << 3)) & a20_mask;
++        pte_addr = (pte & PG_ADDRESS_MASK) + (((addr >> 21) & 0x1ff) << 3);
+         if (!ptw_translate(&pte_trans, pte_addr)) {
+             return false;
+         }
+@@ -285,8 +280,7 @@ static bool mmu_translate(CPUX86State *env, const TranslateParams *in,
+         /*
+          * Page table level 1
+          */
+-        pte_addr = ((pte & PG_ADDRESS_MASK) +
+-                    (((addr >> 12) & 0x1ff) << 3)) & a20_mask;
++        pte_addr = (pte & PG_ADDRESS_MASK) + (((addr >> 12) & 0x1ff) << 3);
+         if (!ptw_translate(&pte_trans, pte_addr)) {
+             return false;
+         }
+@@ -304,7 +298,7 @@ static bool mmu_translate(CPUX86State *env, const TranslateParams *in,
+         /*
+          * Page table level 2
+          */
+-        pte_addr = ((in->cr3 & ~0xfff) + ((addr >> 20) & 0xffc)) & a20_mask;
++        pte_addr = (in->cr3 & 0xfffff000ULL) + ((addr >> 20) & 0xffc);
+         if (!ptw_translate(&pte_trans, pte_addr)) {
+             return false;
+         }
+@@ -333,7 +327,7 @@ static bool mmu_translate(CPUX86State *env, const TranslateParams *in,
+         /*
+          * Page table level 1
+          */
+-        pte_addr = ((pte & ~0xfffu) + ((addr >> 10) & 0xffc)) & a20_mask;
++        pte_addr = (pte & ~0xfffu) + ((addr >> 10) & 0xffc);
+         if (!ptw_translate(&pte_trans, pte_addr)) {
+             return false;
+         }
+@@ -420,10 +414,13 @@ do_check_protect_pse36:
+         }
+     }
+ 
+-    /* align to page_size */
+-    paddr = (pte & a20_mask & PG_ADDRESS_MASK & ~(page_size - 1))
+-          | (addr & (page_size - 1));
++    /* merge offset within page */
++    paddr = (pte & PG_ADDRESS_MASK & ~(page_size - 1)) | (addr & (page_size - 1));
+ 
++    /*
++     * Note that NPT is walked (for both paging structures and final guest
++     * addresses) using the address with the A20 bit set.
++     */
+     if (in->ptw_idx == MMU_NESTED_IDX) {
+         CPUTLBEntryFull *full;
+         int flags, nested_page_size;
+@@ -462,7 +459,7 @@ do_check_protect_pse36:
+         }
+     }
+ 
+-    out->paddr = paddr;
++    out->paddr = paddr & x86_get_a20_mask(env);
+     out->prot = prot;
+     out->page_size = page_size;
+     return true;
+@@ -556,6 +553,10 @@ static bool get_physical_address(CPUX86State *env, vaddr addr,
+         break;
+ 
+     default:
++        if (is_mmu_index_32(mmu_idx)) {
++            addr = (uint32_t)addr;
++        }
++
+         if (likely(env->cr[0] & CR0_PG_MASK)) {
+             in.cr3 = env->cr[3];
+             in.mmu_idx = mmu_idx;
+@@ -579,14 +580,8 @@ static bool get_physical_address(CPUX86State *env, vaddr addr,
+         break;
+     }
+ 
+-    /* Translation disabled. */
++    /* No translation needed. */
+     out->paddr = addr & x86_get_a20_mask(env);
+-#ifdef TARGET_X86_64
+-    if (!(env->hflags & HF_LMA_MASK)) {
+-        /* Without long mode we can only address 32bits in real mode */
+-        out->paddr = (uint32_t)out->paddr;
+-    }
+-#endif
+     out->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+     out->page_size = TARGET_PAGE_SIZE;
+     return true;
+diff --git a/target/i386/tcg/sysemu/misc_helper.c b/target/i386/tcg/sysemu/misc_helper.c
+index e1528b7f80..1901712ece 100644
+--- a/target/i386/tcg/sysemu/misc_helper.c
++++ b/target/i386/tcg/sysemu/misc_helper.c
+@@ -201,6 +201,9 @@ void helper_wrmsr(CPUX86State *env)
+         tlb_flush(cs);
+         break;
+     case MSR_VM_HSAVE_PA:
++        if (val & (0xfff | ((~0ULL) << env_archcpu(env)->phys_bits))) {
++            goto error;
++        }
+         env->vm_hsave = val;
+         break;
+ #ifdef TARGET_X86_64
+diff --git a/target/i386/tcg/sysemu/svm_helper.c b/target/i386/tcg/sysemu/svm_helper.c
+index 2d27731b60..744aed4b31 100644
+--- a/target/i386/tcg/sysemu/svm_helper.c
++++ b/target/i386/tcg/sysemu/svm_helper.c
+@@ -164,14 +164,19 @@ void helper_vmrun(CPUX86State *env, int aflag, int next_eip_addend)
+     uint64_t new_cr3;
+     uint64_t new_cr4;
+ 
+-    cpu_svm_check_intercept_param(env, SVM_EXIT_VMRUN, 0, GETPC());
+-
+     if (aflag == 2) {
+         addr = env->regs[R_EAX];
+     } else {
+         addr = (uint32_t)env->regs[R_EAX];
+     }
+ 
++    /* Exceptions are checked before the intercept.  */
++    if (addr & (0xfff | ((~0ULL) << env_archcpu(env)->phys_bits))) {
++        raise_exception_err_ra(env, EXCP0D_GPF, 0, GETPC());
++    }
++
++    cpu_svm_check_intercept_param(env, SVM_EXIT_VMRUN, 0, GETPC());
++
+     qemu_log_mask(CPU_LOG_TB_IN_ASM, "vmrun! " TARGET_FMT_lx "\n", addr);
+ 
+     env->vm_vmcb = addr;
+@@ -465,14 +470,19 @@ void helper_vmload(CPUX86State *env, int aflag)
+     int mmu_idx = MMU_PHYS_IDX;
+     target_ulong addr;
+ 
+-    cpu_svm_check_intercept_param(env, SVM_EXIT_VMLOAD, 0, GETPC());
+-
+     if (aflag == 2) {
+         addr = env->regs[R_EAX];
+     } else {
+         addr = (uint32_t)env->regs[R_EAX];
+     }
+ 
++    /* Exceptions are checked before the intercept.  */
++    if (addr & (0xfff | ((~0ULL) << env_archcpu(env)->phys_bits))) {
++        raise_exception_err_ra(env, EXCP0D_GPF, 0, GETPC());
++    }
++
++    cpu_svm_check_intercept_param(env, SVM_EXIT_VMLOAD, 0, GETPC());
++
+     if (virtual_vm_load_save_enabled(env, SVM_EXIT_VMLOAD, GETPC())) {
+         mmu_idx = MMU_NESTED_IDX;
+     }
+@@ -521,14 +531,19 @@ void helper_vmsave(CPUX86State *env, int aflag)
+     int mmu_idx = MMU_PHYS_IDX;
+     target_ulong addr;
+ 
+-    cpu_svm_check_intercept_param(env, SVM_EXIT_VMSAVE, 0, GETPC());
+-
+     if (aflag == 2) {
+         addr = env->regs[R_EAX];
+     } else {
+         addr = (uint32_t)env->regs[R_EAX];
+     }
+ 
++    /* Exceptions are checked before the intercept.  */
++    if (addr & (0xfff | ((~0ULL) << env_archcpu(env)->phys_bits))) {
++        raise_exception_err_ra(env, EXCP0D_GPF, 0, GETPC());
++    }
++
++    cpu_svm_check_intercept_param(env, SVM_EXIT_VMSAVE, 0, GETPC());
++
+     if (virtual_vm_load_save_enabled(env, SVM_EXIT_VMSAVE, GETPC())) {
+         mmu_idx = MMU_NESTED_IDX;
+     }
+diff --git a/target/i386/tcg/translate.c b/target/i386/tcg/translate.c
+index 68c42fd9ff..abacb91ddf 100644
+--- a/target/i386/tcg/translate.c
++++ b/target/i386/tcg/translate.c
+@@ -1501,12 +1501,13 @@ static bool check_iopl(DisasContext *s)
+ /* if d == OR_TMP0, it means memory operand (address in A0) */
+ static void gen_op(DisasContext *s1, int op, MemOp ot, int d)
+ {
++    /* Invalid lock prefix when destination is not memory or OP_CMPL. */
++    if ((d != OR_TMP0 || op == OP_CMPL) && s1->prefix & PREFIX_LOCK) {
++        gen_illegal_opcode(s1);
++        return;
++    }
++
+     if (d != OR_TMP0) {
+-        if (s1->prefix & PREFIX_LOCK) {
+-            /* Lock prefix when destination is not memory.  */
+-            gen_illegal_opcode(s1);
+-            return;
+-        }
+         gen_op_mov_v_reg(s1, ot, s1->T0, d);
+     } else if (!(s1->prefix & PREFIX_LOCK)) {
+         gen_op_ld_v(s1, ot, s1->T0, s1->A0);
+diff --git a/target/ppc/translate/vsx-impl.c.inc b/target/ppc/translate/vsx-impl.c.inc
+index 4deb29ee42..de1709809d 100644
+--- a/target/ppc/translate/vsx-impl.c.inc
++++ b/target/ppc/translate/vsx-impl.c.inc
+@@ -2518,7 +2518,7 @@ static bool do_lstxv(DisasContext *ctx, int ra, TCGv displ,
+ 
+ static bool do_lstxv_D(DisasContext *ctx, arg_D *a, bool store, bool paired)
+ {
+-    if (paired || a->rt >= 32) {
++    if (paired || a->rt < 32) {
+         REQUIRE_VSX(ctx);
+     } else {
+         REQUIRE_VECTOR(ctx);
+diff --git a/tests/data/acpi/q35/DSDT.cxl b/tests/data/acpi/q35/DSDT.cxl
+index f9c6dd4ee0..267709e4e4 100644
+Binary files a/tests/data/acpi/q35/DSDT.cxl and b/tests/data/acpi/q35/DSDT.cxl differ
+diff --git a/tests/qemu-iotests/144 b/tests/qemu-iotests/144
+index bdcc498fa2..d284a0e442 100755
+--- a/tests/qemu-iotests/144
++++ b/tests/qemu-iotests/144
+@@ -83,12 +83,22 @@ echo
+ echo === Performing block-commit on active layer ===
+ echo
+ 
++capture_events="BLOCK_JOB_READY JOB_STATUS_CHANGE"
++
+ # Block commit on active layer, push the new overlay into base
+ _send_qemu_cmd $h "{ 'execute': 'block-commit',
+                                 'arguments': {
+                                                  'device': 'virtio0'
+                                               }
+-                    }" "READY"
++                    }" "return"
++
++_wait_event $h "JOB_STATUS_CHANGE"
++_wait_event $h "JOB_STATUS_CHANGE"
++_wait_event $h "JOB_STATUS_CHANGE"
++
++_wait_event $h "BLOCK_JOB_READY"
++
++capture_events=
+ 
+ _send_qemu_cmd $h "{ 'execute': 'block-job-complete',
+                                 'arguments': {
+diff --git a/tests/qemu-iotests/144.out b/tests/qemu-iotests/144.out
+index b3b4812015..2245ddfa10 100644
+--- a/tests/qemu-iotests/144.out
++++ b/tests/qemu-iotests/144.out
+@@ -25,9 +25,9 @@ Formatting 'TEST_DIR/tmp.qcow2', fmt=qcow2 cluster_size=65536 extended_l2=off co
+                                                  'device': 'virtio0'
+                                               }
+                     }
++{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "created", "id": "virtio0"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "running", "id": "virtio0"}}
+-{"return": {}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "JOB_STATUS_CHANGE", "data": {"status": "ready", "id": "virtio0"}}
+ {"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_JOB_READY", "data": {"device": "virtio0", "len": 0, "offset": 0, "speed": 0, "type": "commit"}}
+ { 'execute': 'block-job-complete',
+diff --git a/tests/qtest/display-vga-test.c b/tests/qtest/display-vga-test.c
+index ace3bb28e0..75b341a9c6 100644
+--- a/tests/qtest/display-vga-test.c
++++ b/tests/qtest/display-vga-test.c
+@@ -8,61 +8,46 @@
+  */
+ 
+ #include "qemu/osdep.h"
+-#include "libqtest-single.h"
+-
+-static void pci_cirrus(void)
+-{
+-    qtest_start("-vga none -device cirrus-vga");
+-    qtest_end();
+-}
+-
+-static void pci_stdvga(void)
+-{
+-    qtest_start("-vga none -device VGA");
+-    qtest_end();
+-}
+-
+-static void pci_secondary(void)
+-{
+-    qtest_start("-vga none -device secondary-vga");
+-    qtest_end();
+-}
++#include "libqtest.h"
+ 
+ static void pci_multihead(void)
+ {
+-    qtest_start("-vga none -device VGA -device secondary-vga");
+-    qtest_end();
+-}
++    QTestState *qts;
+ 
+-static void pci_virtio_gpu(void)
+-{
+-    qtest_start("-vga none -device virtio-gpu-pci");
+-    qtest_end();
++    qts = qtest_init("-vga none -device VGA -device secondary-vga");
++    qtest_quit(qts);
+ }
+ 
+-static void pci_virtio_vga(void)
++static void test_vga(gconstpointer data)
+ {
+-    qtest_start("-vga none -device virtio-vga");
+-    qtest_end();
++    QTestState *qts;
++
++    qts = qtest_initf("-vga none -device %s", (const char *)data);
++    qtest_quit(qts);
+ }
+ 
+ int main(int argc, char **argv)
+ {
+-    const char *arch = qtest_get_arch();
++    static const char *devices[] = {
++        "cirrus-vga",
++        "VGA",
++        "secondary-vga",
++        "virtio-gpu-pci",
++        "virtio-vga"
++    };
+ 
+     g_test_init(&argc, &argv, NULL);
+ 
+-    if (strcmp(arch, "alpha") == 0 || strcmp(arch, "i386") == 0 ||
+-        strcmp(arch, "mips") == 0 || strcmp(arch, "x86_64") == 0) {
+-        qtest_add_func("/display/pci/cirrus", pci_cirrus);
++    for (int i = 0; i < ARRAY_SIZE(devices); i++) {
++        if (qtest_has_device(devices[i])) {
++            char *testpath = g_strdup_printf("/display/pci/%s", devices[i]);
++            qtest_add_data_func(testpath, devices[i], test_vga);
++            g_free(testpath);
++        }
+     }
+-    qtest_add_func("/display/pci/stdvga", pci_stdvga);
+-    qtest_add_func("/display/pci/secondary", pci_secondary);
+-    qtest_add_func("/display/pci/multihead", pci_multihead);
+-    qtest_add_func("/display/pci/virtio-gpu", pci_virtio_gpu);
+-    if (g_str_equal(arch, "i386") || g_str_equal(arch, "x86_64") ||
+-        g_str_equal(arch, "hppa") || g_str_equal(arch, "ppc64")) {
+-        qtest_add_func("/display/pci/virtio-vga", pci_virtio_vga);
++
++    if (qtest_has_device("secondary-vga")) {
++        qtest_add_func("/display/pci/multihead", pci_multihead);
+     }
+ 
+     return g_test_run();
+diff --git a/tests/unit/test-blockjob.c b/tests/unit/test-blockjob.c
+index c0426bd10c..a130f6fefb 100644
+--- a/tests/unit/test-blockjob.c
++++ b/tests/unit/test-blockjob.c
+@@ -531,6 +531,13 @@ int main(int argc, char **argv)
+     g_test_add_func("/blockjob/cancel/standby", test_cancel_standby);
+     g_test_add_func("/blockjob/cancel/pending", test_cancel_pending);
+     g_test_add_func("/blockjob/cancel/concluded", test_cancel_concluded);
+-    g_test_add_func("/blockjob/complete_in_standby", test_complete_in_standby);
++
++    /*
++     * This test is flaky and sometimes fails in CI and otherwise:
++     * don't run unless user opts in via environment variable.
++     */
++    if (getenv("QEMU_TEST_FLAKY_TESTS")) {
++        g_test_add_func("/blockjob/complete_in_standby", test_complete_in_standby);
++    }
+     return g_test_run();
+ }
+diff --git a/tests/unit/test-util-sockets.c b/tests/unit/test-util-sockets.c
+index 63909ccb2b..4c9dd0b271 100644
+--- a/tests/unit/test-util-sockets.c
++++ b/tests/unit/test-util-sockets.c
+@@ -326,6 +326,7 @@ static void test_socket_unix_abstract(void)
+         test_socket_unix_abstract_row(&matrix[i]);
+     }
+ 
++    unlink(addr.u.q_unix.path);
+     g_free(addr.u.q_unix.path);
+ }
+ 
+diff --git a/tests/unit/test-vmstate.c b/tests/unit/test-vmstate.c
+index 541bb4f63e..aae32bbf91 100644
+--- a/tests/unit/test-vmstate.c
++++ b/tests/unit/test-vmstate.c
+@@ -1074,7 +1074,6 @@ static gboolean diff_tree(gpointer key, gpointer value, gpointer data)
+     struct match_node_data d = {tp->tree2, key, value};
+ 
+     g_tree_foreach(tp->tree2, tp->match_node, &d);
+-    g_tree_remove(tp->tree1, key);
+     return false;
+ }
+ 
+@@ -1083,9 +1082,9 @@ static void compare_trees(GTree *tree1, GTree *tree2,
+ {
+     struct tree_cmp_data tp = {tree1, tree2, function};
+ 
++    assert(g_tree_nnodes(tree1) == g_tree_nnodes(tree2));
+     g_tree_foreach(tree1, diff_tree, &tp);
+-    assert(g_tree_nnodes(tree1) == 0);
+-    assert(g_tree_nnodes(tree2) == 0);
++    g_tree_destroy(g_tree_ref(tree1));
+ }
+ 
+ static void diff_domain(TestGTreeDomain *d1, TestGTreeDomain *d2)
+diff --git a/tests/vm/Makefile.include b/tests/vm/Makefile.include
+index 2cc2203d09..e332fd13c3 100644
+--- a/tests/vm/Makefile.include
++++ b/tests/vm/Makefile.include
+@@ -103,7 +103,7 @@ $(IMAGES_DIR)/%.img:	$(SRC_PATH)/tests/vm/% \
+ 		$(if $(LOG_CONSOLE),--log-console) \
+ 		--source-path $(SRC_PATH) \
+ 		--image "$@" \
+-		--force \
++		$(if $(filter-out check-venv, $?), --force) \
+ 		--build-image $@, \
+ 		"  VM-IMAGE $*")
+ 
+diff --git a/tests/vm/basevm.py b/tests/vm/basevm.py
+index 2276364c42..6a54d9d4e0 100644
+--- a/tests/vm/basevm.py
++++ b/tests/vm/basevm.py
+@@ -634,9 +634,9 @@ def main(vmcls, config=None):
+         vm = vmcls(args, config=config)
+         if args.build_image:
+             if os.path.exists(args.image) and not args.force:
+-                sys.stderr.writelines(["Image file exists: %s\n" % args.image,
++                sys.stderr.writelines(["Image file exists, skipping build: %s\n" % args.image,
+                                       "Use --force option to overwrite\n"])
+-                return 1
++                return 0
+             return vm.build_image(args.image)
+         if args.build_qemu:
+             vm.add_source_dir(args.build_qemu)
+diff --git a/tests/vm/openbsd b/tests/vm/openbsd
+index eaeb201e91..f185aa96ab 100755
+--- a/tests/vm/openbsd
++++ b/tests/vm/openbsd
+@@ -22,8 +22,8 @@ class OpenBSDVM(basevm.BaseVM):
+     name = "openbsd"
+     arch = "x86_64"
+ 
+-    link = "https://cdn.openbsd.org/pub/OpenBSD/7.2/amd64/install72.iso"
+-    csum = "0369ef40a3329efcb978c578c7fdc7bda71e502aecec930a74b44160928c91d3"
++    link = "https://cdn.openbsd.org/pub/OpenBSD/7.4/amd64/install74.iso"
++    csum = "a1001736ed9fe2307965b5fcdb426ae11f9b80d26eb21e404a705144a0a224a0"
+     size = "20G"
+     pkgs = [
+         # tools
+@@ -97,10 +97,10 @@ class OpenBSDVM(basevm.BaseVM):
+         self.console_wait_send("(I)nstall",               "i\n")
+         self.console_wait_send("Terminal type",           "xterm\n")
+         self.console_wait_send("System hostname",         "openbsd\n")
+-        self.console_wait_send("Which network interface", "vio0\n")
++        self.console_wait_send("Network interface to configure", "vio0\n")
+         self.console_wait_send("IPv4 address",            "autoconf\n")
+         self.console_wait_send("IPv6 address",            "none\n")
+-        self.console_wait_send("Which network interface", "done\n")
++        self.console_wait_send("Network interface to configure", "done\n")
+         self.console_wait("Password for root account")
+         self.console_send("%s\n" % self._config["root_pass"])
+         self.console_wait("Password for root account")
+@@ -123,6 +123,7 @@ class OpenBSDVM(basevm.BaseVM):
+         self.console_wait_send("Allow root ssh login",    "yes\n")
+         self.console_wait_send("timezone",                "UTC\n")
+         self.console_wait_send("root disk",               "\n")
++        self.console_wait_send("Encrypt the root disk with a passphrase", "no\n")
+         self.console_wait_send("(W)hole disk",            "\n")
+         self.console_wait_send("(A)uto layout",           "\n")
+         self.console_wait_send("Location of sets",        "cd0\n")
+diff --git a/ui/clipboard.c b/ui/clipboard.c
+index 3d14bffaf8..4264884a6c 100644
+--- a/ui/clipboard.c
++++ b/ui/clipboard.c
+@@ -65,12 +65,24 @@ bool qemu_clipboard_check_serial(QemuClipboardInfo *info, bool client)
+ 
+ void qemu_clipboard_update(QemuClipboardInfo *info)
+ {
++    uint32_t type;
+     QemuClipboardNotify notify = {
+         .type = QEMU_CLIPBOARD_UPDATE_INFO,
+         .info = info,
+     };
+     assert(info->selection < QEMU_CLIPBOARD_SELECTION__COUNT);
+ 
++    for (type = 0; type < QEMU_CLIPBOARD_TYPE__COUNT; type++) {
++        /*
++         * If data is missing, the clipboard owner's 'request' callback needs to
++         * be set. Otherwise, there is no way to get the clipboard data and
++         * qemu_clipboard_request() cannot be called.
++         */
++        if (info->types[type].available && !info->types[type].data) {
++            assert(info->owner && info->owner->request);
++        }
++    }
++
+     notifier_list_notify(&clipboard_notifiers, &notify);
+ 
+     if (cbinfo[info->selection] != info) {
+@@ -132,6 +144,8 @@ void qemu_clipboard_request(QemuClipboardInfo *info,
+         !info->owner)
+         return;
+ 
++    assert(info->owner->request);
++
+     info->types[type].requested = true;
+     info->owner->request(info, type);
+ }
+@@ -163,9 +177,15 @@ void qemu_clipboard_set_data(QemuClipboardPeer *peer,
+     }
+ 
+     g_free(info->types[type].data);
+-    info->types[type].data = g_memdup(data, size);
+-    info->types[type].size = size;
+-    info->types[type].available = true;
++    if (size) {
++        info->types[type].data = g_memdup2(data, size);
++        info->types[type].size = size;
++        info->types[type].available = true;
++    } else {
++        info->types[type].data = NULL;
++        info->types[type].size = 0;
++        info->types[type].available = false;
++    }
+ 
+     if (update) {
+         qemu_clipboard_update(info);
+diff --git a/ui/console.c b/ui/console.c
+index 52414d6aa3..269cf27163 100644
+--- a/ui/console.c
++++ b/ui/console.c
+@@ -2583,7 +2583,7 @@ void qemu_console_resize(QemuConsole *s, int width, int height)
+     assert(s->console_type == GRAPHIC_CONSOLE);
+ 
+     if ((s->scanout.kind != SCANOUT_SURFACE ||
+-         (surface && surface->flags & QEMU_ALLOCATED_FLAG)) &&
++         (surface && !is_buffer_shared(surface) && !is_placeholder(surface))) &&
+         qemu_console_get_width(s, -1) == width &&
+         qemu_console_get_height(s, -1) == height) {
+         return;
+diff --git a/ui/meson.build b/ui/meson.build
+index c1b137bf33..76c6644b3f 100644
+--- a/ui/meson.build
++++ b/ui/meson.build
+@@ -81,7 +81,9 @@ if dbus_display
+                                           '--interface-prefix', 'org.qemu.',
+                                           '--c-namespace', 'QemuDBus',
+                                           '--generate-c-code', '@BASENAME@'])
+-  dbus_ss.add(when: [gio, pixman, opengl, gbm],
++  dbus_display1_lib = static_library('dbus-display1', dbus_display1, dependencies: gio)
++  dbus_display1_dep = declare_dependency(link_with: dbus_display1_lib, include_directories: include_directories('.'))
++  dbus_ss.add(when: [gio, pixman, opengl, gbm, dbus_display1_dep],
+               if_true: [files(
+                 'dbus-chardev.c',
+                 'dbus-clipboard.c',
+@@ -89,7 +91,7 @@ if dbus_display
+                 'dbus-error.c',
+                 'dbus-listener.c',
+                 'dbus.c',
+-              ), dbus_display1])
++              )])
+   ui_modules += {'dbus' : dbus_ss}
+ endif
+ 
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 1ca16c0ff6..629a500adc 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -2456,6 +2456,11 @@ static int protocol_client_msg(VncState *vs, uint8_t *data, size_t len)
+         }
+ 
+         if (read_s32(data, 4) < 0) {
++            if (!vnc_has_feature(vs, VNC_FEATURE_CLIPBOARD_EXT)) {
++                error_report("vnc: extended clipboard message while disabled");
++                vnc_client_error(vs);
++                break;
++            }
+             if (dlen < 4) {
+                 error_report("vnc: malformed payload (header less than 4 bytes)"
+                              " in extended clipboard pseudo-encoding.");
