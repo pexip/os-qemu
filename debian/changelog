@@ -1,3 +1,70 @@
+qemu (1:7.2+dfsg-7+deb12u7+pexip24u1) pexip; urgency=medium
+
+  * New upstream release
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Mon, 02 Sep 2024 15:48:39 +0100
+
+qemu (1:7.2+dfsg-7+deb12u7) bookworm; urgency=medium
+
+  * update to upstream 7.2.13 stable/bugfix release, v7.2.13.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.13 :
+    - Update version for 7.2.13 release
+    - char-stdio: Restore blocking mode of stdout on exit
+    - virtio: remove virtio_tswap16s() call in vring_packed_event_read()
+    - block: Parse filenames only when explicitly requested
+    - iotests/270: Don't store data-file with json: prefix in image
+    - iotests/244: Don't store data-file with protocol in image
+    - qcow2: Don't open data_file with BDRV_O_NO_IO
+      (Closes: #1075824, CVE-2024-4467)
+    - target/arm: Fix VCMLA Dd, Dn, Dm[idx]
+    - i386/cpu: fixup number of addressable IDs for processor cores
+      in the physical package
+    - gitlab-ci: Disable the riscv64-debian-cross-container by default
+    - tests: don't run benchmarks for the tsan build
+    - tests: Update our CI to use CentOS Stream 9 instead of 8
+    - ci, docker: update CentOS and OpenSUSE Python to non-EOL versions
+    - Update lcitool and fedora to 37
+    - gitlab-ci.d/buildtest: Merge the --without-default-* jobs
+    - tcg/loongarch64: Fix tcg_out_movi vs some pcrel pointers
+    - linux-user: Make TARGET_NR_setgroups affect only the current thread
+    - stdvga: fix screen blanking
+    - virtio-net: drop too short packets early
+    - target/i386: fix size of EBP writeback in gen_enter()
+   * update to upstream 7.2.12 stable/bugfix release, v7.2.12.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.12 :
+    - Update version for 7.2.12 release
+    - target/loongarch: fix a wrong print in cpu dump
+    - ui/sdl2: Allow host to power down screen
+    - target/i386: fix SSE and SSE2 feature check
+    - target/i386: fix xsave.flat from kvm-unit-tests
+    - disas/riscv: Decode all of the pmpcfg and pmpaddr CSRs
+    - hw/intc/riscv_aplic: APLICs should add child earlier than realize
+    - target/arm: Disable SVE extensions when SVE is disabled
+    - hw/intc/arm_gic: Fix handling of NS view of GICC_APR<n>
+    - hvf: arm: Fix encodings for ID_AA64PFR1_EL1 and debug System registers
+    - gitlab: Update msys2-64bit runner tags
+    - target/i386: no single-step exception after MOV or POP SS
+    - target/i386: disable jmp_opt if EFLAGS.RF is 1
+    - target-i386: hyper-v: Correct kvm_hv_handle_exit return value
+    - ui/gtk: Check if fence_fd is equal to or greater than 0
+    - ui/gtk: Fix mouse/motion event scaling issue with GTK display backend
+    - target/i386: rdpkru/wrpkru are no-prefix instructions
+    - target/i386: fix operand size for DATA16 REX.W POPCNT
+    - hw/remote/vfio-user: Fix config space access byte order
+    - target/i386: Give IRQs a chance when resetting HF_INHIBIT_IRQ_MASK
+    - hw/arm/npcm7xx: Store derivative OTP fuse key in little endian
+    - hw/dmax/xlnx_dpdma: fix handling of address_extension descriptor fields
+    - .gitlab-ci.d/cirrus.yml: Shorten the runtime of the macOS and FreeBSD jobs
+    - tests/avocado: update sunxi kernel from armbian to 6.6.16
+    - backends/cryptodev-builtin: Fix local_error leaks
+    - nbd/server: Mark negotiation functions as coroutine_fn
+    - nbd/server: do not poll within a coroutine context
+    - linux-user: do_setsockopt: fix SOL_ALG.ALG_SET_KEY
+    - gitlab/opensbi: Move to docker:stable
+    - gitlab-ci: Remove job building EDK2 firmware binaries
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 17 Jul 2024 14:27:14 +0300
+
 qemu (1:7.2+dfsg-7+deb12u6+pexip24u1) pexip; urgency=medium
 
   * New upstream release
