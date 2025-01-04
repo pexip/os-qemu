@@ -1,3 +1,138 @@
+qemu (1:7.2+dfsg-7+deb12u12) bookworm; urgency=medium
+
+  * mark-internal-codegen-functions-hidden.patch:
+    make GOT on AArch64 to fit. See comment in the patch for details.
+  * Revert "d/rules: disable capstone for static-user build on aarch64"
+    Re-enable capstone usage on aarch64, restore the status quo.
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 04 Jan 2025 17:47:54 +0300
+
+qemu (1:7.2+dfsg-7+deb12u11) bookworm; urgency=medium
+
+  * disable capstone for qemu-user-static buildi on arm64. See
+    https://gitlab.com/qemu-project/qemu/-/issues/1129 for details.
+    The choice is to disable either capstone or pie, and it is better
+    to keep pie enabled because it helps with guest/host address conflicts.
+    Capstone is used to produce disassembler output of guest code, it is
+    nice to have it but it is not required for normal operations.
+  * skip +deb12u11 release due to a typo
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 03 Jan 2025 19:53:54 +0300
+
+qemu (1:7.2+dfsg-7+deb12u9) bookworm; urgency=medium
+
+  * re-enable (upstream default) --static-pie linking for qemu-user-static
+    binaries.  This has been disabled due to a mistake (LP:#1908331), has been
+    re-enabled in later debian qemu releases.  Disabling static-pie leads to
+    qemu binaries using fixed address which has high chance to clash with
+    something in the emulated binary address space, and hence makes qemu-user
+    generally crashy.  But this change has been forgotten in bookworm.  With
+    recent bookworm kernel updates (6.1.112, with changes to KASLR), these
+    qemu-user-static crashes has become too common.  Also add lintian-override
+    about not-static-enough binaries.
+    Closes: #1087822, #1053101
+  * update to upstream 7.2.15 stable/bugfix release, v7.2.15.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.15 :
+    - Update version for 7.2.15 release
+    - usb-hub: Fix handling port power control messages
+    - hw/audio/hda: fix memory leak on audio setup
+    - hw/misc/mos6522: Fix bad class definition of the MOS6522 device
+    - tcg: Allow top bit of SIMD_DATA_BITS to be set in simd_desc()
+    - target/arm: Drop user-only special case in sve_stN_r
+    - linux-user: Fix setreuid and setregid to use direct syscalls
+    - target/i386: Fix legacy page table walk
+    - 9pfs: fix crash on 'Treaddir' request
+    - hw/nvme: fix handling of over-committed queues
+    - target/arm: Fix SVE SDOT/UDOT/USDOT (4-way, indexed)
+    - target/ppc: Set ctx->opcode for decode_insn32()
+    - target/riscv: Fix vcompress with rvv_ta_all_1s
+    - hw/intc/riscv_aplic: Check and update pending when write sourcecfg
+    - hw/intc/riscv_aplic: Fix in_clrip[x] read emulation
+    - target/riscv: Set vtype.vill on CPU reset
+    - hw/intc: Don't clear pending bits on IRQ lowering
+    - target/riscv: Correct SXL return value for RV32 in RV64 QEMU
+    - target/riscv/csr.c: Fix an access to VXSAT
+    - target/arm: Don't assert in regime_is_user() for E10 mmuidx values
+    - net/tap-win32: Fix gcc 14 format truncation errors
+    - Fix calculation of minimum in colo_compare_tcp
+    - gitlab: make check-[dco|patch] a little more verbose
+    - linux-user/ppc: Fix sigmask endianness issue in sigreturn
+    - target/i386: Walk NPT in guest real mode
+    - target/i386: Avoid unreachable variable declaration in mmu_translate()
+    - tcg: Reset data_gen_ptr correctly
+    - raw-format: Fix error message for invalid offset/size
+    - tests: Wait for migration completion on destination QEMU
+      to avoid failures
+    - KVM: Dynamic sized kvm memslots array
+    - hw/audio/hda: free timer on exit
+    - hw/intc/arm_gicv3_cpuif: Add cast to match the documentation
+    - scsi: fetch unit attention when creating the request
+    - linux-user: Fix parse_elf_properties GNU0_MAGIC check
+    - linux-user/flatload: Take mmap_lock in load_flt_binary()
+    - tracetool: avoid invalid escape in Python string
+    - fuzz: disable leak-detection for oss-fuzz builds
+    - block/reqlist: allow adding overlapping requests
+    - target/ppc: Fix lxvx/stxvx facility check
+    - softmmu/physmem.c: Keep transaction attribute in address_space_map()
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Mon, 25 Nov 2024 20:37:50 +0300
+
+qemu (1:7.2+dfsg-7+deb12u8) bookworm; urgency=medium
+
+  * update to upstream 7.2.14 stable/bugfix release, v7.2.14.diff,
+    https://gitlab.com/qemu-project/qemu/-/commits/v7.2.14 :
+    - Update version for 7.2.14 release
+    - hw/intc/arm_gic: fix spurious level triggered interrupts
+    - tests/docker: remove debian-armel-cross
+    - hw/display/vhost-user-gpu.c: fix vhost_user_gpu_chr_read()
+    - crypto: check gnutls & gcrypt support the requested pbkdf hash
+    - crypto: run qcrypto_pbkdf2_count_iters in a new thread
+    - softmmu/physmem: fix memory leak in dirty_memory_extend()
+    - gitlab: migrate the s390x custom machine to 22.04
+    - crypto/tlscredspsk: Free username on finalize
+    - module: Prevent crash by resetting local_err in module_load_qom_all()
+    - target/i386: Do not apply REX to MMX operands
+    - block/blkio: use FUA flag on write zeroes only if supported
+    - hw/core/ptimer: fix timer zero period condition for freq > 1GHz
+    - nbd/server: CVE-2024-7409: Avoid use-after-free when closing server
+    - nbd/server: CVE-2024-7409: Close stray clients at server-stop
+    - nbd/server: CVE-2024-7409: Drop non-negotiating clients
+    - nbd/server: CVE-2024-7409: Cap default max-connections to 100
+    - nbd/server: Plumb in new args to nbd_client_add()
+    - iotests: Add `vvfat` tests
+    - vvfat: Fix reading files with non-continuous clusters
+    - vvfat: Fix wrong checks for cluster mappings invariant
+    - vvfat: Fix usage of `info.file.offset`
+    - vvfat: Fix bug in writing to middle of file
+    - hw/sd/sdhci: Reset @data_count index on invalid ADMA transfers
+    - virtio-net: Fix network stall at the host side waiting for kick
+    - virtio-net: Ensure queue index fits with RSS
+    - target/arm: Handle denormals correctly for FMOPA (widening)
+    - hw/arm/mps2-tz.c: fix RX/TX interrupts order
+    - hw/i386/amd_iommu: Don't leak memory in amdvi_update_iotlb()
+    - docs/sphinx/depfile.py: Handle env.doc2path() returning a Path not a str
+    - target/arm: Ignore SMCR_EL2.LEN and SVCR_EL2.LEN if EL2 is not enabled
+    - target/arm: Avoid shifts by -1 in tszimm_shr() and tszimm_shl()
+    - target/arm: Fix UMOPA/UMOPS of 16-bit values
+    - target/arm: Don't assert for 128-bit tile accesses when SVL is 128
+    - hw/misc/bcm2835_property: Fix handling of FRAMEBUFFER_SET_PALETTE
+    - hw/char/bcm2835_aux: Fix assert when receive FIFO fills up
+    - target/rx: Use target_ulong for address in LI
+    - hw/virtio: Fix the de-initialization of vhost-user devices
+    - util/async.c: Forbid negative min/max
+      in aio_context_set_thread_pool_params()
+    - hw/intc/loongson_ipi: Access memory in little endian
+    - chardev/char-win-stdio.c: restore old console mode
+    - target/i386: do not crash if microvm guest uses SGX CPUID leaves
+    - intel_iommu: fix FRCD construction macro
+    - hw/cxl/cxl-host: Fix segmentation fault when getting cxl-fmw property
+    - hw/nvme: fix memory leak in nvme_dsm
+    - target/arm: Use FPST_F16 for SME FMOPA (widening)
+    - target/arm: Use float_status copy in sme_fmopa_s
+    - qapi/qom: Document feature unstable of @x-vfio-user-server
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 01 Nov 2024 16:50:46 +0300
+
 qemu (1:7.2+dfsg-7+deb12u7) bookworm; urgency=medium
 
   * update to upstream 7.2.13 stable/bugfix release, v7.2.13.diff,

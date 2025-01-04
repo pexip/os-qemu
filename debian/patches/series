@@ -11,6 +11,8 @@ v7.2.10.diff
 v7.2.11.diff
 v7.2.12.diff
 v7.2.13.diff
+v7.2.14.diff
+v7.2.15.diff
 microvm-default-machine-type.patch
 skip-meson-pc-bios.diff
 linux-user-binfmt-P.diff
@@ -27,3 +29,4 @@ spelling.diff
 openbios-spelling-endianess.patch
 slof-spelling-seperator.patch
 ignore-roms-dependency-in-qtest.patch
+mark-internal-codegen-functions-hidden.patch

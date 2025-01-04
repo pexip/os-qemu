@@ -1,0 +1,50 @@
+From: Michael Tokarev <mjt@tls.msk.ru>
+Subject: mark internal codegen helpers to be hidden
+Date: Sat, 04 Jan 2025 13:53:36 +0300
+Forwarded: not-needed
+
+QEMU TCG uses arrays of pointers to functions for its
+code generator.  In 7.2, these functions are declared as
+static inline.  However, at least on some platforms, GCC
+tries to make these functions visible to be used in a DSO.
+And this makes the linker to fail at least on some platforms,
+https://gitlab.com/qemu-project/qemu/-/issues/1129.
+
+Mark the internal generated helper functions to have hidden
+visibility, so gcc does not generate code for sharing them,
+which makes GOT significantly smaller (and the actual code
+to access these functions a bit more efficient too).
+
+In later versions, qemu changed this place to use different
+way, so this problem does not exist in more recent qemu.
+
+diff --git a/include/exec/helper-gen.h b/include/exec/helper-gen.h
+--- a/include/exec/helper-gen.h
++++ b/include/exec/helper-gen.h
+@@ -78,9 +78,11 @@ static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)          \
+   tcg_gen_callN(HELPER(name), dh_retvar(ret), 7, args);                 \
+ }
+ 
++#pragma GCC visibility push(hidden)
+ #include "helper.h"
+ #include "accel/tcg/tcg-runtime.h"
+ #include "accel/tcg/plugin-helpers.h"
++#pragma GCC visibility pop
+ 
+ #undef DEF_HELPER_FLAGS_0
+ #undef DEF_HELPER_FLAGS_1
+diff --git a/include/exec/helper-proto.h b/include/exec/helper-proto.h
+--- a/include/exec/helper-proto.h
++++ b/include/exec/helper-proto.h
+@@ -37,9 +37,11 @@ dh_ctype(ret) HELPER(name) (dh_ctype(t1), dh_ctype(t2), dh_ctype(t3), \
+ 
+ #define IN_HELPER_PROTO
+ 
++#pragma GCC visibility push(hidden)
+ #include "helper.h"
+ #include "accel/tcg/tcg-runtime.h"
+ #include "accel/tcg/plugin-helpers.h"
++#pragma GCC visibility pop
+ 
+ #undef IN_HELPER_PROTO
+ 
