@@ -25,7 +25,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/qdev-properties.h"
-#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
 #include "hw/irq.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
@@ -91,7 +91,7 @@ static void grackle_init(Object *obj)
 
 static void grackle_pci_realize(PCIDevice *d, Error **errp)
 {
-    d->config[0x09] = 0x01;
+    d->config[PCI_CLASS_PROG] = 0x01;
 }
 
 static void grackle_pci_class_init(ObjectClass *klass, void *data)
@@ -129,9 +129,8 @@ static char *grackle_ofw_unit_address(const SysBusDevice *dev)
     return g_strdup_printf("%x", s->ofw_addr);
 }
 
-static Property grackle_properties[] = {
+static const Property grackle_properties[] = {
     DEFINE_PROP_UINT32("ofw-addr", GrackleState, ofw_addr, -1),
-    DEFINE_PROP_END_OF_LIST()
 };
 
 static void grackle_class_init(ObjectClass *klass, void *data)

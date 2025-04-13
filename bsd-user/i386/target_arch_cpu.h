@@ -102,7 +102,7 @@ static inline void target_cpu_init(CPUX86State *env,
     env->segs[R_FS].selector = 0;
 }
 
-static inline void target_cpu_loop(CPUX86State *env)
+static inline G_NORETURN void target_cpu_loop(CPUX86State *env)
 {
     CPUState *cs = env_cpu(env);
     int trapnr;
@@ -162,6 +162,10 @@ static inline void target_cpu_loop(CPUX86State *env)
             } else {
                 env->eflags &= ~CC_C;
             }
+            break;
+
+        case EXCP_SYSCALL:
+            /* doesn't do anything */
             break;
 
         case EXCP_INTERRUPT:

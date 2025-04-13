@@ -7,17 +7,17 @@ x86_64-centos-stream-9-container:
     NAME: centos-stream-9
 
 
-x86_64-debian-10-container:
+x86_64-debian-12-container:
   extends: .container_job
   allow_failure: false
   variables:
     JOB_OPTIONAL: 1
-    NAME: debian-10
+    NAME: debian-12
 
 
 x86_64-fedora-rawhide-container:
   extends: .container_job
-  allow_failure: false
+  allow_failure: true
   variables:
     NAME: fedora-rawhide
 
@@ -27,7 +27,7 @@ x86_64-fedora-rawhide-container:
 
 i686-debian-sid-container:
   extends: .container_job
-  allow_failure: false
+  allow_failure: true
   variables:
     NAME: debian-sid-cross-i686
 
@@ -42,6 +42,6 @@ ppc64le-debian-sid-container:
 
 mingw32-fedora-rawhide-container:
   extends: .container_job
-  allow_failure: false
+  allow_failure: true
   variables:
     NAME: fedora-rawhide-cross-mingw32

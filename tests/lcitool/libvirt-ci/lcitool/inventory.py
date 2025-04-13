@@ -4,15 +4,12 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-import copy
 import logging
-import yaml
 
 from pathlib import Path
-from pkg_resources import resource_filename
 
 from lcitool import util, LcitoolError
-from lcitool.singleton import Singleton
+from lcitool.packages import package_names_by_type
 
 log = logging.getLogger(__name__)
 
@@ -24,23 +21,13 @@ class InventoryError(LcitoolError):
         super().__init__(message, "Inventory")
 
 
-class Inventory(metaclass=Singleton):
+class Inventory():
 
     @property
     def ansible_inventory(self):
         if self._ansible_inventory is None:
             self._ansible_inventory = self._get_ansible_inventory()
         return self._ansible_inventory
-
-    @property
-    def target_facts(self):
-        if self._target_facts is None:
-            self._target_facts = self._load_target_facts()
-        return self._target_facts
-
-    @property
-    def targets(self):
-        return list(self.target_facts.keys())
 
     @property
     def host_facts(self):
@@ -52,31 +39,32 @@ class Inventory(metaclass=Singleton):
     def hosts(self):
         return list(self.host_facts.keys())
 
-    def __init__(self):
-        self._target_facts = None
+    def __init__(self, targets, config, inventory_path=None):
+        self._targets = targets
+        self._config = config
         self._host_facts = None
         self._ansible_inventory = None
-
-    @staticmethod
-    def _read_facts_from_file(yaml_path):
-        log.debug(f"Loading facts from '{yaml_path}'")
-        with open(yaml_path, "r") as infile:
-            return yaml.safe_load(infile)
+        self._inventory_path = inventory_path
 
     def _get_ansible_inventory(self):
         from lcitool.ansible_wrapper import AnsibleWrapper, AnsibleWrapperError
 
         inventory_sources = []
-        inventory_path = Path(util.get_config_dir(), "inventory")
-        if inventory_path.exists():
-            inventory_sources.append(inventory_path)
+        if self._inventory_path is None:
+            self._inventory_path = Path(util.get_config_dir(), "inventory")
 
-        log.debug("Querying libvirt for lcitool hosts")
-        inventory_sources.append(self._get_libvirt_inventory())
+            # we only call into libvirt when we need to use default inventory
+            # sources, i.e. user didn't provide one via datadir
+            log.debug("Querying libvirt for lcitool hosts")
+            inventory_sources.append(self._get_libvirt_inventory())
+
+        if self._inventory_path.exists():
+            log.debug(f"Adding '{self._inventory_path}' to Ansible inventory sources")
+            inventory_sources.append(self._inventory_path)
 
         ansible_runner = AnsibleWrapper()
         ansible_runner.prepare_env(inventories=inventory_sources,
-                                   group_vars=self.target_facts)
+                                   group_vars=self._targets.target_facts)
 
         log.debug(f"Running ansible-inventory on '{inventory_sources}'")
         try:
@@ -100,56 +88,6 @@ class Inventory(metaclass=Singleton):
 
         return inventory
 
-    @staticmethod
-    def _validate_target_facts(target_facts, target):
-        fname = target + ".yml"
-
-        actual_osname = target_facts["os"]["name"].lower()
-        if not target.startswith(actual_osname + "-"):
-            raise InventoryError(f'OS name "{target_facts["os"]["name"]}" does not match file name {fname}')
-        target = target[len(actual_osname) + 1:]
-
-        actual_version = target_facts["os"]["version"].lower()
-        expected_version = target.replace("-", "")
-        if expected_version != actual_version:
-            raise InventoryError(f'OS version "{target_facts["os"]["version"]}" does not match version in file name {fname} ({expected_version})')
-
-    def _load_target_facts(self):
-        def merge_dict(source, dest):
-            for key in source.keys():
-                if key not in dest:
-                    dest[key] = copy.deepcopy(source[key])
-                    continue
-
-                if isinstance(source[key], list) or isinstance(dest[key], list):
-                    raise InventoryError("cannot merge lists")
-                if isinstance(source[key], dict) != isinstance(dest[key], dict):
-                    raise InventoryError("cannot merge dictionaries with non-dictionaries")
-                if isinstance(source[key], dict):
-                    merge_dict(source[key], dest[key])
-
-        facts = {}
-        targets_path = Path(resource_filename(__name__, "facts/targets/"))
-        targets_all_path = Path(targets_path, "all.yml")
-
-        # first load the shared facts from targets/all.yml
-        shared_facts = self._read_facts_from_file(targets_all_path)
-
-        # then load the rest of the facts
-        for entry in targets_path.iterdir():
-            if not entry.is_file() or entry.suffix != ".yml" or entry.name == "all.yml":
-                continue
-
-            target = entry.stem
-            facts[target] = self._read_facts_from_file(entry)
-            self._validate_target_facts(facts[target], target)
-            facts[target]["target"] = target
-
-            # missing per-distro facts fall back to shared facts
-            merge_dict(shared_facts, facts[target])
-
-        return facts
-
     def _load_host_facts(self):
         facts = {}
         groups = {}
@@ -157,6 +95,12 @@ class Inventory(metaclass=Singleton):
         def _rec(inventory, group_name):
             for key, subinventory in inventory.items():
                 if key == "hosts":
+                    if (group_name != "ungrouped" and
+                        group_name not in self._targets.targets):
+                        log.info(f"Unsupported target OS group '{group_name}'"
+                                 "found in the inventory, skipping...")
+                        return
+
                     for host_name, host_facts in subinventory.items():
                         log.debug(f"Host '{host_name}' is in group '{group_name}'")
 
@@ -184,7 +128,7 @@ class Inventory(metaclass=Singleton):
 
         _rec(self.ansible_inventory["all"], "all")
 
-        targets = set(self.targets)
+        targets = set(self._targets.targets)
         for host_name, host_groups in groups.items():
             host_targets = host_groups.intersection(targets)
 
@@ -209,3 +153,29 @@ class Inventory(metaclass=Singleton):
         except Exception as ex:
             log.debug(f"Failed to load expand '{pattern}'")
             raise InventoryError(f"Failed to expand '{pattern}': {ex}")
+
+    def get_host_target_name(self, host):
+        return self.host_facts[host]["target"]
+
+    def get_group_vars(self, target, projects, projects_expanded):
+        # resolve the package mappings to actual package names
+        internal_wanted_projects = ["base", "developer", "vm"]
+        if self._config.values["install"]["cloud_init"]:
+            internal_wanted_projects.append("cloud-init")
+
+        selected_projects = internal_wanted_projects + projects_expanded
+        pkgs_install = projects.get_packages(selected_projects, target)
+        pkgs_early_install = projects.get_packages(["early_install"], target)
+        pkgs_remove = projects.get_packages(["unwanted"], target)
+        package_names = package_names_by_type(pkgs_install)
+        package_names_remove = package_names_by_type(pkgs_remove)
+        package_names_early_install = package_names_by_type(pkgs_early_install)
+
+        # merge the package lists to the Ansible group vars
+        group_vars = dict(target.facts)
+        group_vars["packages"] = package_names["native"]
+        group_vars["pypi_packages"] = package_names["pypi"]
+        group_vars["cpan_packages"] = package_names["cpan"]
+        group_vars["unwanted_packages"] = package_names_remove["native"]
+        group_vars["early_install_packages"] = package_names_early_install["native"]
+        return group_vars

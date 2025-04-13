@@ -21,9 +21,11 @@
 #include "qemu.h"
 #include "user-internals.h"
 #include "elf.h"
-#include "cpu_loop-common.h"
+#include "user/cpu_loop.h"
 #include "signal-common.h"
 #include "semihosting/common-semi.h"
+#include "exec/page-protection.h"
+#include "user/page-protection.h"
 #include "target/arm/syndrome.h"
 
 #define get_user_code_u32(x, gaddr, env)                \
@@ -34,45 +36,10 @@
         __r;                                            \
     })
 
-#define get_user_code_u16(x, gaddr, env)                \
-    ({ abi_long __r = get_user_u16((x), (gaddr));       \
-        if (!__r && bswap_code(arm_sctlr_b(env))) {     \
-            (x) = bswap16(x);                           \
-        }                                               \
-        __r;                                            \
-    })
-
-#define get_user_data_u32(x, gaddr, env)                \
-    ({ abi_long __r = get_user_u32((x), (gaddr));       \
-        if (!__r && arm_cpu_bswap_data(env)) {          \
-            (x) = bswap32(x);                           \
-        }                                               \
-        __r;                                            \
-    })
-
-#define get_user_data_u16(x, gaddr, env)                \
-    ({ abi_long __r = get_user_u16((x), (gaddr));       \
-        if (!__r && arm_cpu_bswap_data(env)) {          \
-            (x) = bswap16(x);                           \
-        }                                               \
-        __r;                                            \
-    })
-
-#define put_user_data_u32(x, gaddr, env)                \
-    ({ typeof(x) __x = (x);                             \
-        if (arm_cpu_bswap_data(env)) {                  \
-            __x = bswap32(__x);                         \
-        }                                               \
-        put_user_u32(__x, (gaddr));                     \
-    })
-
-#define put_user_data_u16(x, gaddr, env)                \
-    ({ typeof(x) __x = (x);                             \
-        if (arm_cpu_bswap_data(env)) {                  \
-            __x = bswap16(__x);                         \
-        }                                               \
-        put_user_u16(__x, (gaddr));                     \
-    })
+/*
+ * Note that if we need to do data accesses here, they should do a
+ * bswap if arm_cpu_bswap_data() returns true.
+ */
 
 /*
  * Similar to code in accel/tcg/user-exec.c, but outside the execution loop.
@@ -117,8 +84,9 @@ static void arm_kernel_cmpxchg32_helper(CPUARMState *env)
 {
     uint32_t oldval, newval, val, addr, cpsr, *host_addr;
 
-    oldval = env->regs[0];
-    newval = env->regs[1];
+    /* Swap if host != guest endianness, for the host cmpxchg below */
+    oldval = tswap32(env->regs[0]);
+    newval = tswap32(env->regs[1]);
     addr = env->regs[2];
 
     mmap_lock();
@@ -173,6 +141,10 @@ static void arm_kernel_cmpxchg64_helper(CPUARMState *env)
         mmap_unlock();
         return;
     }
+
+    /* Swap if host != guest endianness, for the host cmpxchg below */
+    oldval = tswap64(oldval);
+    newval = tswap64(newval);
 
 #ifdef CONFIG_ATOMIC64
     val = qatomic_cmpxchg__nocheck(host_addr, oldval, newval);
@@ -258,7 +230,7 @@ static bool insn_is_linux_bkpt(uint32_t opcode, bool is_thumb)
 
 static bool emulate_arm_fpa11(CPUARMState *env, uint32_t opcode)
 {
-    TaskState *ts = env_cpu(env)->opaque;
+    TaskState *ts = get_task_state(env_cpu(env));
     int rc = EmulateAll(opcode, &ts->fpa, env);
     int raise, enabled;
 
@@ -356,7 +328,7 @@ void cpu_loop(CPUARMState *env)
             break;
         case EXCP_SWI:
             {
-                env->eabi = 1;
+                env->eabi = true;
                 /* system call */
                 if (env->thumb) {
                     /* Thumb is always EABI style with syscall number in r7 */
@@ -382,7 +354,7 @@ void cpu_loop(CPUARMState *env)
                          * > 0xfffff and are handled below as out-of-range.
                          */
                         n ^= ARM_SYSCALL_BASE;
-                        env->eabi = 0;
+                        env->eabi = false;
                     }
                 }
 
@@ -506,10 +478,10 @@ void cpu_loop(CPUARMState *env)
     }
 }
 
-void target_cpu_copy_regs(CPUArchState *env, struct target_pt_regs *regs)
+void target_cpu_copy_regs(CPUArchState *env, target_pt_regs *regs)
 {
     CPUState *cpu = env_cpu(env);
-    TaskState *ts = cpu->opaque;
+    TaskState *ts = get_task_state(cpu);
     struct image_info *info = ts->info;
     int i;
 
