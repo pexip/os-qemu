@@ -49,6 +49,7 @@ native:
 - fuse-devel
 - fuse3
 - fuse3-devel
+- gawk
 - gcc
 - gcc-c++
 - gdb
@@ -70,6 +71,7 @@ native:
 - grep
 - gtk-doc
 - gtk-update-icon-cache
+- gtk-vnc2-devel
 - gtk3-devel
 - gzip
 - hostname
@@ -133,6 +135,7 @@ native:
 - libuuid-devel
 - libvirt-devel
 - libwsman-devel
+- libxdp-devel
 - libxml2
 - libxml2-devel
 - libxslt
@@ -147,6 +150,7 @@ native:
 - make
 - mesa-libgbm-devel
 - meson
+- mtools
 - nano
 - nbdkit
 - ncurses-devel
@@ -199,6 +203,7 @@ native:
 - perl-generators
 - perl-podlators
 - php-devel
+- pipewire-devel
 - pixman-devel
 - pkgconfig
 - polkit
@@ -223,17 +228,18 @@ native:
 - python3-setuptools
 - python3-sphinx
 - python3-sphinx_rtd_theme
+- python3-tomli
 - python3-wheel
 - qemu-img
 - qemu-kvm
 - rdma-core-devel
 - readline-devel
 - rpcgen
-- rpm
 - rpm-build
 - ruby-devel
 - rubygem-rake
 - rust
+- rust-std-static
 - sanlock-devel
 - screen
 - scrub
@@ -245,6 +251,7 @@ native:
 - spice-server-devel
 - strace
 - sudo
+- swtpm
 - systemd-devel
 - systemd-rpm-macros
 - systemtap-sdt-devel
@@ -271,3 +278,7 @@ native:
 - zip
 - zlib-devel
 - zlib-static
+- zstd
+pypi:
+- black
+- build

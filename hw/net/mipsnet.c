@@ -218,7 +218,7 @@ static const VMStateDescription vmstate_mipsnet = {
     .name = "mipsnet",
     .version_id = 0,
     .minimum_version_id = 0,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(busy, MIPSnetState),
         VMSTATE_UINT32(rx_count, MIPSnetState),
         VMSTATE_UINT32(rx_read, MIPSnetState),
@@ -255,7 +255,8 @@ static void mipsnet_realize(DeviceState *dev, Error **errp)
     sysbus_init_irq(sbd, &s->irq);
 
     s->nic = qemu_new_nic(&net_mipsnet_info, &s->conf,
-                          object_get_typename(OBJECT(dev)), dev->id, s);
+                          object_get_typename(OBJECT(dev)), dev->id,
+                          &dev->mem_reentrancy_guard, s);
     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
 }
 
@@ -265,9 +266,8 @@ static void mipsnet_sysbus_reset(DeviceState *dev)
     mipsnet_reset(s);
 }
 
-static Property mipsnet_properties[] = {
+static const Property mipsnet_properties[] = {
     DEFINE_NIC_PROPERTIES(MIPSnetState, conf),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void mipsnet_class_init(ObjectClass *klass, void *data)
@@ -277,7 +277,7 @@ static void mipsnet_class_init(ObjectClass *klass, void *data)
     dc->realize = mipsnet_realize;
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
     dc->desc = "MIPS Simulator network device";
-    dc->reset = mipsnet_sysbus_reset;
+    device_class_set_legacy_reset(dc, mipsnet_sysbus_reset);
     dc->vmsd = &vmstate_mipsnet;
     device_class_set_props(dc, mipsnet_properties);
 }

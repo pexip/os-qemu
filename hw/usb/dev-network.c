@@ -33,7 +33,7 @@
 #include "qemu/error-report.h"
 #include "qemu/queue.h"
 #include "qemu/config-file.h"
-#include "sysemu/sysemu.h"
+#include "system/system.h"
 #include "qemu/iov.h"
 #include "qemu/module.h"
 #include "qemu/cutils.h"
@@ -473,14 +473,6 @@ struct rndis_packet_msg_type {
     le32 PerPacketInfoLength;
     le32 VcHandle;
     le32 Reserved;
-};
-
-struct rndis_config_parameter {
-    le32 ParameterNameOffset;
-    le32 ParameterNameLength;
-    le32 ParameterType;
-    le32 ParameterValueOffset;
-    le32 ParameterValueLength;
 };
 
 /* implementation specific */
@@ -1386,7 +1378,8 @@ static void usb_net_realize(USBDevice *dev, Error **errp)
 
     qemu_macaddr_default_if_unset(&s->conf.macaddr);
     s->nic = qemu_new_nic(&net_usbnet_info, &s->conf,
-                          object_get_typename(OBJECT(s)), s->dev.qdev.id, s);
+                          object_get_typename(OBJECT(s)), s->dev.qdev.id,
+                          &s->dev.qdev.mem_reentrancy_guard, s);
     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
     snprintf(s->usbstring_mac, sizeof(s->usbstring_mac),
              "%02x%02x%02x%02x%02x%02x",
@@ -1414,9 +1407,8 @@ static const VMStateDescription vmstate_usb_net = {
     .unmigratable = 1,
 };
 
-static Property net_properties[] = {
+static const Property net_properties[] = {
     DEFINE_NIC_PROPERTIES(USBNetState, conf),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void usb_net_class_initfn(ObjectClass *klass, void *data)

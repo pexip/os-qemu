@@ -181,7 +181,7 @@ connected to a remote QEMU machine acting as BMC, using these options
 
 .. code-block:: bash
 
-  -chardev socket,id=ipmi0,host=localhost,port=9002,reconnect=10 \
+  -chardev socket,id=ipmi0,host=localhost,port=9002,reconnect-ms=10000 \
   -device ipmi-bmc-extern,id=bmc0,chardev=ipmi0 \
   -device isa-ipmi-bt,bmc=bmc0,irq=10 \
   -nodefaults
@@ -195,10 +195,12 @@ Use a MTD drive to add a PNOR to the machine, and get a NVRAM :
 
   -drive file=./witherspoon.pnor,format=raw,if=mtd
 
-CAVEATS
--------
-
- * No support for multiple HW threads (SMT=1). Same as pseries.
+If no mtd drive is provided, the powernv platform will create a default
+PNOR device using a tiny formatted PNOR in pc-bios/pnv-pnor.bin opened
+read-only (PNOR changes will be persistent across reboots but not across
+invocations of QEMU). If no defaults are used, an erased 128MB PNOR is
+provided (which skiboot will probably not recognize since it is not
+formatted).
 
 Maintainer contact information
 ------------------------------
