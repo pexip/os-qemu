@@ -9,10 +9,12 @@
 
 #include "qemu/osdep.h"
 
-#include "qapi/qmp/qdict.h"
-#include "qapi/qmp/qlist.h"
+#include "qobject/qdict.h"
+#include "qobject/qlist.h"
 #include "qemu/cutils.h"
 #include "libqtest.h"
+
+static int verbosity_level;
 
 static void test_properties(QTestState *qts, const char *path, bool recurse)
 {
@@ -22,7 +24,9 @@ static void test_properties(QTestState *qts, const char *path, bool recurse)
     QListEntry *entry;
     GSList *children = NULL, *links = NULL;
 
-    g_test_message("Obtaining properties of %s", path);
+    if (verbosity_level >= 2) {
+        g_test_message("Obtaining properties of %s", path);
+    }
     response = qtest_qmp(qts, "{ 'execute': 'qom-list',"
                               "  'arguments': { 'path': %s } }", path);
     g_assert(response);
@@ -49,7 +53,9 @@ static void test_properties(QTestState *qts, const char *path, bool recurse)
             }
         } else {
             const char *prop = qdict_get_str(tuple, "name");
-            g_test_message("-> %s", prop);
+            if (verbosity_level >= 3) {
+                g_test_message("-> %s", prop);
+            }
             tmp = qtest_qmp(qts,
                             "{ 'execute': 'qom-get',"
                             "  'arguments': { 'path': %s, 'property': %s } }",
@@ -82,6 +88,17 @@ static void test_machine(gconstpointer data)
 
     qts = qtest_initf("-machine %s", machine);
 
+    if (g_test_slow()) {
+        /* Make sure we can get the machine class properties: */
+        g_autofree char *qom_machine = g_strdup_printf("%s-machine", machine);
+
+        response = qtest_qmp(qts, "{ 'execute': 'qom-list-properties',"
+                                  "  'arguments': { 'typename': %s } }",
+                             qom_machine);
+        g_assert(response);
+        qobject_unref(response);
+    }
+
     test_properties(qts, "/machine", true);
 
     response = qtest_qmp(qts, "{ 'execute': 'quit' }");
@@ -103,6 +120,12 @@ static void add_machine_test_case(const char *mname)
 
 int main(int argc, char **argv)
 {
+    char *v_env = getenv("V");
+
+    if (v_env) {
+        verbosity_level = atoi(v_env);
+    }
+
     g_test_init(&argc, &argv, NULL);
 
     qtest_cb_for_every_machine(add_machine_test_case, g_test_quick());

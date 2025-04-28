@@ -23,7 +23,7 @@
 #include "hw/virtio/vhost.h"
 #include "hw/virtio/vhost-user-fs.h"
 #include "monitor/monitor.h"
-#include "sysemu/sysemu.h"
+#include "system/system.h"
 
 static const int user_feature_bits[] = {
     VIRTIO_F_VERSION_1,
@@ -33,7 +33,8 @@ static const int user_feature_bits[] = {
     VIRTIO_F_RING_PACKED,
     VIRTIO_F_IOMMU_PLATFORM,
     VIRTIO_F_RING_RESET,
-
+    VIRTIO_F_IN_ORDER,
+    VIRTIO_F_NOTIFICATION_DATA,
     VHOST_INVALID_FEATURE_BIT
 };
 
@@ -159,6 +160,15 @@ static void vuf_guest_notifier_mask(VirtIODevice *vdev, int idx,
 {
     VHostUserFS *fs = VHOST_USER_FS(vdev);
 
+    /*
+     * Add the check for configure interrupt, Use VIRTIO_CONFIG_IRQ_IDX -1
+     * as the macro of configure interrupt's IDX, If this driver does not
+     * support, the function will return
+     */
+
+    if (idx == VIRTIO_CONFIG_IRQ_IDX) {
+        return;
+    }
     vhost_virtqueue_mask(&fs->vhost_dev, vdev, idx, mask);
 }
 
@@ -166,6 +176,15 @@ static bool vuf_guest_notifier_pending(VirtIODevice *vdev, int idx)
 {
     VHostUserFS *fs = VHOST_USER_FS(vdev);
 
+    /*
+     * Add the check for configure interrupt, Use VIRTIO_CONFIG_IRQ_IDX -1
+     * as the macro of configure interrupt's IDX, If this driver does not
+     * support, the function will return
+     */
+
+    if (idx == VIRTIO_CONFIG_IRQ_IDX) {
+        return false;
+    }
     return vhost_virtqueue_pending(&fs->vhost_dev, idx);
 }
 
@@ -255,6 +274,7 @@ static void vuf_device_unrealize(DeviceState *dev)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VHostUserFS *fs = VHOST_USER_FS(dev);
+    struct vhost_virtqueue *vhost_vqs = fs->vhost_dev.vqs;
     int i;
 
     /* This will stop vhost backend if appropriate. */
@@ -270,8 +290,7 @@ static void vuf_device_unrealize(DeviceState *dev)
     }
     g_free(fs->req_vqs);
     virtio_cleanup(vdev);
-    g_free(fs->vhost_dev.vqs);
-    fs->vhost_dev.vqs = NULL;
+    g_free(vhost_vqs);
 }
 
 static struct vhost_dev *vuf_get_vhost(VirtIODevice *vdev)
@@ -280,18 +299,116 @@ static struct vhost_dev *vuf_get_vhost(VirtIODevice *vdev)
     return &fs->vhost_dev;
 }
 
+/**
+ * Fetch the internal state from virtiofsd and save it to `f`.
+ */
+static int vuf_save_state(QEMUFile *f, void *pv, size_t size,
+                          const VMStateField *field, JSONWriter *vmdesc)
+{
+    VirtIODevice *vdev = pv;
+    VHostUserFS *fs = VHOST_USER_FS(vdev);
+    Error *local_error = NULL;
+    int ret;
+
+    ret = vhost_save_backend_state(&fs->vhost_dev, f, &local_error);
+    if (ret < 0) {
+        error_reportf_err(local_error,
+                          "Error saving back-end state of %s device %s "
+                          "(tag: \"%s\"): ",
+                          vdev->name, vdev->parent_obj.canonical_path,
+                          fs->conf.tag ?: "<none>");
+        return ret;
+    }
+
+    return 0;
+}
+
+/**
+ * Load virtiofsd's internal state from `f` and send it over to virtiofsd.
+ */
+static int vuf_load_state(QEMUFile *f, void *pv, size_t size,
+                          const VMStateField *field)
+{
+    VirtIODevice *vdev = pv;
+    VHostUserFS *fs = VHOST_USER_FS(vdev);
+    Error *local_error = NULL;
+    int ret;
+
+    ret = vhost_load_backend_state(&fs->vhost_dev, f, &local_error);
+    if (ret < 0) {
+        error_reportf_err(local_error,
+                          "Error loading back-end state of %s device %s "
+                          "(tag: \"%s\"): ",
+                          vdev->name, vdev->parent_obj.canonical_path,
+                          fs->conf.tag ?: "<none>");
+        return ret;
+    }
+
+    return 0;
+}
+
+static bool vuf_is_internal_migration(void *opaque)
+{
+    /* TODO: Return false when an external migration is requested */
+    return true;
+}
+
+static int vuf_check_migration_support(void *opaque)
+{
+    VirtIODevice *vdev = opaque;
+    VHostUserFS *fs = VHOST_USER_FS(vdev);
+
+    if (!vhost_supports_device_state(&fs->vhost_dev)) {
+        error_report("Back-end of %s device %s (tag: \"%s\") does not support "
+                     "migration through qemu",
+                     vdev->name, vdev->parent_obj.canonical_path,
+                     fs->conf.tag ?: "<none>");
+        return -ENOTSUP;
+    }
+
+    return 0;
+}
+
+static const VMStateDescription vuf_backend_vmstate;
+
 static const VMStateDescription vuf_vmstate = {
     .name = "vhost-user-fs",
-    .unmigratable = 1,
+    .version_id = 0,
+    .fields = (const VMStateField[]) {
+        VMSTATE_VIRTIO_DEVICE,
+        VMSTATE_END_OF_LIST()
+    },
+    .subsections = (const VMStateDescription * const []) {
+        &vuf_backend_vmstate,
+        NULL,
+    }
 };
 
-static Property vuf_properties[] = {
+static const VMStateDescription vuf_backend_vmstate = {
+    .name = "vhost-user-fs-backend",
+    .version_id = 0,
+    .needed = vuf_is_internal_migration,
+    .pre_load = vuf_check_migration_support,
+    .pre_save = vuf_check_migration_support,
+    .fields = (const VMStateField[]) {
+        {
+            .name = "back-end",
+            .info = &(const VMStateInfo) {
+                .name = "virtio-fs back-end state",
+                .get = vuf_load_state,
+                .put = vuf_save_state,
+            },
+        },
+        VMSTATE_END_OF_LIST()
+    },
+};
+
+static const Property vuf_properties[] = {
     DEFINE_PROP_CHR("chardev", VHostUserFS, conf.chardev),
     DEFINE_PROP_STRING("tag", VHostUserFS, conf.tag),
     DEFINE_PROP_UINT16("num-request-queues", VHostUserFS,
                        conf.num_request_queues, 1),
     DEFINE_PROP_UINT16("queue-size", VHostUserFS, conf.queue_size, 128),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void vuf_instance_init(Object *obj)

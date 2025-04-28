@@ -101,13 +101,20 @@ target-$(CONFIG_CSM) += $(OUT)Csm16.bin
 target-$(CONFIG_COREBOOT) += $(OUT)bios.bin.elf
 target-$(CONFIG_BUILD_VGABIOS) += $(OUT)vgabios.bin
 
-all: $(target-y)
+# all: $(target-y)
+all: parisc
 
 parisc: FORCE
 ifneq "$(CONFIG_PARISC)" "y"
 	@echo "ERROR: run 'make config' and select PA-RISC before building the parisc target."
 endif
-	DIRS="" $(MAKE) -f Makefile.parisc all
+	  DIRS="" OUT=out/    BITS=32 BIT_SUFFIX=""   CROSS_PREFIX=hppa-linux-gnu-    $(MAKE) -f Makefile.parisc all
+	  DIRS="" OUT=out-64/ BITS=64 BIT_SUFFIX="64" CROSS_PREFIX=hppa64-linux-gnu-  $(MAKE) -f Makefile.parisc all
+
+# Install parisc firmware into qemu pc-bios directory
+parisc-qemu-install: parisc
+	hppa-linux-gnu-objcopy   -S out/hppa-firmware.img       ../../pc-bios/hppa-firmware.img
+	hppa64-linux-gnu-objcopy -S out-64/hppa-firmware64.img  ../../pc-bios/hppa-firmware64.img
 
 # Make definitions
 .PHONY : all clean distclean parisc FORCE
@@ -293,7 +300,7 @@ help: ; $(call do-kconfig, $@)
 ################ Generic rules
 
 clean:
-	$(Q)rm -rf $(OUT)
+	$(Q)rm -rf $(OUT) out-64/
 
 distclean: clean
 	$(Q)rm -f .config .config.old

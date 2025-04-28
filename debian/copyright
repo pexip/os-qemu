@@ -1,13 +1,11 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Files-Excluded:
-	dtc
-	meson
 	roms/QemuMacDrivers
 	roms/edk2
 	roms/ipxe
 	roms/seabios
-	roms/u-boot
-	slirp
+	roms/opensbi
+#	roms/u-boot
 #
 	roms/SLOF/board-js2x/rtas/i2c_bmc.oco
 	roms/SLOF/board-js2x/rtas/ipmi_oem.oco
@@ -23,6 +21,7 @@ Files-Excluded:
 	pc-bios/efi-*.rom
 	pc-bios/pxe-*.rom
 	pc-bios/hppa-firmware.img
+	pc-bios/hppa-firmware64.img
 	pc-bios/kvmvapic.bin
 	pc-bios/linuxboot.bin
 	pc-bios/linuxboot_dma.bin
@@ -33,12 +32,12 @@ Files-Excluded:
 	pc-bios/openbios-sparc64
 	pc-bios/opensbi-*.bin
 	pc-bios/palcode-clipper
+	pc-bios/petalogix-ml605.dtb
+	pc-bios/petalogix-s3adsp1800.dtb
 	pc-bios/pvh.bin
 	pc-bios/qboot.rom
 	pc-bios/qemu_vga.ndrv
 	pc-bios/s390-ccw.img
-	pc-bios/s390-netboot.img
-	pc-bios/sgabios.bin
 	pc-bios/skiboot.lid
 	pc-bios/slof.bin
 	pc-bios/u-boot-sam460-20100605.bin
@@ -46,6 +45,11 @@ Files-Excluded:
 	pc-bios/vgabios.bin
 	pc-bios/vgabios-*.bin
 	pc-bios/vof.bin
+#
+	python/wheels/*.whl
+#
+	subprojects/packagecache
+	subprojects/packagefiles
 
 Files: *
 Copyright:
@@ -154,7 +158,6 @@ Copyright:
     Copyright (C) 2009 Novell Inc.
     Copyright (C) 2009 Ulrich Hecht <uli@suse.de>
     Copyright (C) 2009 VA Linux Systems Japan
-
 License:
     QEMU as a whole is released under the GNU General Public License version 2.
     On Debian systems, the complete text of the GNU General Public License

@@ -255,6 +255,10 @@ static void adlib_realizefn (DeviceState *dev, Error **errp)
     AdlibState *s = ADLIB(dev);
     struct audsettings as;
 
+    if (!AUD_register_card ("adlib", &s->card, errp)) {
+        return;
+    }
+
     s->opl = OPLCreate (3579545, s->freq);
     if (!s->opl) {
         error_setg (errp, "OPLCreate %d failed", s->freq);
@@ -269,8 +273,6 @@ static void adlib_realizefn (DeviceState *dev, Error **errp)
     as.nchannels = SHIFT;
     as.fmt = AUDIO_FORMAT_S16;
     as.endianness = AUDIO_HOST_ENDIANNESS;
-
-    AUD_register_card ("adlib", &s->card);
 
     s->voice = AUD_open_out (
         &s->card,
@@ -295,11 +297,10 @@ static void adlib_realizefn (DeviceState *dev, Error **errp)
     portio_list_add (&s->port_list, isa_address_space_io(&s->parent_obj), 0);
 }
 
-static Property adlib_properties[] = {
+static const Property adlib_properties[] = {
     DEFINE_AUDIO_PROPERTIES(AdlibState, card),
     DEFINE_PROP_UINT32 ("iobase",  AdlibState, port, 0x220),
     DEFINE_PROP_UINT32 ("freq",    AdlibState, freq,  44100),
-    DEFINE_PROP_END_OF_LIST (),
 };
 
 static void adlib_class_initfn (ObjectClass *klass, void *data)

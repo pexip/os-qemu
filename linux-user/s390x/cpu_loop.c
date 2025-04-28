@@ -20,7 +20,7 @@
 #include "qemu/osdep.h"
 #include "qemu.h"
 #include "user-internals.h"
-#include "cpu_loop-common.h"
+#include "user/cpu_loop.h"
 #include "signal-common.h"
 
 
@@ -86,6 +86,15 @@ void cpu_loop(CPUS390XState *env)
             } else if (ret != -QEMU_ESIGRETURN) {
                 env->regs[2] = ret;
             }
+
+            if (unlikely(cs->singlestep_enabled)) {
+                /*
+                 * cpu_tb_exec() did not raise EXCP_DEBUG, because it has seen
+                 * that EXCP_SVC was already pending.
+                 */
+                cs->exception_index = EXCP_DEBUG;
+            }
+
             break;
 
         case EXCP_DEBUG:
@@ -171,7 +180,7 @@ void cpu_loop(CPUS390XState *env)
     }
 }
 
-void target_cpu_copy_regs(CPUArchState *env, struct target_pt_regs *regs)
+void target_cpu_copy_regs(CPUArchState *env, target_pt_regs *regs)
 {
     int i;
     for (i = 0; i < 16; i++) {

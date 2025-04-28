@@ -24,14 +24,14 @@
 #include "qapi/error.h"
 #include "monitor/monitor.h"
 #include "hw/i386/apic.h"
-#include "hw/i386/ioapic.h"
-#include "hw/i386/ioapic_internal.h"
 #include "hw/i386/x86.h"
 #include "hw/intc/i8259.h"
+#include "hw/intc/ioapic.h"
+#include "hw/intc/ioapic_internal.h"
 #include "hw/pci/msi.h"
 #include "hw/qdev-properties.h"
-#include "sysemu/kvm.h"
-#include "sysemu/sysemu.h"
+#include "system/kvm.h"
+#include "system/system.h"
 #include "hw/i386/apic-msidef.h"
 #include "hw/i386/x86-iommu.h"
 #include "trace.h"
@@ -405,6 +405,7 @@ ioapic_mem_write(void *opaque, hwaddr addr, uint64_t val,
                 s->ioredtbl[index] |= ro_bits;
                 s->irq_eoi[index] = 0;
                 ioapic_fix_edge_remote_irr(&s->ioredtbl[index]);
+                ioapic_update_kvm_routes(s);
                 ioapic_service(s);
             }
         }
@@ -417,8 +418,6 @@ ioapic_mem_write(void *opaque, hwaddr addr, uint64_t val,
         ioapic_eoi_broadcast(val);
         break;
     }
-
-    ioapic_update_kvm_routes(s);
 }
 
 static const MemoryRegionOps ioapic_io_ops = {
@@ -477,9 +476,8 @@ static void ioapic_unrealize(DeviceState *dev)
     timer_free(s->delayed_ioapic_service_timer);
 }
 
-static Property ioapic_properties[] = {
+static const Property ioapic_properties[] = {
     DEFINE_PROP_UINT8("version", IOAPICCommonState, version, IOAPIC_VER_DEF),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void ioapic_class_init(ObjectClass *klass, void *data)
@@ -494,7 +492,7 @@ static void ioapic_class_init(ObjectClass *klass, void *data)
      * migration, otherwise first 24 gsi routes will be invalid.
      */
     k->post_load = ioapic_update_kvm_routes;
-    dc->reset = ioapic_reset_common;
+    device_class_set_legacy_reset(dc, ioapic_reset_common);
     device_class_set_props(dc, ioapic_properties);
 }
 

@@ -13,7 +13,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "exec/address-spaces.h"
-#include "sysemu/kvm.h"
+#include "system/kvm.h"
 #include "net/net.h"
 #include "hw/virtio/virtio.h"
 #include "migration/qemu-file-types.h"
@@ -22,7 +22,6 @@
 #include "qemu/error-report.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
-#include "hw/virtio/virtio-access.h"
 #include "hw/virtio/virtio-bus.h"
 #include "hw/s390x/adapter.h"
 #include "hw/s390x/s390_flic.h"
@@ -33,7 +32,7 @@
 #include "trace.h"
 #include "hw/s390x/css-bridge.h"
 #include "hw/s390x/s390-virtio-ccw.h"
-#include "sysemu/replay.h"
+#include "system/replay.h"
 
 #define NR_CLASSIC_INDICATOR_BITS 64
 
@@ -88,7 +87,7 @@ const VMStateDescription vmstate_virtio_ccw_dev_tmp = {
     .name = "s390_virtio_ccw_dev_tmp",
     .pre_save = virtio_ccw_dev_tmp_pre_save,
     .post_load = virtio_ccw_dev_tmp_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT16(config_vector, VirtioCcwDeviceTmp),
         VMSTATE_END_OF_LIST()
     }
@@ -99,7 +98,7 @@ const VMStateDescription vmstate_virtio_ccw_dev = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = virtio_ccw_dev_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_CCW_DEVICE(parent_obj, VirtioCcwDevice),
         VMSTATE_PTR_TO_IND_ADDR(indicators, VirtioCcwDevice),
         VMSTATE_PTR_TO_IND_ADDR(indicators2, VirtioCcwDevice),
@@ -237,6 +236,7 @@ static int virtio_ccw_set_vqs(SubchDev *sch, VqInfoBlock *info,
                 return -EINVAL;
             }
             virtio_queue_set_num(vdev, index, num);
+            virtio_init_region_cache(vdev, index);
         } else if (virtio_queue_get_num(vdev, index) > num) {
             /* Fail if we don't have a big enough queue. */
             return -EINVAL;
@@ -768,10 +768,6 @@ static void virtio_ccw_device_realize(VirtioCcwDevice *dev, Error **errp)
         sch->cssid, sch->ssid, sch->schid, sch->devno,
         ccw_dev->devno.valid ? "user-configured" : "auto-configured");
 
-    if (kvm_enabled() && !kvm_eventfds_enabled()) {
-        dev->flags &= ~VIRTIO_CCW_FLAG_USE_IOEVENTFD;
-    }
-
     /* fd-based ioevents can't be synchronized in record/replay */
     if (replay_mode != REPLAY_MODE_NONE) {
         dev->flags &= ~VIRTIO_CCW_FLAG_USE_IOEVENTFD;
@@ -917,14 +913,15 @@ static void virtio_ccw_notify(DeviceState *d, uint16_t vector)
     }
 }
 
-static void virtio_ccw_reset(DeviceState *d)
+static void virtio_ccw_reset_hold(Object *obj, ResetType type)
 {
-    VirtioCcwDevice *dev = VIRTIO_CCW_DEVICE(d);
+    VirtioCcwDevice *dev = VIRTIO_CCW_DEVICE(obj);
     VirtIOCCWDeviceClass *vdc = VIRTIO_CCW_DEVICE_GET_CLASS(dev);
 
     virtio_ccw_reset_virtio(dev);
-    if (vdc->parent_reset) {
-        vdc->parent_reset(d);
+
+    if (vdc->parent_phases.hold) {
+        vdc->parent_phases.hold(obj, type);
     }
 }
 
@@ -1160,7 +1157,6 @@ static void virtio_ccw_device_plugged(DeviceState *d, Error **errp)
     CcwDevice *ccw_dev = CCW_DEVICE(d);
     SubchDev *sch = ccw_dev->sch;
     int n = virtio_get_num_queues(vdev);
-    S390FLICState *flic = s390_get_flic();
 
     if (!virtio_has_feature(vdev->host_features, VIRTIO_F_VERSION_1)) {
         dev->max_rev = 0;
@@ -1187,10 +1183,10 @@ static void virtio_ccw_device_plugged(DeviceState *d, Error **errp)
                    VIRTIO_QUEUE_MAX);
         return;
     }
-    if (virtio_get_num_queues(vdev) > flic->adapter_routes_max_batch) {
+    if (virtio_get_num_queues(vdev) > ADAPTER_ROUTES_MAX_GSI) {
         error_setg(errp, "The number of virtqueues %d "
                    "exceeds flic adapter route limit %d", n,
-                   flic->adapter_routes_max_batch);
+                   ADAPTER_ROUTES_MAX_GSI);
         return;
     }
 
@@ -1237,11 +1233,13 @@ static void virtio_ccw_device_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     CCWDeviceClass *k = CCW_DEVICE_CLASS(dc);
     VirtIOCCWDeviceClass *vdc = VIRTIO_CCW_DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     k->unplug = virtio_ccw_busdev_unplug;
     dc->realize = virtio_ccw_busdev_realize;
     dc->unrealize = virtio_ccw_busdev_unrealize;
-    device_class_set_parent_reset(dc, virtio_ccw_reset, &vdc->parent_reset);
+    resettable_class_set_parent_phases(rc, NULL, virtio_ccw_reset_hold, NULL,
+                                       &vdc->parent_phases);
 }
 
 static const TypeInfo virtio_ccw_device_info = {

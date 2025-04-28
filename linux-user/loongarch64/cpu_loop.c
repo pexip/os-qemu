@@ -8,7 +8,7 @@
 #include "qemu/osdep.h"
 #include "qemu.h"
 #include "user-internals.h"
-#include "cpu_loop-common.h"
+#include "user/cpu_loop.h"
 #include "signal-common.h"
 
 void cpu_loop(CPULoongArchState *env)
@@ -72,6 +72,19 @@ void cpu_loop(CPULoongArchState *env)
         case EXCCODE_BCE:
             force_sig_fault(TARGET_SIGSYS, TARGET_SI_KERNEL, env->pc);
             break;
+
+        /*
+         * Begin with LSX and LASX disabled, then enable on the first trap.
+         * In this way we can tell if the unit is in use.  This is used to
+         * choose the layout of any signal frame.
+         */
+        case EXCCODE_SXD:
+            env->CSR_EUEN |= R_CSR_EUEN_SXE_MASK;
+            break;
+        case EXCCODE_ASXD:
+            env->CSR_EUEN |= R_CSR_EUEN_ASXE_MASK;
+            break;
+
         case EXCP_ATOMIC:
             cpu_exec_step_atomic(cs);
             break;
@@ -84,7 +97,7 @@ void cpu_loop(CPULoongArchState *env)
     }
 }
 
-void target_cpu_copy_regs(CPUArchState *env, struct target_pt_regs *regs)
+void target_cpu_copy_regs(CPUArchState *env, target_pt_regs *regs)
 {
     int i;
 

@@ -1,6 +1,5 @@
 cpan:
 - LWP::UserAgent
-- Net::OpenSSH
 - TAP::Formatter::HTML
 - TAP::Formatter::JUnit
 - TAP::Harness::Archive
@@ -17,6 +16,7 @@ native:
 - bash
 - bash-completion
 - bc
+- bindgen-cli
 - bison
 - brlapi-devel
 - bzip2
@@ -24,6 +24,8 @@ native:
 - ca-certificates
 - capstone-devel
 - cargo
+- cargo-c
+- cargo-rpm-macros
 - ccache
 - check-devel
 - chrony
@@ -32,7 +34,9 @@ native:
 - clippy
 - cloud-init
 - cloud-utils-growpart
+- compiler-rt
 - cpp
+- ctags
 - cyrus-sasl-devel
 - daxctl-devel
 - dbus-daemon
@@ -50,10 +54,12 @@ native:
 - fuse-devel
 - fuse3
 - fuse3-devel
+- gawk
 - gcc
 - gcc-c++
 - gdb
 - gdk-pixbuf2-devel
+- genisoimage
 - gettext
 - gettext-devel
 - git
@@ -80,7 +86,7 @@ native:
 - iproute-tc
 - iptables
 - iscsi-initiator-utils
-- java-11-openjdk-headless
+- java-21-openjdk-headless
 - jemalloc-devel
 - jna
 - jq
@@ -95,18 +101,22 @@ native:
 - libattr-devel
 - libblkid-devel
 - libbpf-devel
+- libcacard-devel
 - libcap-ng-devel
 - libcmocka-devel
 - libconfig-devel
 - libcurl-devel
 - libdrm-devel
 - libepoxy-devel
+- libev-devel
 - libfdt-devel
 - libffi-devel
 - libgcrypt-devel
 - libguestfs-devel
+- libiscsi-devel
 - libjpeg-devel
 - libnbd-devel
+- libnfs-devel
 - libnl3-devel
 - libpcap-devel
 - libpciaccess-devel
@@ -115,6 +125,7 @@ native:
 - librbd-devel
 - libseccomp-devel
 - libselinux-devel
+- libslirp-devel
 - libsoup-devel
 - libssh-devel
 - libssh2-devel
@@ -123,10 +134,12 @@ native:
 - libtool
 - libtorrent-devel
 - libubsan
+- liburing-devel
 - libusbx-devel
 - libuuid-devel
 - libvirt-devel
 - libwsman-devel
+- libxdp-devel
 - libxml2
 - libxml2-devel
 - libxslt
@@ -141,6 +154,7 @@ native:
 - make
 - mesa-libgbm-devel
 - meson
+- mtools
 - nano
 - nbdkit
 - ncurses-devel
@@ -172,6 +186,7 @@ native:
 - perl-IO-Interface
 - perl-IO-String
 - perl-Module-Build
+- perl-Net-OpenSSH
 - perl-Net-SNMP
 - perl-NetAddr-IP
 - perl-Pod-Simple
@@ -192,6 +207,7 @@ native:
 - perl-generators
 - perl-podlators
 - php-devel
+- pipewire-devel
 - pixman-devel
 - pkgconfig
 - polkit
@@ -199,32 +215,37 @@ native:
 - python3
 - python3-PyYAML
 - python3-boto3
+- python3-build
 - python3-dbus
 - python3-devel
 - python3-docutils
+- python3-flake8
 - python3-gobject
 - python3-libnbd
 - python3-libselinux
+- python3-libvirt
 - python3-libxml2
 - python3-lxml
 - python3-numpy
+- python3-pillow
 - python3-pip
 - python3-pytest
 - python3-requests
 - python3-setuptools
 - python3-sphinx
 - python3-sphinx_rtd_theme
+- python3-tomli
 - python3-wheel
 - qemu-img
 - qemu-kvm
 - rdma-core-devel
 - readline-devel
 - rpcgen
-- rpm
 - rpm-build
 - ruby-devel
 - rubygem-rake
 - rust
+- rust-std-static
 - sanlock-devel
 - screen
 - scrub
@@ -234,6 +255,7 @@ native:
 - spice-protocol
 - strace
 - sudo
+- swtpm
 - systemd-devel
 - systemd-rpm-macros
 - systemtap-sdt-devel
@@ -248,6 +270,7 @@ native:
 - valgrind
 - vim-minimal
 - vte291-devel
+- vulkan-tools
 - wget
 - which
 - wireshark-devel
@@ -259,6 +282,6 @@ native:
 - zip
 - zlib-devel
 - zlib-static
+- zstd
 pypi:
-- flake8
-- pillow
+- black
