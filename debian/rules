@@ -86,6 +86,7 @@ common_configure_opts = \
 	--disable-containers \
 	--disable-relocatable \
 	--disable-docs \
+	--disable-rbd \
 	${empty}
 # this disables building of qemu-keymap tool (!)
 # qemu-keymap might be helpful for qemu-system -k <lang>
