@@ -77,11 +77,8 @@ Build-Depends-Arch:
  libcacard-dev		[amd64 arm arm64 armel armhf i386 loong64 mips mips64 mips64el mipsel powerpc powerpcspe ppc64 ppc64el riscv64 s390x sparc sparc64],
 # --enable-pixman	 amd64 arm arm64 armel armhf i386 loong64 mips mips64 mips64el mipsel powerpc powerpcspe ppc64 ppc64el riscv64 s390x sparc sparc64
  libpixman-1-dev	[amd64 arm arm64 armel armhf i386 loong64 mips mips64 mips64el mipsel powerpc powerpcspe ppc64 ppc64el riscv64 s390x sparc sparc64],
-# --disable-rbd		amd64 arm64 loong64 mips64el ppc64el riscv64 s390x
-# librbd-dev            [amd64 arm64 loong64 mips64el ppc64el riscv64 s390x],
-# gluster is 64bit-only: #1039604
-# --enable-glusterfs	 amd64 arm64 loong64 mips64 mips64el ppc64 ppc64el riscv64 s390x sparc64
- libglusterfs-dev	[amd64 arm64 loong64 mips64 mips64el ppc64 ppc64el riscv64 s390x sparc64],
+# --disable-rbd		amd64 arm arm64 armel armhf i386 loong64 mips mips64 mips64el mipsel powerpc powerpcspe ppc64 ppc64el riscv64 s390x sparc sparc64
+# --disable-glusterfs	 amd64 arm arm64 armel armhf i386 loong64 mips mips64 mips64el mipsel powerpc powerpcspe ppc64 ppc64el riscv64 s390x sparc sparc64
 # --enable-vnc-sasl	 amd64 arm arm64 armel armhf i386 loong64 mips mips64 mips64el mipsel powerpc powerpcspe ppc64 ppc64el riscv64 s390x sparc sparc64
  libsasl2-dev		[amd64 arm arm64 armel armhf i386 loong64 mips mips64 mips64el mipsel powerpc powerpcspe ppc64 ppc64el riscv64 s390x sparc sparc64],
 # --enable-sdl	amd64 arm arm64 armel armhf i386 loong64 mips mips64 mips64el mipsel powerpc powerpcspe ppc64 ppc64el riscv64 s390x sparc sparc64

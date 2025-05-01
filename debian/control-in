@@ -78,11 +78,8 @@ Build-Depends-Arch:
  libcacard-dev		[:system-arch:],
 # --enable-pixman	 :system-arch:
  libpixman-1-dev	[:system-arch:],
-# --disable-rbd		amd64 arm64 loong64 mips64el ppc64el riscv64 s390x
-# librbd-dev            [amd64 arm64 loong64 mips64el ppc64el riscv64 s390x],
-# gluster is 64bit-only: #1039604
-# --enable-glusterfs	 :system-arch-linux-64:
- libglusterfs-dev	[:system-arch-linux-64:],
+# --disable-rbd		:system-arch:
+# --disable-glusterfs	 :system-arch:
 # --enable-vnc-sasl	 :system-arch:
  libsasl2-dev		[:system-arch:],
 # --enable-sdl	:system-arch:
