@@ -606,13 +606,8 @@ b/skiboot/skiboot.lid: | roms/skiboot/.version
 	  OPTS='-Os -ffile-prefix-map="${CURDIR}/roms/skiboot/"=' \
 	  CROSS_COMPILE=${cross_prefix_ppc64} V=${V}
 install-skiboot: b/skiboot/skiboot.lid
-<<<<<<< HEAD
-	install -m 0644 -t ${sysdataidir} $<
-#sysdata-components += skiboot
-=======
 	install -m0644 -t ${sysdataidir} $<
-sysdata-components += skiboot
->>>>>>> debian-trixie
+#sysdata-components += skiboot
 
 ### u-boot-e500 (u-boot.e500)
 build-u-boot-e500: b/u-boot/build-e500/u-boot
