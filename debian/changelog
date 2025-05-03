@@ -1,3 +1,81 @@
+qemu (1:7.2+dfsg-7+deb12u13) bookworm; urgency=medium
+
+  * v7.2.17:
+    - Update version for 7.2.17 release
+    - hw/misc/aspeed_hace: Fix buffer overflow in has_padding function
+    - target/ppc: Fix e200 duplicate SPRs
+    - vdpa: Allow vDPA to work on big-endian machine
+    - vdpa: Fix endian bugs in shadow virtqueue
+    - target/arm: Simplify pstate_sm check in sve_access_check
+    - target/arm: Make DisasContext.{fp, sve}_access_checked tristate
+    - util/cacheflush: Make first DSB unconditional on aarch64
+    - ui/cocoa: Temporarily ignore annoying deprecated declaration warnings
+    - docs: Rename default-configs to configs
+    - block: Zero block driver state before reopening
+    - hw/net/smc91c111: Don't allow data register access to overrun buffer
+    - hw/net/smc91c111: Sanitize packet length on tx
+    - hw/net/smc91c111: Sanitize packet numbers
+    - hw/net/smc91c111: Ignore attempt to pop from empty RX fifo
+    - ppc/pnv/occ: Fix common area sensor offsets
+    - hw/gpio: npcm7xx: fixup out-of-bounds access
+    - block/qed: fix use-after-free by nullifying timer pointer after free
+    - goldfish_rtc: Fix tick_offset migration
+    - target/riscv: throw debug exception before page fault
+    - target/riscv/debug.c: use wp size = 4 for 32-bit CPUs
+    - target/riscv: rvv: Fix unexpected behavior of vector reduction
+      instructions when vl is 0
+    - cryptodev/vhost: allocate CryptoDevBackendVhost using g_mem0()
+    - amd_iommu: Use correct bitmask to set capability BAR
+    - hw/i386/amd_iommu: Explicit use of AMDVI_BASE_ADDR in amdvi_init
+    - amd_iommu: Use correct DTE field for interrupt passthrough
+    - Kconfig: Extract CONFIG_USB_CHIPIDEA from CONFIG_IMX
+    - hw/intc/arm_gicv3_cpuif: Don't downgrade monitor traps for AArch32 EL3
+    - target/arm: Make CP_ACCESS_TRAPs to AArch32 EL3 be Monitor traps
+    - target/arm: Report correct syndrome for UNDEFINED LOR sysregs when NS=0
+    - target/arm: Report correct syndrome for UNDEFINED S1E2 AT ops at EL3
+    - target/arm: Report correct syndrome for UNDEFINED CNTPS_*_EL1
+      from EL2 and NS EL1
+    - target/sparc: Fix gdbstub incorrectly handling registers f32-f62
+    - ui/sdl2: reenable the SDL2 Windows keyboard hook procedure
+    - linux-user: Do not define struct sched_attr if libc headers do
+  * v7.2.16:
+    - Update version for 7.2.16 release
+    - hw/usb/canokey: Fix buffer overflow for OUT packet
+    - target/arm: arm_reset_sve_state() should set FPSR, not FPCR
+    - tests: acpi: update expected blobs
+    - pci: acpi: Windows 'PCI Label Id' bug workaround
+    - tests: acpi: whitelist expected blobs
+    - pci/msix: Fix msix pba read vector poll end calculation
+    - pci: ensure valid link status bits for downstream ports
+    - hw/usb/hcd-xhci-pci: Use modulo to select MSI vector as per spec
+    - backends/cryptodev-vhost-user: Fix local_error leaks
+    - target/i386/cpu: Fix notes for CPU models
+    - docs: Correct release of TCG trace-events removal
+    - s390x/s390-virtio-ccw: don't crash on weird RAM sizes
+    - meson.build: Disallow libnfs v6 to fix the broken macOS build
+    - hw/intc/arm_gicv3_its: Zero initialize local DTEntry etc structs
+    - x86/loader: only patch linux kernels
+    - fuzz: specify audiodev for usb-audio
+    - tcg/riscv: Fix StoreStore barrier generation
+    - hw/openrisc/openrisc_sim: keep serial@90000000 as default
+    - target/ppc: Fix non-maskable interrupt while halted
+    - tests/9p: also check 'Tgetattr' in 'use-after-unlink' test
+    - 9pfs: fix 'Tgetattr' after unlink
+    - 9pfs: remove obsolete comment in v9fs_getattr()
+    - tests/9p: add 'use-after-unlink' test
+    - tests/9p: add missing Rgetattr response name
+    - tests/9p: fix Rreaddir response name
+    - scsi: megasas: Internal cdbs have 16-byte length
+    - ssh: Do not switch session to non-blocking mode
+    - qdev: Fix set_pci_devfn() to visit option only once
+    - virtio-net: Fix size check in dhclient workaround
+    - cirrus-ci: Remove MSYS2 jobs duplicated with gitlab-ci
+    - hw/intc/loongarch_extioi: Use set_bit32() and clear_bit32() for s->isr
+    - bitops.h: Define bit operations on 'uint32_t' arrays
+    - hw/intc/openpic: Avoid taking address of out-of-bounds array index
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 03 May 2025 12:06:15 +0300
+
 qemu (1:7.2+dfsg-7+deb12u12) bookworm; urgency=medium
 
   * mark-internal-codegen-functions-hidden.patch:
