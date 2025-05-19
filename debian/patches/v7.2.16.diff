@@ -1,0 +1,1368 @@
+Subject: v7.2.16
+Date: Sat Feb 8 14:26:26 2025 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.15
+and upstream qemu v7.2.16.
+ 
+ .cirrus.yml                                   | 109 ----------------
+ MAINTAINERS                                   |   3 +-
+ VERSION                                       |   2 +-
+ backends/cryptodev-vhost-user.c               |   3 +-
+ block/ssh.c                                   |   3 -
+ docs/about/removed-features.rst               |   4 +-
+ hw/9pfs/9p.c                                  |  12 +-
+ hw/core/qdev-properties-system.c              |  54 +++++---
+ hw/i386/acpi-build.c                          |  33 +++--
+ hw/i386/x86.c                                 |   2 +-
+ hw/intc/arm_gicv3_its.c                       |  44 +++----
+ hw/intc/loongarch_extioi.c                    |   9 +-
+ hw/intc/openpic.c                             |  15 +--
+ hw/net/virtio-net.c                           |   5 +-
+ hw/openrisc/openrisc_sim.c                    |  26 +++-
+ hw/pci/msix.c                                 |   2 +-
+ hw/pci/pcie.c                                 |  12 +-
+ hw/s390x/s390-virtio-ccw.c                    |  11 ++
+ hw/scsi/megasas.c                             |  14 +--
+ hw/usb/canokey.c                              |   6 +-
+ hw/usb/canokey.h                              |   4 -
+ hw/usb/hcd-xhci-pci.c                         |   1 +
+ include/qemu/bitmap.h                         |   8 ++
+ include/qemu/bitops.h                         | 172 +++++++++++++++++++++++++-
+ meson.build                                   |   2 +-
+ target/arm/sme_helper.c                       |   2 +-
+ target/i386/cpu.c                             |   3 +-
+ target/ppc/excp_helper.c                      |   7 ++
+ tcg/riscv/tcg-target.c.inc                    |   2 +-
+ tests/data/acpi/pc/DSDT                       | Bin 6458 -> 6476 bytes
+ tests/data/acpi/pc/DSDT.acpierst              | Bin 6418 -> 6436 bytes
+ tests/data/acpi/pc/DSDT.acpihmat              | Bin 7783 -> 7801 bytes
+ tests/data/acpi/pc/DSDT.bridge                | Bin 9532 -> 9550 bytes
+ tests/data/acpi/pc/DSDT.cphp                  | Bin 6922 -> 6940 bytes
+ tests/data/acpi/pc/DSDT.dimmpxm               | Bin 8112 -> 8130 bytes
+ tests/data/acpi/pc/DSDT.hpbridge              | Bin 6418 -> 6436 bytes
+ tests/data/acpi/pc/DSDT.ipmikcs               | Bin 6530 -> 6548 bytes
+ tests/data/acpi/pc/DSDT.memhp                 | Bin 7817 -> 7835 bytes
+ tests/data/acpi/pc/DSDT.nohpet                | Bin 6316 -> 6334 bytes
+ tests/data/acpi/pc/DSDT.numamem               | Bin 6464 -> 6482 bytes
+ tests/data/acpi/pc/DSDT.roothp                | Bin 6656 -> 6674 bytes
+ tests/data/acpi/q35/DSDT                      | Bin 8310 -> 8328 bytes
+ tests/data/acpi/q35/DSDT.acpierst             | Bin 8327 -> 8345 bytes
+ tests/data/acpi/q35/DSDT.acpihmat             | Bin 9635 -> 9653 bytes
+ tests/data/acpi/q35/DSDT.acpihmat-noinitiator | Bin 8589 -> 8607 bytes
+ tests/data/acpi/q35/DSDT.applesmc             | Bin 8356 -> 8374 bytes
+ tests/data/acpi/q35/DSDT.bridge               | Bin 11439 -> 11457 bytes
+ tests/data/acpi/q35/DSDT.core-count2          | Bin 32450 -> 32468 bytes
+ tests/data/acpi/q35/DSDT.cphp                 | Bin 8774 -> 8792 bytes
+ tests/data/acpi/q35/DSDT.cxl                  | Bin 9637 -> 9655 bytes
+ tests/data/acpi/q35/DSDT.dimmpxm              | Bin 9964 -> 9982 bytes
+ tests/data/acpi/q35/DSDT.ipmibt               | Bin 8385 -> 8403 bytes
+ tests/data/acpi/q35/DSDT.ipmismbus            | Bin 8398 -> 8416 bytes
+ tests/data/acpi/q35/DSDT.ivrs                 | Bin 8327 -> 8345 bytes
+ tests/data/acpi/q35/DSDT.memhp                | Bin 9669 -> 9687 bytes
+ tests/data/acpi/q35/DSDT.mmio64               | Bin 9440 -> 9458 bytes
+ tests/data/acpi/q35/DSDT.multi-bridge         | Bin 8630 -> 8648 bytes
+ tests/data/acpi/q35/DSDT.nohpet               | Bin 8168 -> 8186 bytes
+ tests/data/acpi/q35/DSDT.numamem              | Bin 8316 -> 8334 bytes
+ tests/data/acpi/q35/DSDT.pvpanic-isa          | Bin 8411 -> 8429 bytes
+ tests/data/acpi/q35/DSDT.tis.tpm12            | Bin 8916 -> 8934 bytes
+ tests/data/acpi/q35/DSDT.tis.tpm2             | Bin 8942 -> 8960 bytes
+ tests/data/acpi/q35/DSDT.viot                 | Bin 9419 -> 9437 bytes
+ tests/data/acpi/q35/DSDT.xapic                | Bin 35673 -> 35691 bytes
+ tests/qtest/fuzz/generic_fuzz_configs.h       |   3 +-
+ tests/qtest/libqos/virtio-9p-client.c         |   3 +-
+ tests/qtest/virtio-9p-test.c                  |  46 +++++++
+ 67 files changed, 393 insertions(+), 229 deletions(-)
+
+diff --git a/.cirrus.yml b/.cirrus.yml
+deleted file mode 100644
+index 4895987da4..0000000000
+--- a/.cirrus.yml
++++ /dev/null
+@@ -1,109 +0,0 @@
+-env:
+-  CIRRUS_CLONE_DEPTH: 1
+-
+-windows_msys2_task:
+-  timeout_in: 90m
+-  windows_container:
+-    image: cirrusci/windowsservercore:2019
+-    os_version: 2019
+-    cpu: 8
+-    memory: 8G
+-  env:
+-    CIRRUS_SHELL: powershell
+-    MSYS: winsymlinks:native
+-    MSYSTEM: MINGW64
+-    MSYS2_URL: https://github.com/msys2/msys2-installer/releases/download/2022-06-03/msys2-base-x86_64-20220603.sfx.exe
+-    MSYS2_FINGERPRINT: 0
+-    MSYS2_PACKAGES: "
+-      diffutils git grep make pkg-config sed
+-      mingw-w64-x86_64-python
+-      mingw-w64-x86_64-python-sphinx
+-      mingw-w64-x86_64-toolchain
+-      mingw-w64-x86_64-SDL2
+-      mingw-w64-x86_64-SDL2_image
+-      mingw-w64-x86_64-gtk3
+-      mingw-w64-x86_64-glib2
+-      mingw-w64-x86_64-ninja
+-      mingw-w64-x86_64-jemalloc
+-      mingw-w64-x86_64-lzo2
+-      mingw-w64-x86_64-zstd
+-      mingw-w64-x86_64-libjpeg-turbo
+-      mingw-w64-x86_64-pixman
+-      mingw-w64-x86_64-libgcrypt
+-      mingw-w64-x86_64-libpng
+-      mingw-w64-x86_64-libssh
+-      mingw-w64-x86_64-snappy
+-      mingw-w64-x86_64-libusb
+-      mingw-w64-x86_64-usbredir
+-      mingw-w64-x86_64-libtasn1
+-      mingw-w64-x86_64-nettle
+-      mingw-w64-x86_64-cyrus-sasl
+-      mingw-w64-x86_64-curl
+-      mingw-w64-x86_64-gnutls
+-      mingw-w64-x86_64-libnfs
+-    "
+-    CHERE_INVOKING: 1
+-  msys2_cache:
+-    folder: C:\tools\archive
+-    reupload_on_changes: false
+-    # These env variables are used to generate fingerprint to trigger the cache procedure
+-    # If wanna to force re-populate msys2, increase MSYS2_FINGERPRINT
+-    fingerprint_script:
+-      - |
+-        echo $env:CIRRUS_TASK_NAME
+-        echo $env:MSYS2_URL
+-        echo $env:MSYS2_FINGERPRINT
+-        echo $env:MSYS2_PACKAGES
+-    populate_script:
+-      - |
+-        md -Force C:\tools\archive\pkg
+-        $start_time = Get-Date
+-        bitsadmin /transfer msys_download /dynamic /download /priority FOREGROUND $env:MSYS2_URL C:\tools\archive\base.exe
+-        Write-Output "Download time taken: $((Get-Date).Subtract($start_time))"
+-        cd C:\tools
+-        C:\tools\archive\base.exe -y
+-        del -Force C:\tools\archive\base.exe
+-        Write-Output "Base install time taken: $((Get-Date).Subtract($start_time))"
+-        $start_time = Get-Date
+-
+-        ((Get-Content -path C:\tools\msys64\etc\\post-install\\07-pacman-key.post -Raw) -replace '--refresh-keys', '--version') | Set-Content -Path C:\tools\msys64\etc\\post-install\\07-pacman-key.post
+-        C:\tools\msys64\usr\bin\bash.exe -lc "sed -i 's/^CheckSpace/#CheckSpace/g' /etc/pacman.conf"
+-        C:\tools\msys64\usr\bin\bash.exe -lc "export"
+-        C:\tools\msys64\usr\bin\pacman.exe --noconfirm -Sy
+-        echo Y | C:\tools\msys64\usr\bin\pacman.exe --noconfirm -Suu --overwrite=*
+-        taskkill /F /FI "MODULES eq msys-2.0.dll"
+-        tasklist
+-        C:\tools\msys64\usr\bin\bash.exe -lc "mv -f /etc/pacman.conf.pacnew /etc/pacman.conf || true"
+-        C:\tools\msys64\usr\bin\bash.exe -lc "pacman --noconfirm -Syuu --overwrite=*"
+-        Write-Output "Core install time taken: $((Get-Date).Subtract($start_time))"
+-        $start_time = Get-Date
+-
+-        C:\tools\msys64\usr\bin\bash.exe -lc "pacman --noconfirm -S --needed $env:MSYS2_PACKAGES"
+-        Write-Output "Package install time taken: $((Get-Date).Subtract($start_time))"
+-        $start_time = Get-Date
+-
+-        del -Force -ErrorAction SilentlyContinue C:\tools\msys64\etc\mtab
+-        del -Force -ErrorAction SilentlyContinue C:\tools\msys64\dev\fd
+-        del -Force -ErrorAction SilentlyContinue C:\tools\msys64\dev\stderr
+-        del -Force -ErrorAction SilentlyContinue C:\tools\msys64\dev\stdin
+-        del -Force -ErrorAction SilentlyContinue C:\tools\msys64\dev\stdout
+-        del -Force -Recurse -ErrorAction SilentlyContinue C:\tools\msys64\var\cache\pacman\pkg
+-        tar cf C:\tools\archive\msys64.tar -C C:\tools\ msys64
+-
+-        Write-Output "Package archive time taken: $((Get-Date).Subtract($start_time))"
+-        del -Force -Recurse -ErrorAction SilentlyContinue c:\tools\msys64 
+-  install_script:
+-    - |
+-      $start_time = Get-Date
+-      cd C:\tools
+-      ls C:\tools\archive\msys64.tar
+-      tar xf C:\tools\archive\msys64.tar
+-      Write-Output "Extract msys2 time taken: $((Get-Date).Subtract($start_time))"
+-  script:
+-    - C:\tools\msys64\usr\bin\bash.exe -lc "mkdir build"
+-    - C:\tools\msys64\usr\bin\bash.exe -lc "cd build && ../configure --python=python3"
+-    - C:\tools\msys64\usr\bin\bash.exe -lc "cd build && make -j8"
+-    - exit $LastExitCode
+-  test_script:
+-    - C:\tools\msys64\usr\bin\bash.exe -lc "cd build && make V=1 check"
+-    - exit $LastExitCode
+diff --git a/MAINTAINERS b/MAINTAINERS
+index e688db1f55..83c4eacc66 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -3731,8 +3731,7 @@ W: https://cirrus-ci.com/github/qemu/qemu
+ Windows Hosted Continuous Integration
+ M: Yonggang Luo <luoyonggang@gmail.com>
+ S: Maintained
+-F: .cirrus.yml
+-W: https://cirrus-ci.com/github/qemu/qemu
++F: .gitlab-ci.d/windows.yml
+ 
+ Guest Test Compilation Support
+ M: Alex Bennée <alex.bennee@linaro.org>
+diff --git a/VERSION b/VERSION
+index cc53d22108..a1f5232276 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.15
++7.2.16
+diff --git a/backends/cryptodev-vhost-user.c b/backends/cryptodev-vhost-user.c
+index ab3028e045..518f18b838 100644
+--- a/backends/cryptodev-vhost-user.c
++++ b/backends/cryptodev-vhost-user.c
+@@ -283,8 +283,7 @@ static int cryptodev_vhost_user_create_session(
+         break;
+ 
+     default:
+-        error_setg(&local_error, "Unsupported opcode :%" PRIu32 "",
+-                   sess_info->op_code);
++        error_report("Unsupported opcode :%" PRIu32 "", sess_info->op_code);
+         return -VIRTIO_CRYPTO_NOTSUPP;
+     }
+ 
+diff --git a/block/ssh.c b/block/ssh.c
+index 04726d4ecb..c90d705453 100644
+--- a/block/ssh.c
++++ b/block/ssh.c
+@@ -859,9 +859,6 @@ static int ssh_file_open(BlockDriverState *bs, QDict *options, int bdrv_flags,
+         goto err;
+     }
+ 
+-    /* Go non-blocking. */
+-    ssh_set_blocking(s->session, 0);
+-
+     if (s->attrs->type == SSH_FILEXFER_TYPE_REGULAR) {
+         bs->supported_truncate_flags = BDRV_REQ_ZERO_WRITE;
+     }
+diff --git a/docs/about/removed-features.rst b/docs/about/removed-features.rst
+index 63df9848fd..93cc6e47b6 100644
+--- a/docs/about/removed-features.rst
++++ b/docs/about/removed-features.rst
+@@ -702,8 +702,8 @@ reason the maintainers strongly suspected no one actually used it.
+ TCG introspection features
+ --------------------------
+ 
+-TCG trace-events (since 6.2)
+-''''''''''''''''''''''''''''
++TCG trace-events (removed in 7.0)
++'''''''''''''''''''''''''''''''''
+ 
+ The ability to add new TCG trace points had bit rotted and as the
+ feature can be replicated with TCG plugins it was removed. If
+diff --git a/hw/9pfs/9p.c b/hw/9pfs/9p.c
+index 51ad5bfb11..d950ad6de6 100644
+--- a/hw/9pfs/9p.c
++++ b/hw/9pfs/9p.c
+@@ -1605,11 +1605,13 @@ static void coroutine_fn v9fs_getattr(void *opaque)
+         retval = -ENOENT;
+         goto out_nofid;
+     }
+-    /*
+-     * Currently we only support BASIC fields in stat, so there is no
+-     * need to look at request_mask.
+-     */
+-    retval = v9fs_co_lstat(pdu, &fidp->path, &stbuf);
++    if ((fidp->fid_type == P9_FID_FILE && fidp->fs.fd != -1) ||
++        (fidp->fid_type == P9_FID_DIR && fidp->fs.dir.stream))
++    {
++        retval = v9fs_co_fstat(pdu, fidp, &stbuf);
++    } else {
++        retval = v9fs_co_lstat(pdu, &fidp->path, &stbuf);
++    }
+     if (retval < 0) {
+         goto out;
+     }
+diff --git a/hw/core/qdev-properties-system.c b/hw/core/qdev-properties-system.c
+index a91f60567a..d350789e76 100644
+--- a/hw/core/qdev-properties-system.c
++++ b/hw/core/qdev-properties-system.c
+@@ -740,39 +740,57 @@ static void set_pci_devfn(Object *obj, Visitor *v, const char *name,
+                           void *opaque, Error **errp)
+ {
+     Property *prop = opaque;
++    g_autofree GenericAlternate *alt;
+     int32_t value, *ptr = object_field_prop_ptr(obj, prop);
+     unsigned int slot, fn, n;
+-    char *str;
++    g_autofree char *str = NULL;
++
++    if (!visit_start_alternate(v, name, &alt, sizeof(*alt), errp)) {
++        return;
++    }
++
++    switch (alt->type) {
++    case QTYPE_QSTRING:
++        if (!visit_type_str(v, name, &str, errp)) {
++            goto out;
++        }
++
++        if (sscanf(str, "%x.%x%n", &slot, &fn, &n) != 2) {
++            fn = 0;
++            if (sscanf(str, "%x%n", &slot, &n) != 1) {
++                goto invalid;
++            }
++        }
++        if (str[n] != '\0' || fn > 7 || slot > 31) {
++            goto invalid;
++        }
++        *ptr = slot << 3 | fn;
++        break;
+ 
+-    if (!visit_type_str(v, name, &str, NULL)) {
++    case QTYPE_QNUM:
+         if (!visit_type_int32(v, name, &value, errp)) {
+-            return;
++            goto out;
+         }
+         if (value < -1 || value > 255) {
+             error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
+                        name ? name : "null", "a value between -1 and 255");
+-            return;
++            goto out;
+         }
+         *ptr = value;
+-        return;
+-    }
++        break;
+ 
+-    if (sscanf(str, "%x.%x%n", &slot, &fn, &n) != 2) {
+-        fn = 0;
+-        if (sscanf(str, "%x%n", &slot, &n) != 1) {
+-            goto invalid;
+-        }
+-    }
+-    if (str[n] != '\0' || fn > 7 || slot > 31) {
+-        goto invalid;
++    default:
++        error_setg(errp, "Invalid parameter type for '%s', expected int or str",
++                   name ? name : "null");
++        goto out;
+     }
+-    *ptr = slot << 3 | fn;
+-    g_free(str);
+-    return;
++
++    goto out;
+ 
+ invalid:
+     error_set_from_qdev_prop_error(errp, EINVAL, obj, name, str);
+-    g_free(str);
++out:
++    visit_end_alternate(v, (void **) &alt);
+ }
+ 
+ static int print_pci_devfn(Object *obj, Property *prop, char *dest,
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index f9cdacadb1..79b68f2218 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -541,6 +541,7 @@ static Aml *aml_pci_pdsm(void)
+     Aml *acpi_index = aml_local(2);
+     Aml *zero = aml_int(0);
+     Aml *one = aml_int(1);
++    Aml *not_supp = aml_int(0xFFFFFFFF);
+     Aml *func = aml_arg(2);
+     Aml *rev = aml_arg(1);
+     Aml *params = aml_arg(4);
+@@ -586,7 +587,7 @@ static Aml *aml_pci_pdsm(void)
+          */
+         ifctx1 = aml_if(aml_lnot(
+                      aml_or(aml_equal(acpi_index, zero),
+-                            aml_equal(acpi_index, aml_int(0xFFFFFFFF)), NULL)
++                            aml_equal(acpi_index, not_supp), NULL)
+                  ));
+         {
+             /* have supported functions */
+@@ -612,18 +613,30 @@ static Aml *aml_pci_pdsm(void)
+     {
+        Aml *pkg = aml_package(2);
+ 
+-       aml_append(pkg, zero);
+-       /*
+-        * optional, if not impl. should return null string
+-        */
+-       aml_append(pkg, aml_string("%s", ""));
+-       aml_append(ifctx, aml_store(pkg, ret));
+-
+        aml_append(ifctx, aml_store(aml_call2("AIDX", bnum, sunum), acpi_index));
++       aml_append(ifctx, aml_store(pkg, ret));
+        /*
+-        * update acpi-index to actual value
++        * Windows calls func=7 without checking if it's available,
++        * as workaround Microsoft has suggested to return invalid for func7
++        * Package, so return 2 elements package but only initialize elements
++        * when acpi_index is supported and leave them uninitialized, which
++        * leads elements to being Uninitialized ObjectType and should trip
++        * Windows into discarding result as an unexpected and prevent setting
++        * bogus 'PCI Label' on the device.
+         */
+-       aml_append(ifctx, aml_store(acpi_index, aml_index(ret, zero)));
++       ifctx1 = aml_if(aml_lnot(aml_lor(
++                    aml_equal(acpi_index, zero), aml_equal(acpi_index, not_supp)
++                )));
++       {
++           aml_append(ifctx1, aml_store(acpi_index, aml_index(ret, zero)));
++           /*
++            * optional, if not impl. should return null string
++            */
++           aml_append(ifctx1, aml_store(aml_string("%s", ""),
++                                        aml_index(ret, one)));
++       }
++       aml_append(ifctx, ifctx1);
++
+        aml_append(ifctx, aml_return(ret));
+     }
+ 
+diff --git a/hw/i386/x86.c b/hw/i386/x86.c
+index 80be3032cc..a2925821c5 100644
+--- a/hw/i386/x86.c
++++ b/hw/i386/x86.c
+@@ -1084,7 +1084,7 @@ void x86_load_linux(X86MachineState *x86ms,
+      * kernel on the other side of the fw_cfg interface matches the hash of the
+      * file the user passed in.
+      */
+-    if (!sev_enabled()) {
++    if (!sev_enabled() && protocol > 0) {
+         memcpy(setup, header, MIN(sizeof(header), setup_size));
+     }
+ 
+diff --git a/hw/intc/arm_gicv3_its.c b/hw/intc/arm_gicv3_its.c
+index 2ff21ed6bb..05b63a0848 100644
+--- a/hw/intc/arm_gicv3_its.c
++++ b/hw/intc/arm_gicv3_its.c
+@@ -468,7 +468,7 @@ static ItsCmdResult lookup_vte(GICv3ITSState *s, const char *who,
+ static ItsCmdResult process_its_cmd_phys(GICv3ITSState *s, const ITEntry *ite,
+                                          int irqlevel)
+ {
+-    CTEntry cte;
++    CTEntry cte = {};
+     ItsCmdResult cmdres;
+ 
+     cmdres = lookup_cte(s, __func__, ite->icid, &cte);
+@@ -482,7 +482,7 @@ static ItsCmdResult process_its_cmd_phys(GICv3ITSState *s, const ITEntry *ite,
+ static ItsCmdResult process_its_cmd_virt(GICv3ITSState *s, const ITEntry *ite,
+                                          int irqlevel)
+ {
+-    VTEntry vte;
++    VTEntry vte = {};
+     ItsCmdResult cmdres;
+ 
+     cmdres = lookup_vte(s, __func__, ite->vpeid, &vte);
+@@ -517,8 +517,8 @@ static ItsCmdResult process_its_cmd_virt(GICv3ITSState *s, const ITEntry *ite,
+ static ItsCmdResult do_process_its_cmd(GICv3ITSState *s, uint32_t devid,
+                                        uint32_t eventid, ItsCmdType cmd)
+ {
+-    DTEntry dte;
+-    ITEntry ite;
++    DTEntry dte = {};
++    ITEntry ite = {};
+     ItsCmdResult cmdres;
+     int irqlevel;
+ 
+@@ -586,8 +586,8 @@ static ItsCmdResult process_mapti(GICv3ITSState *s, const uint64_t *cmdpkt,
+     uint32_t pIntid = 0;
+     uint64_t num_eventids;
+     uint16_t icid = 0;
+-    DTEntry dte;
+-    ITEntry ite;
++    DTEntry dte = {};
++    ITEntry ite = {};
+ 
+     devid = (cmdpkt[0] & DEVID_MASK) >> DEVID_SHIFT;
+     eventid = cmdpkt[1] & EVENTID_MASK;
+@@ -654,8 +654,8 @@ static ItsCmdResult process_vmapti(GICv3ITSState *s, const uint64_t *cmdpkt,
+ {
+     uint32_t devid, eventid, vintid, doorbell, vpeid;
+     uint32_t num_eventids;
+-    DTEntry dte;
+-    ITEntry ite;
++    DTEntry dte = {};
++    ITEntry ite = {};
+ 
+     if (!its_feature_virtual(s)) {
+         return CMD_CONTINUE;
+@@ -764,7 +764,7 @@ static bool update_cte(GICv3ITSState *s, uint16_t icid, const CTEntry *cte)
+ static ItsCmdResult process_mapc(GICv3ITSState *s, const uint64_t *cmdpkt)
+ {
+     uint16_t icid;
+-    CTEntry cte;
++    CTEntry cte = {};
+ 
+     icid = cmdpkt[2] & ICID_MASK;
+     cte.valid = cmdpkt[2] & CMD_FIELD_VALID_MASK;
+@@ -825,7 +825,7 @@ static bool update_dte(GICv3ITSState *s, uint32_t devid, const DTEntry *dte)
+ static ItsCmdResult process_mapd(GICv3ITSState *s, const uint64_t *cmdpkt)
+ {
+     uint32_t devid;
+-    DTEntry dte;
++    DTEntry dte = {};
+ 
+     devid = (cmdpkt[0] & DEVID_MASK) >> DEVID_SHIFT;
+     dte.size = cmdpkt[1] & SIZE_MASK;
+@@ -889,9 +889,9 @@ static ItsCmdResult process_movi(GICv3ITSState *s, const uint64_t *cmdpkt)
+ {
+     uint32_t devid, eventid;
+     uint16_t new_icid;
+-    DTEntry dte;
+-    CTEntry old_cte, new_cte;
+-    ITEntry old_ite;
++    DTEntry dte = {};
++    CTEntry old_cte = {}, new_cte = {};
++    ITEntry old_ite = {};
+     ItsCmdResult cmdres;
+ 
+     devid = FIELD_EX64(cmdpkt[0], MOVI_0, DEVICEID);
+@@ -968,7 +968,7 @@ static bool update_vte(GICv3ITSState *s, uint32_t vpeid, const VTEntry *vte)
+ 
+ static ItsCmdResult process_vmapp(GICv3ITSState *s, const uint64_t *cmdpkt)
+ {
+-    VTEntry vte;
++    VTEntry vte = {};
+     uint32_t vpeid;
+ 
+     if (!its_feature_virtual(s)) {
+@@ -1033,7 +1033,7 @@ static void vmovp_callback(gpointer data, gpointer opaque)
+      */
+     GICv3ITSState *s = data;
+     VmovpCallbackData *cbdata = opaque;
+-    VTEntry vte;
++    VTEntry vte = {};
+     ItsCmdResult cmdres;
+ 
+     cmdres = lookup_vte(s, __func__, cbdata->vpeid, &vte);
+@@ -1088,9 +1088,9 @@ static ItsCmdResult process_vmovi(GICv3ITSState *s, const uint64_t *cmdpkt)
+ {
+     uint32_t devid, eventid, vpeid, doorbell;
+     bool doorbell_valid;
+-    DTEntry dte;
+-    ITEntry ite;
+-    VTEntry old_vte, new_vte;
++    DTEntry dte = {};
++    ITEntry ite = {};
++    VTEntry old_vte = {}, new_vte = {};
+     ItsCmdResult cmdres;
+ 
+     if (!its_feature_virtual(s)) {
+@@ -1189,10 +1189,10 @@ static ItsCmdResult process_vinvall(GICv3ITSState *s, const uint64_t *cmdpkt)
+ static ItsCmdResult process_inv(GICv3ITSState *s, const uint64_t *cmdpkt)
+ {
+     uint32_t devid, eventid;
+-    ITEntry ite;
+-    DTEntry dte;
+-    CTEntry cte;
+-    VTEntry vte;
++    ITEntry ite = {};
++    DTEntry dte = {};
++    CTEntry cte = {};
++    VTEntry vte = {};
+     ItsCmdResult cmdres;
+ 
+     devid = FIELD_EX64(cmdpkt[0], INV_0, DEVICEID);
+diff --git a/hw/intc/loongarch_extioi.c b/hw/intc/loongarch_extioi.c
+index 4b8ec3f28a..fe17c7e0b1 100644
+--- a/hw/intc/loongarch_extioi.c
++++ b/hw/intc/loongarch_extioi.c
+@@ -56,14 +56,9 @@ static void extioi_setirq(void *opaque, int irq, int level)
+     LoongArchExtIOI *s = LOONGARCH_EXTIOI(opaque);
+     trace_loongarch_extioi_setirq(irq, level);
+     if (level) {
+-        /*
+-         * s->isr should be used in vmstate structure,
+-         * but it not support 'unsigned long',
+-         * so we have to switch it.
+-         */
+-        set_bit(irq, (unsigned long *)s->isr);
++        set_bit32(irq, s->isr);
+     } else {
+-        clear_bit(irq, (unsigned long *)s->isr);
++        clear_bit32(irq, s->isr);
+     }
+     extioi_update_irq(s, irq, level);
+ }
+diff --git a/hw/intc/openpic.c b/hw/intc/openpic.c
+index c757adbe53..adc79abbe5 100644
+--- a/hw/intc/openpic.c
++++ b/hw/intc/openpic.c
+@@ -1035,13 +1035,14 @@ static void openpic_cpu_write_internal(void *opaque, hwaddr addr,
+         s_IRQ = IRQ_get_next(opp, &dst->servicing);
+         /* Check queued interrupts. */
+         n_IRQ = IRQ_get_next(opp, &dst->raised);
+-        src = &opp->src[n_IRQ];
+-        if (n_IRQ != -1 &&
+-            (s_IRQ == -1 ||
+-             IVPR_PRIORITY(src->ivpr) > dst->servicing.priority)) {
+-            DPRINTF("Raise OpenPIC INT output cpu %d irq %d",
+-                    idx, n_IRQ);
+-            qemu_irq_raise(opp->dst[idx].irqs[OPENPIC_OUTPUT_INT]);
++        if (n_IRQ != -1) {
++            src = &opp->src[n_IRQ];
++            if (s_IRQ == -1 ||
++                IVPR_PRIORITY(src->ivpr) > dst->servicing.priority) {
++                DPRINTF("Raise OpenPIC INT output cpu %d irq %d",
++                        idx, n_IRQ);
++                qemu_irq_raise(opp->dst[idx].irqs[OPENPIC_OUTPUT_INT]);
++            }
+         }
+         break;
+     default:
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 925a5c319e..204a80ec71 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -1647,8 +1647,11 @@ static void virtio_net_hdr_swap(VirtIODevice *vdev, struct virtio_net_hdr *hdr)
+ static void work_around_broken_dhclient(struct virtio_net_hdr *hdr,
+                                         uint8_t *buf, size_t size)
+ {
++    size_t csum_size = ETH_HLEN + sizeof(struct ip_header) +
++                       sizeof(struct udp_header);
++
+     if ((hdr->flags & VIRTIO_NET_HDR_F_NEEDS_CSUM) && /* missing csum */
+-        (size > 27 && size < 1500) && /* normal sized MTU */
++        (size >= csum_size && size < 1500) && /* normal sized MTU */
+         (buf[12] == 0x08 && buf[13] == 0x00) && /* ethertype == IPv4 */
+         (buf[23] == 17) && /* ip.protocol == UDP */
+         (buf[34] == 0 && buf[35] == 67)) { /* udp.srcport == bootps */
+diff --git a/hw/openrisc/openrisc_sim.c b/hw/openrisc/openrisc_sim.c
+index 35da123aef..dc1fea8cd8 100644
+--- a/hw/openrisc/openrisc_sim.c
++++ b/hw/openrisc/openrisc_sim.c
+@@ -248,7 +248,7 @@ static void openrisc_sim_serial_init(Or1ksimState *state, hwaddr base,
+     void *fdt = state->fdt;
+     char *nodename;
+     qemu_irq serial_irq;
+-    char alias[sizeof("uart0")];
++    char alias[sizeof("serial0")];
+     int i;
+ 
+     if (num_cpus > 1) {
+@@ -263,7 +263,7 @@ static void openrisc_sim_serial_init(Or1ksimState *state, hwaddr base,
+         serial_irq = get_cpu_irq(cpus, 0, irq_pin);
+     }
+     serial_mm_init(get_system_memory(), base, 0, serial_irq, 115200,
+-                   serial_hd(OR1KSIM_UART_COUNT - uart_idx - 1),
++                   serial_hd(uart_idx),
+                    DEVICE_NATIVE_ENDIAN);
+ 
+     /* Add device tree node for serial. */
+@@ -275,10 +275,13 @@ static void openrisc_sim_serial_init(Or1ksimState *state, hwaddr base,
+     qemu_fdt_setprop_cell(fdt, nodename, "clock-frequency", OR1KSIM_CLK_MHZ);
+     qemu_fdt_setprop(fdt, nodename, "big-endian", NULL, 0);
+ 
+-    /* The /chosen node is created during fdt creation. */
+-    qemu_fdt_setprop_string(fdt, "/chosen", "stdout-path", nodename);
+-    snprintf(alias, sizeof(alias), "uart%d", uart_idx);
++    if (uart_idx == 0) {
++        /* The /chosen node is created during fdt creation. */
++        qemu_fdt_setprop_string(fdt, "/chosen", "stdout-path", nodename);
++    }
++    snprintf(alias, sizeof(alias), "serial%d", uart_idx);
+     qemu_fdt_setprop_string(fdt, "/aliases", alias, nodename);
++
+     g_free(nodename);
+ }
+ 
+@@ -326,11 +329,22 @@ static void openrisc_sim_init(MachineState *machine)
+                                 smp_cpus, cpus, OR1KSIM_OMPIC_IRQ);
+     }
+ 
+-    for (n = 0; n < OR1KSIM_UART_COUNT; ++n)
++    /*
++     * We create the UART nodes starting with the highest address and
++     * working downwards, because in QEMU the DTB nodes end up in the
++     * DTB in reverse order of creation. Correctly-written guest software
++     * will not care about the node order (it will look at stdout-path
++     * or the alias nodes), but for the benefit of guest software which
++     * just looks for the first UART node in the DTB, make sure the
++     * lowest-address UART (which is QEMU's first serial port) appears
++     * first in the DTB.
++     */
++    for (n = OR1KSIM_UART_COUNT - 1; n >= 0; n--) {
+         openrisc_sim_serial_init(state, or1ksim_memmap[OR1KSIM_UART].base +
+                                         or1ksim_memmap[OR1KSIM_UART].size * n,
+                                  or1ksim_memmap[OR1KSIM_UART].size,
+                                  smp_cpus, cpus, OR1KSIM_UART_IRQ, n);
++    }
+ 
+     load_addr = openrisc_load_kernel(ram_size, kernel_filename,
+                                      &boot_info.bootstrap_pc);
+diff --git a/hw/pci/msix.c b/hw/pci/msix.c
+index 4b258566d4..20e39e51b4 100644
+--- a/hw/pci/msix.c
++++ b/hw/pci/msix.c
+@@ -241,7 +241,7 @@ static uint64_t msix_pba_mmio_read(void *opaque, hwaddr addr,
+     PCIDevice *dev = opaque;
+     if (dev->msix_vector_poll_notifier) {
+         unsigned vector_start = addr * 8;
+-        unsigned vector_end = MIN(addr + size * 8, dev->msix_entries_nr);
++        unsigned vector_end = MIN((addr + size) * 8, dev->msix_entries_nr);
+         dev->msix_vector_poll_notifier(dev, vector_start, vector_end);
+     }
+ 
+diff --git a/hw/pci/pcie.c b/hw/pci/pcie.c
+index 68a62da0b5..9ffc625cc2 100644
+--- a/hw/pci/pcie.c
++++ b/hw/pci/pcie.c
+@@ -999,18 +999,22 @@ void pcie_sync_bridge_lnk(PCIDevice *bridge_dev)
+         if ((lnksta & PCI_EXP_LNKSTA_NLW) > (lnkcap & PCI_EXP_LNKCAP_MLW)) {
+             lnksta &= ~PCI_EXP_LNKSTA_NLW;
+             lnksta |= lnkcap & PCI_EXP_LNKCAP_MLW;
+-        } else if (!(lnksta & PCI_EXP_LNKSTA_NLW)) {
+-            lnksta |= QEMU_PCI_EXP_LNKSTA_NLW(QEMU_PCI_EXP_LNK_X1);
+         }
+ 
+         if ((lnksta & PCI_EXP_LNKSTA_CLS) > (lnkcap & PCI_EXP_LNKCAP_SLS)) {
+             lnksta &= ~PCI_EXP_LNKSTA_CLS;
+             lnksta |= lnkcap & PCI_EXP_LNKCAP_SLS;
+-        } else if (!(lnksta & PCI_EXP_LNKSTA_CLS)) {
+-            lnksta |= QEMU_PCI_EXP_LNKSTA_CLS(QEMU_PCI_EXP_LNK_2_5GT);
+         }
+     }
+ 
++    if (!(lnksta & PCI_EXP_LNKSTA_NLW)) {
++        lnksta |= QEMU_PCI_EXP_LNKSTA_NLW(QEMU_PCI_EXP_LNK_X1);
++    }
++
++    if (!(lnksta & PCI_EXP_LNKSTA_CLS)) {
++        lnksta |= QEMU_PCI_EXP_LNKSTA_CLS(QEMU_PCI_EXP_LNK_2_5GT);
++    }
++
+     pci_word_test_and_clear_mask(exp_cap + PCI_EXP_LNKSTA,
+                                  PCI_EXP_LNKSTA_CLS | PCI_EXP_LNKSTA_NLW);
+     pci_word_test_and_set_mask(exp_cap + PCI_EXP_LNKSTA, lnksta &
+diff --git a/hw/s390x/s390-virtio-ccw.c b/hw/s390x/s390-virtio-ccw.c
+index 16899a1814..e163ff7d05 100644
+--- a/hw/s390x/s390-virtio-ccw.c
++++ b/hw/s390x/s390-virtio-ccw.c
+@@ -171,6 +171,17 @@ static void s390_memory_init(MemoryRegion *ram)
+ {
+     MemoryRegion *sysmem = get_system_memory();
+ 
++    if (!QEMU_IS_ALIGNED(memory_region_size(ram), 1 * MiB)) {
++        /*
++         * SCLP cannot possibly expose smaller granularity right now and KVM
++         * cannot handle smaller granularity. As we don't support NUMA, the
++         * region size directly corresponds to machine->ram_size, and the region
++         * is a single RAM memory region.
++         */
++        error_report("ram size must be multiples of 1 MiB");
++        exit(EXIT_FAILURE);
++    }
++
+     /* allocate RAM for core */
+     memory_region_add_subregion(sysmem, 0, ram);
+ 
+diff --git a/hw/scsi/megasas.c b/hw/scsi/megasas.c
+index 9cbbb16121..d624866bb6 100644
+--- a/hw/scsi/megasas.c
++++ b/hw/scsi/megasas.c
+@@ -1780,7 +1780,7 @@ static int megasas_handle_io(MegasasState *s, MegasasCmd *cmd, int frame_cmd)
+     uint8_t cdb[16];
+     int len;
+     struct SCSIDevice *sdev = NULL;
+-    int target_id, lun_id, cdb_len;
++    int target_id, lun_id;
+ 
+     lba_count = le32_to_cpu(cmd->frame->io.header.data_len);
+     lba_start_lo = le32_to_cpu(cmd->frame->io.lba_lo);
+@@ -1789,7 +1789,6 @@ static int megasas_handle_io(MegasasState *s, MegasasCmd *cmd, int frame_cmd)
+ 
+     target_id = cmd->frame->header.target_id;
+     lun_id = cmd->frame->header.lun_id;
+-    cdb_len = cmd->frame->header.cdb_len;
+ 
+     if (target_id < MFI_MAX_LD && lun_id == 0) {
+         sdev = scsi_device_find(&s->bus, 0, target_id, lun_id);
+@@ -1804,15 +1803,6 @@ static int megasas_handle_io(MegasasState *s, MegasasCmd *cmd, int frame_cmd)
+         return MFI_STAT_DEVICE_NOT_FOUND;
+     }
+ 
+-    if (cdb_len > 16) {
+-        trace_megasas_scsi_invalid_cdb_len(
+-            mfi_frame_desc(frame_cmd), 1, target_id, lun_id, cdb_len);
+-        megasas_write_sense(cmd, SENSE_CODE(INVALID_OPCODE));
+-        cmd->frame->header.scsi_status = CHECK_CONDITION;
+-        s->event_count++;
+-        return MFI_STAT_SCSI_DONE_WITH_ERROR;
+-    }
+-
+     cmd->iov_size = lba_count * sdev->blocksize;
+     if (megasas_map_sgl(s, cmd, &cmd->frame->io.sgl)) {
+         megasas_write_sense(cmd, SENSE_CODE(TARGET_FAILURE));
+@@ -1823,7 +1813,7 @@ static int megasas_handle_io(MegasasState *s, MegasasCmd *cmd, int frame_cmd)
+ 
+     megasas_encode_lba(cdb, lba_start, lba_count, is_write);
+     cmd->req = scsi_req_new(sdev, cmd->index,
+-                            lun_id, cdb, cdb_len, cmd);
++                            lun_id, cdb, sizeof(cdb), cmd);
+     if (!cmd->req) {
+         trace_megasas_scsi_req_alloc_failed(
+             mfi_frame_desc(frame_cmd), target_id, lun_id);
+diff --git a/hw/usb/canokey.c b/hw/usb/canokey.c
+index bbc5da07b5..5abb8db771 100644
+--- a/hw/usb/canokey.c
++++ b/hw/usb/canokey.c
+@@ -197,8 +197,8 @@ static void canokey_handle_data(USBDevice *dev, USBPacket *p)
+     switch (p->pid) {
+     case USB_TOKEN_OUT:
+         trace_canokey_handle_data_out(ep_out, p->iov.size);
+-        usb_packet_copy(p, key->ep_out_buffer[ep_out], p->iov.size);
+         out_pos = 0;
++        /* segment packet into (possibly multiple) ep_out */
+         while (out_pos != p->iov.size) {
+             /*
+              * key->ep_out[ep_out] set by prepare_receive
+@@ -207,8 +207,8 @@ static void canokey_handle_data(USBDevice *dev, USBPacket *p)
+              * to be the buffer length
+              */
+             out_len = MIN(p->iov.size - out_pos, key->ep_out_size[ep_out]);
+-            memcpy(key->ep_out[ep_out],
+-                    key->ep_out_buffer[ep_out] + out_pos, out_len);
++            /* usb_packet_copy would update the pos offset internally */
++            usb_packet_copy(p, key->ep_out[ep_out], out_len);
+             out_pos += out_len;
+             /* update ep_out_size to actual len */
+             key->ep_out_size[ep_out] = out_len;
+diff --git a/hw/usb/canokey.h b/hw/usb/canokey.h
+index 24cf304203..fdcad10f80 100644
+--- a/hw/usb/canokey.h
++++ b/hw/usb/canokey.h
+@@ -24,8 +24,6 @@
+ #define CANOKEY_EP_NUM 3
+ /* BULK/INTR IN can be up to 1352 bytes, e.g. get key info */
+ #define CANOKEY_EP_IN_BUFFER_SIZE 2048
+-/* BULK OUT can be up to 270 bytes, e.g. PIV import cert */
+-#define CANOKEY_EP_OUT_BUFFER_SIZE 512
+ 
+ typedef enum {
+     CANOKEY_EP_IN_WAIT,
+@@ -59,8 +57,6 @@ typedef struct CanoKeyState {
+     /* OUT pointer to canokey recv buffer */
+     uint8_t *ep_out[CANOKEY_EP_NUM];
+     uint32_t ep_out_size[CANOKEY_EP_NUM];
+-    /* For large BULK OUT, multiple write to ep_out is needed */
+-    uint8_t ep_out_buffer[CANOKEY_EP_NUM][CANOKEY_EP_OUT_BUFFER_SIZE];
+ 
+     /* Properties */
+     char *file; /* canokey-file */
+diff --git a/hw/usb/hcd-xhci-pci.c b/hw/usb/hcd-xhci-pci.c
+index 643d4643e4..560ce582b2 100644
+--- a/hw/usb/hcd-xhci-pci.c
++++ b/hw/usb/hcd-xhci-pci.c
+@@ -74,6 +74,7 @@ static bool xhci_pci_intr_raise(XHCIState *xhci, int n, bool level)
+     }
+ 
+     if (msi_enabled(pci_dev) && level) {
++        n %= msi_nr_vectors_allocated(pci_dev);
+         msi_notify(pci_dev, n);
+         return true;
+     }
+diff --git a/include/qemu/bitmap.h b/include/qemu/bitmap.h
+index 3ccb00865f..1f35e0193f 100644
+--- a/include/qemu/bitmap.h
++++ b/include/qemu/bitmap.h
+@@ -69,6 +69,14 @@
+ #define DECLARE_BITMAP(name,bits)                  \
+         unsigned long name[BITS_TO_LONGS(bits)]
+ 
++/*
++ * This is for use with the bit32 versions of set_bit() etc;
++ * we don't currently support the full range of bitmap operations
++ * on bitmaps backed by an array of uint32_t.
++ */
++#define DECLARE_BITMAP32(name, bits)            \
++        uint32_t name[BITS_TO_U32S(bits)]
++
+ #define small_nbits(nbits)                      \
+         ((nbits) <= BITS_PER_LONG)
+ 
+diff --git a/include/qemu/bitops.h b/include/qemu/bitops.h
+index 03213ce952..888ac7f0e6 100644
+--- a/include/qemu/bitops.h
++++ b/include/qemu/bitops.h
+@@ -18,16 +18,47 @@
+ 
+ #define BITS_PER_BYTE           CHAR_BIT
+ #define BITS_PER_LONG           (sizeof (unsigned long) * BITS_PER_BYTE)
++#define BITS_TO_LONGS(nr)       DIV_ROUND_UP(nr, BITS_PER_BYTE * sizeof(long))
++#define BITS_TO_U32S(nr)        DIV_ROUND_UP(nr, BITS_PER_BYTE * sizeof(uint32_t))
+ 
+ #define BIT(nr)                 (1UL << (nr))
+ #define BIT_ULL(nr)             (1ULL << (nr))
+-#define BIT_MASK(nr)            (1UL << ((nr) % BITS_PER_LONG))
+-#define BIT_WORD(nr)            ((nr) / BITS_PER_LONG)
+-#define BITS_TO_LONGS(nr)       DIV_ROUND_UP(nr, BITS_PER_BYTE * sizeof(long))
+ 
+ #define MAKE_64BIT_MASK(shift, length) \
+     (((~0ULL) >> (64 - (length))) << (shift))
+ 
++/**
++ * DOC: Functions operating on arrays of bits
++ *
++ * We provide a set of functions which work on arbitrary-length arrays of
++ * bits. These come in several flavours which vary in what the type of the
++ * underlying storage for the bits is:
++ *
++ * - Bits stored in an array of 'unsigned long': set_bit(), clear_bit(), etc
++ * - Bits stored in an array of 'uint32_t': set_bit32(), clear_bit32(), etc
++ *
++ * Because the 'unsigned long' type has a size which varies between
++ * host systems, the versions using 'uint32_t' are often preferable.
++ * This is particularly the case in a device model where there may
++ * be some guest-visible register view of the bit array.
++ *
++ * We do not currently implement uint32_t versions of find_last_bit(),
++ * find_next_bit(), find_next_zero_bit(), find_first_bit() or
++ * find_first_zero_bit(), because we haven't yet needed them. If you
++ * need them you should implement them similarly to the 'unsigned long'
++ * versions.
++ *
++ * You can declare a bitmap to be used with these functions via the
++ * DECLARE_BITMAP and DECLARE_BITMAP32 macros in bitmap.h.
++ */
++
++/**
++ * DOC:  'unsigned long' bit array APIs
++ */
++
++#define BIT_MASK(nr)            (1UL << ((nr) % BITS_PER_LONG))
++#define BIT_WORD(nr)            ((nr) / BITS_PER_LONG)
++
+ /**
+  * set_bit - Set a bit in memory
+  * @nr: the bit to set
+@@ -211,6 +242,141 @@ static inline unsigned long find_first_zero_bit(const unsigned long *addr,
+     return find_next_zero_bit(addr, size, 0);
+ }
+ 
++/**
++ * DOC:  'uint32_t' bit array APIs
++ */
++
++#define BIT32_MASK(nr)            (1UL << ((nr) % 32))
++#define BIT32_WORD(nr)            ((nr) / 32)
++
++/**
++ * set_bit32 - Set a bit in memory
++ * @nr: the bit to set
++ * @addr: the address to start counting from
++ */
++static inline void set_bit32(long nr, uint32_t *addr)
++{
++    uint32_t mask = BIT32_MASK(nr);
++    uint32_t *p = addr + BIT32_WORD(nr);
++
++    *p  |= mask;
++}
++
++/**
++ * set_bit32_atomic - Set a bit in memory atomically
++ * @nr: the bit to set
++ * @addr: the address to start counting from
++ */
++static inline void set_bit32_atomic(long nr, uint32_t *addr)
++{
++    uint32_t mask = BIT32_MASK(nr);
++    uint32_t *p = addr + BIT32_WORD(nr);
++
++    qatomic_or(p, mask);
++}
++
++/**
++ * clear_bit32 - Clears a bit in memory
++ * @nr: Bit to clear
++ * @addr: Address to start counting from
++ */
++static inline void clear_bit32(long nr, uint32_t *addr)
++{
++    uint32_t mask = BIT32_MASK(nr);
++    uint32_t *p = addr + BIT32_WORD(nr);
++
++    *p &= ~mask;
++}
++
++/**
++ * clear_bit32_atomic - Clears a bit in memory atomically
++ * @nr: Bit to clear
++ * @addr: Address to start counting from
++ */
++static inline void clear_bit32_atomic(long nr, uint32_t *addr)
++{
++    uint32_t mask = BIT32_MASK(nr);
++    uint32_t *p = addr + BIT32_WORD(nr);
++
++    return qatomic_and(p, ~mask);
++}
++
++/**
++ * change_bit32 - Toggle a bit in memory
++ * @nr: Bit to change
++ * @addr: Address to start counting from
++ */
++static inline void change_bit32(long nr, uint32_t *addr)
++{
++    uint32_t mask = BIT32_MASK(nr);
++    uint32_t *p = addr + BIT32_WORD(nr);
++
++    *p ^= mask;
++}
++
++/**
++ * test_and_set_bit32 - Set a bit and return its old value
++ * @nr: Bit to set
++ * @addr: Address to count from
++ */
++static inline int test_and_set_bit32(long nr, uint32_t *addr)
++{
++    uint32_t mask = BIT32_MASK(nr);
++    uint32_t *p = addr + BIT32_WORD(nr);
++    uint32_t old = *p;
++
++    *p = old | mask;
++    return (old & mask) != 0;
++}
++
++/**
++ * test_and_clear_bit32 - Clear a bit and return its old value
++ * @nr: Bit to clear
++ * @addr: Address to count from
++ */
++static inline int test_and_clear_bit32(long nr, uint32_t *addr)
++{
++    uint32_t mask = BIT32_MASK(nr);
++    uint32_t *p = addr + BIT32_WORD(nr);
++    uint32_t old = *p;
++
++    *p = old & ~mask;
++    return (old & mask) != 0;
++}
++
++/**
++ * test_and_change_bit32 - Change a bit and return its old value
++ * @nr: Bit to change
++ * @addr: Address to count from
++ */
++static inline int test_and_change_bit32(long nr, uint32_t *addr)
++{
++    uint32_t mask = BIT32_MASK(nr);
++    uint32_t *p = addr + BIT32_WORD(nr);
++    uint32_t old = *p;
++
++    *p = old ^ mask;
++    return (old & mask) != 0;
++}
++
++/**
++ * test_bit32 - Determine whether a bit is set
++ * @nr: bit number to test
++ * @addr: Address to start counting from
++ */
++static inline int test_bit32(long nr, const uint32_t *addr)
++{
++    return 1U & (addr[BIT32_WORD(nr)] >> (nr & 31));
++}
++
++/**
++ * DOC: Miscellaneous bit operations on single values
++ *
++ * These functions are a collection of useful operations
++ * (rotations, bit extract, bit deposit, etc) on single
++ * integer values.
++ */
++
+ /**
+  * rol8 - rotate an 8-bit value left
+  * @word: value to rotate
+diff --git a/meson.build b/meson.build
+index 16dc9627e0..c0608332cd 100644
+--- a/meson.build
++++ b/meson.build
+@@ -580,7 +580,7 @@ endif
+ 
+ libnfs = not_found
+ if not get_option('libnfs').auto() or have_block
+-  libnfs = dependency('libnfs', version: '>=1.9.3',
++  libnfs = dependency('libnfs', version: ['>=1.9.3', '<6.0.0'],
+                       required: get_option('libnfs'),
+                       method: 'pkg-config', kwargs: static_kwargs)
+ endif
+diff --git a/target/arm/sme_helper.c b/target/arm/sme_helper.c
+index 98a4840970..fd5625c87e 100644
+--- a/target/arm/sme_helper.c
++++ b/target/arm/sme_helper.c
+@@ -35,7 +35,7 @@ void arm_reset_sve_state(CPUARMState *env)
+     memset(env->vfp.zregs, 0, sizeof(env->vfp.zregs));
+     /* Recall that FFR is stored as pregs[16]. */
+     memset(env->vfp.pregs, 0, sizeof(env->vfp.pregs));
+-    vfp_set_fpcr(env, 0x0800009f);
++    vfp_set_fpsr(env, 0x0800009f);
+ }
+ 
+ void helper_set_pstate_sm(CPUARMState *env, uint32_t i)
+diff --git a/target/i386/cpu.c b/target/i386/cpu.c
+index 9c3e64c54b..489ab9cd41 100644
+--- a/target/i386/cpu.c
++++ b/target/i386/cpu.c
+@@ -3044,6 +3044,7 @@ static const X86CPUDefinition builtin_x86_defs[] = {
+             },
+             {
+                 .version = 4,
++                .note = "IBRS, EPT switching, no TSX",
+                 .props = (PropValue[]) {
+                     { "vmx-eptp-switching", "on" },
+                     { /* end of list */ }
+@@ -3178,7 +3179,7 @@ static const X86CPUDefinition builtin_x86_defs[] = {
+               },
+             },
+             { .version = 4,
+-              .note = "ARCH_CAPABILITIES, no TSX",
++              .note = "ARCH_CAPABILITIES, EPT switching, no TSX",
+               .props = (PropValue[]) {
+                   { "vmx-eptp-switching", "on" },
+                   { /* end of list */ }
+diff --git a/target/ppc/excp_helper.c b/target/ppc/excp_helper.c
+index 839d95c1eb..037efc04af 100644
+--- a/target/ppc/excp_helper.c
++++ b/target/ppc/excp_helper.c
+@@ -2511,10 +2511,16 @@ static void ppc_deliver_interrupt(CPUPPCState *env, int interrupt)
+     }
+ }
+ 
++/*
++ * system reset is not delivered via normal irq method, so have to set
++ * halted = 0 to resume CPU running if it was halted. Possibly we should
++ * move it over to using PPC_INTERRUPT_RESET rather than async_run_on_cpu.
++ */
+ void ppc_cpu_do_system_reset(CPUState *cs)
+ {
+     PowerPCCPU *cpu = POWERPC_CPU(cs);
+ 
++    cs->halted = 0;
+     powerpc_excp(cpu, POWERPC_EXCP_RESET);
+ }
+ 
+@@ -2536,6 +2542,7 @@ void ppc_cpu_do_fwnmi_machine_check(CPUState *cs, target_ulong vector)
+ 
+     /* Anything for nested required here? MSR[HV] bit? */
+ 
++    cs->halted = 0;
+     powerpc_set_excp_state(cpu, vector, msr);
+ }
+ 
+diff --git a/tcg/riscv/tcg-target.c.inc b/tcg/riscv/tcg-target.c.inc
+index 81a83e45b1..e91a7aaf0e 100644
+--- a/tcg/riscv/tcg-target.c.inc
++++ b/tcg/riscv/tcg-target.c.inc
+@@ -838,7 +838,7 @@ static void tcg_out_mb(TCGContext *s, TCGArg a0)
+         insn |= 0x02100000;
+     }
+     if (a0 & TCG_MO_ST_ST) {
+-        insn |= 0x02200000;
++        insn |= 0x01100000;
+     }
+     tcg_out32(s, insn);
+ }
+diff --git a/tests/data/acpi/pc/DSDT b/tests/data/acpi/pc/DSDT
+index b688686dc3..246bcadaa7 100644
+Binary files a/tests/data/acpi/pc/DSDT and b/tests/data/acpi/pc/DSDT differ
+diff --git a/tests/data/acpi/pc/DSDT.acpierst b/tests/data/acpi/pc/DSDT.acpierst
+index 86259be9d1..3074cecb6c 100644
+Binary files a/tests/data/acpi/pc/DSDT.acpierst and b/tests/data/acpi/pc/DSDT.acpierst differ
+diff --git a/tests/data/acpi/pc/DSDT.acpihmat b/tests/data/acpi/pc/DSDT.acpihmat
+index e2cc2a6fc9..0a32881d58 100644
+Binary files a/tests/data/acpi/pc/DSDT.acpihmat and b/tests/data/acpi/pc/DSDT.acpihmat differ
+diff --git a/tests/data/acpi/pc/DSDT.bridge b/tests/data/acpi/pc/DSDT.bridge
+index 75016fd4b7..95c12aa316 100644
+Binary files a/tests/data/acpi/pc/DSDT.bridge and b/tests/data/acpi/pc/DSDT.bridge differ
+diff --git a/tests/data/acpi/pc/DSDT.cphp b/tests/data/acpi/pc/DSDT.cphp
+index 53eb0dd7d4..ac40cbc595 100644
+Binary files a/tests/data/acpi/pc/DSDT.cphp and b/tests/data/acpi/pc/DSDT.cphp differ
+diff --git a/tests/data/acpi/pc/DSDT.dimmpxm b/tests/data/acpi/pc/DSDT.dimmpxm
+index 9089d994e0..b8b62cf9e9 100644
+Binary files a/tests/data/acpi/pc/DSDT.dimmpxm and b/tests/data/acpi/pc/DSDT.dimmpxm differ
+diff --git a/tests/data/acpi/pc/DSDT.hpbridge b/tests/data/acpi/pc/DSDT.hpbridge
+index 86259be9d1..3074cecb6c 100644
+Binary files a/tests/data/acpi/pc/DSDT.hpbridge and b/tests/data/acpi/pc/DSDT.hpbridge differ
+diff --git a/tests/data/acpi/pc/DSDT.ipmikcs b/tests/data/acpi/pc/DSDT.ipmikcs
+index 39427103aa..40edcc0f94 100644
+Binary files a/tests/data/acpi/pc/DSDT.ipmikcs and b/tests/data/acpi/pc/DSDT.ipmikcs differ
+diff --git a/tests/data/acpi/pc/DSDT.memhp b/tests/data/acpi/pc/DSDT.memhp
+index 987a263339..b2a7fd0dbd 100644
+Binary files a/tests/data/acpi/pc/DSDT.memhp and b/tests/data/acpi/pc/DSDT.memhp differ
+diff --git a/tests/data/acpi/pc/DSDT.nohpet b/tests/data/acpi/pc/DSDT.nohpet
+index fc7598b762..713aae4d8a 100644
+Binary files a/tests/data/acpi/pc/DSDT.nohpet and b/tests/data/acpi/pc/DSDT.nohpet differ
+diff --git a/tests/data/acpi/pc/DSDT.numamem b/tests/data/acpi/pc/DSDT.numamem
+index 85af400cdb..70b44ec476 100644
+Binary files a/tests/data/acpi/pc/DSDT.numamem and b/tests/data/acpi/pc/DSDT.numamem differ
+diff --git a/tests/data/acpi/pc/DSDT.roothp b/tests/data/acpi/pc/DSDT.roothp
+index 545512adfa..1030c94cc5 100644
+Binary files a/tests/data/acpi/pc/DSDT.roothp and b/tests/data/acpi/pc/DSDT.roothp differ
+diff --git a/tests/data/acpi/q35/DSDT b/tests/data/acpi/q35/DSDT
+index 2771bcea89..5c2b505163 100644
+Binary files a/tests/data/acpi/q35/DSDT and b/tests/data/acpi/q35/DSDT differ
+diff --git a/tests/data/acpi/q35/DSDT.acpierst b/tests/data/acpi/q35/DSDT.acpierst
+index b45abca7c2..1fd50e1c8b 100644
+Binary files a/tests/data/acpi/q35/DSDT.acpierst and b/tests/data/acpi/q35/DSDT.acpierst differ
+diff --git a/tests/data/acpi/q35/DSDT.acpihmat b/tests/data/acpi/q35/DSDT.acpihmat
+index d90fd4723a..c224736325 100644
+Binary files a/tests/data/acpi/q35/DSDT.acpihmat and b/tests/data/acpi/q35/DSDT.acpihmat differ
+diff --git a/tests/data/acpi/q35/DSDT.acpihmat-noinitiator b/tests/data/acpi/q35/DSDT.acpihmat-noinitiator
+index 279fafa821..ecdb94cc67 100644
+Binary files a/tests/data/acpi/q35/DSDT.acpihmat-noinitiator and b/tests/data/acpi/q35/DSDT.acpihmat-noinitiator differ
+diff --git a/tests/data/acpi/q35/DSDT.applesmc b/tests/data/acpi/q35/DSDT.applesmc
+index fdf6d14428..241a02dcf4 100644
+Binary files a/tests/data/acpi/q35/DSDT.applesmc and b/tests/data/acpi/q35/DSDT.applesmc differ
+diff --git a/tests/data/acpi/q35/DSDT.bridge b/tests/data/acpi/q35/DSDT.bridge
+index b41a4dddc0..bb41a3c218 100644
+Binary files a/tests/data/acpi/q35/DSDT.bridge and b/tests/data/acpi/q35/DSDT.bridge differ
+diff --git a/tests/data/acpi/q35/DSDT.core-count2 b/tests/data/acpi/q35/DSDT.core-count2
+index 375aceed6b..5e0da94644 100644
+Binary files a/tests/data/acpi/q35/DSDT.core-count2 and b/tests/data/acpi/q35/DSDT.core-count2 differ
+diff --git a/tests/data/acpi/q35/DSDT.cphp b/tests/data/acpi/q35/DSDT.cphp
+index a0ecafc36c..6d64cd51f6 100644
+Binary files a/tests/data/acpi/q35/DSDT.cphp and b/tests/data/acpi/q35/DSDT.cphp differ
+diff --git a/tests/data/acpi/q35/DSDT.cxl b/tests/data/acpi/q35/DSDT.cxl
+index 267709e4e4..737e5a2447 100644
+Binary files a/tests/data/acpi/q35/DSDT.cxl and b/tests/data/acpi/q35/DSDT.cxl differ
+diff --git a/tests/data/acpi/q35/DSDT.dimmpxm b/tests/data/acpi/q35/DSDT.dimmpxm
+index f0659716e3..665a0c88ff 100644
+Binary files a/tests/data/acpi/q35/DSDT.dimmpxm and b/tests/data/acpi/q35/DSDT.dimmpxm differ
+diff --git a/tests/data/acpi/q35/DSDT.ipmibt b/tests/data/acpi/q35/DSDT.ipmibt
+index 9c52529919..25ddd90f8e 100644
+Binary files a/tests/data/acpi/q35/DSDT.ipmibt and b/tests/data/acpi/q35/DSDT.ipmibt differ
+diff --git a/tests/data/acpi/q35/DSDT.ipmismbus b/tests/data/acpi/q35/DSDT.ipmismbus
+index 3f32dffdbf..3367016d9a 100644
+Binary files a/tests/data/acpi/q35/DSDT.ipmismbus and b/tests/data/acpi/q35/DSDT.ipmismbus differ
+diff --git a/tests/data/acpi/q35/DSDT.ivrs b/tests/data/acpi/q35/DSDT.ivrs
+index b45abca7c2..1fd50e1c8b 100644
+Binary files a/tests/data/acpi/q35/DSDT.ivrs and b/tests/data/acpi/q35/DSDT.ivrs differ
+diff --git a/tests/data/acpi/q35/DSDT.memhp b/tests/data/acpi/q35/DSDT.memhp
+index 28a192c69a..bfd2278260 100644
+Binary files a/tests/data/acpi/q35/DSDT.memhp and b/tests/data/acpi/q35/DSDT.memhp differ
+diff --git a/tests/data/acpi/q35/DSDT.mmio64 b/tests/data/acpi/q35/DSDT.mmio64
+index 8fda921296..5b50f66a1e 100644
+Binary files a/tests/data/acpi/q35/DSDT.mmio64 and b/tests/data/acpi/q35/DSDT.mmio64 differ
+diff --git a/tests/data/acpi/q35/DSDT.multi-bridge b/tests/data/acpi/q35/DSDT.multi-bridge
+index 3dba4d8436..2f37a6f8b6 100644
+Binary files a/tests/data/acpi/q35/DSDT.multi-bridge and b/tests/data/acpi/q35/DSDT.multi-bridge differ
+diff --git a/tests/data/acpi/q35/DSDT.nohpet b/tests/data/acpi/q35/DSDT.nohpet
+index b116947dac..5c17ed809d 100644
+Binary files a/tests/data/acpi/q35/DSDT.nohpet and b/tests/data/acpi/q35/DSDT.nohpet differ
+diff --git a/tests/data/acpi/q35/DSDT.numamem b/tests/data/acpi/q35/DSDT.numamem
+index 5eb6159d5f..e92f2a0c7a 100644
+Binary files a/tests/data/acpi/q35/DSDT.numamem and b/tests/data/acpi/q35/DSDT.numamem differ
+diff --git a/tests/data/acpi/q35/DSDT.pvpanic-isa b/tests/data/acpi/q35/DSDT.pvpanic-isa
+index 908e7b6606..308ed32bf0 100644
+Binary files a/tests/data/acpi/q35/DSDT.pvpanic-isa and b/tests/data/acpi/q35/DSDT.pvpanic-isa differ
+diff --git a/tests/data/acpi/q35/DSDT.tis.tpm12 b/tests/data/acpi/q35/DSDT.tis.tpm12
+index ce2c2c29c2..a7ec593951 100644
+Binary files a/tests/data/acpi/q35/DSDT.tis.tpm12 and b/tests/data/acpi/q35/DSDT.tis.tpm12 differ
+diff --git a/tests/data/acpi/q35/DSDT.tis.tpm2 b/tests/data/acpi/q35/DSDT.tis.tpm2
+index e9e4b7f6ed..ee242eceba 100644
+Binary files a/tests/data/acpi/q35/DSDT.tis.tpm2 and b/tests/data/acpi/q35/DSDT.tis.tpm2 differ
+diff --git a/tests/data/acpi/q35/DSDT.viot b/tests/data/acpi/q35/DSDT.viot
+index 6b436f9cd9..60451836ff 100644
+Binary files a/tests/data/acpi/q35/DSDT.viot and b/tests/data/acpi/q35/DSDT.viot differ
+diff --git a/tests/data/acpi/q35/DSDT.xapic b/tests/data/acpi/q35/DSDT.xapic
+index f47f091222..9f96175d93 100644
+Binary files a/tests/data/acpi/q35/DSDT.xapic and b/tests/data/acpi/q35/DSDT.xapic differ
+diff --git a/tests/qtest/fuzz/generic_fuzz_configs.h b/tests/qtest/fuzz/generic_fuzz_configs.h
+index a825b78c14..4c3235311b 100644
+--- a/tests/qtest/fuzz/generic_fuzz_configs.h
++++ b/tests/qtest/fuzz/generic_fuzz_configs.h
+@@ -143,7 +143,8 @@ const generic_fuzz_config predefined_configs[] = {
+         "-chardev null,id=cd0 -chardev null,id=cd1 "
+         "-device usb-braille,chardev=cd0 -device usb-ccid -device usb-ccid "
+         "-device usb-kbd -device usb-mouse -device usb-serial,chardev=cd1 "
+-        "-device usb-tablet -device usb-wacom-tablet -device usb-audio",
++        "-device usb-tablet -device usb-wacom-tablet "
++        "-device usb-audio,audiodev=snd0 -audiodev none,id=snd0",
+         .objects = "*usb* *uhci* *xhci*",
+     },{
+         .name = "pc-i440fx",
+diff --git a/tests/qtest/libqos/virtio-9p-client.c b/tests/qtest/libqos/virtio-9p-client.c
+index e4a368e036..340e704d24 100644
+--- a/tests/qtest/libqos/virtio-9p-client.c
++++ b/tests/qtest/libqos/virtio-9p-client.c
+@@ -235,10 +235,11 @@ static const char *rmessage_name(uint8_t id)
+         id == P9_RMKDIR ? "RMKDIR" :
+         id == P9_RLCREATE ? "RLCREATE" :
+         id == P9_RSYMLINK ? "RSYMLINK" :
++        id == P9_RGETATTR ? "RGETATTR" :
+         id == P9_RLINK ? "RLINK" :
+         id == P9_RUNLINKAT ? "RUNLINKAT" :
+         id == P9_RFLUSH ? "RFLUSH" :
+-        id == P9_RREADDIR ? "READDIR" :
++        id == P9_RREADDIR ? "RREADDIR" :
+         "<unknown>";
+ }
+ 
+diff --git a/tests/qtest/virtio-9p-test.c b/tests/qtest/virtio-9p-test.c
+index 65e69491e5..86ff86409c 100644
+--- a/tests/qtest/virtio-9p-test.c
++++ b/tests/qtest/virtio-9p-test.c
+@@ -693,6 +693,50 @@ static void fs_unlinkat_hardlink(void *obj, void *data,
+     g_assert(stat(real_file, &st_real) == 0);
+ }
+ 
++static void fs_use_after_unlink(void *obj, void *data,
++                                QGuestAllocator *t_alloc)
++{
++    QVirtio9P *v9p = obj;
++    v9fs_set_allocator(t_alloc);
++    static const uint32_t write_count = P9_MAX_SIZE / 2;
++    g_autofree char *real_file = virtio_9p_test_path("09/doa_file");
++    g_autofree char *buf = g_malloc0(write_count);
++    struct stat st_file;
++    struct v9fs_attr attr;
++    uint32_t fid_file;
++    uint32_t count;
++
++    tattach({ .client = v9p });
++
++    /* create a file "09/doa_file" and make sure it exists and is regular */
++    tmkdir({ .client = v9p, .atPath = "/", .name = "09" });
++    tlcreate({ .client = v9p, .atPath = "09", .name = "doa_file" });
++    g_assert(stat(real_file, &st_file) == 0);
++    g_assert((st_file.st_mode & S_IFMT) == S_IFREG);
++
++    /* request a FID for that regular file that we can work with next */
++    fid_file = twalk({
++        .client = v9p, .fid = 0, .path = "09/doa_file"
++    }).newfid;
++    g_assert(fid_file != 0);
++
++    /* now first open the file in write mode before ... */
++    tlopen({ .client = v9p, .fid = fid_file, .flags = O_WRONLY });
++    /* ... removing the file from file system */
++    tunlinkat({ .client = v9p, .atPath = "09", .name = "doa_file" });
++
++    /* file is removed, but we still have it open, so this should succeed */
++    tgetattr({
++        .client = v9p, .fid = fid_file, .request_mask = P9_GETATTR_BASIC,
++        .rgetattr.attr = &attr
++    });
++    count = twrite({
++        .client = v9p, .fid = fid_file, .offset = 0, .count = write_count,
++        .data = buf
++    }).count;
++    g_assert_cmpint(count, ==, write_count);
++}
++
+ static void *assign_9p_local_driver(GString *cmd_line, void *arg)
+ {
+     virtio_9p_assign_local_driver(cmd_line, "security_model=mapped-xattr");
+@@ -756,6 +800,8 @@ static void register_virtio_9p_test(void)
+     qos_add_test("local/hardlink_file", "virtio-9p", fs_hardlink_file, &opts);
+     qos_add_test("local/unlinkat_hardlink", "virtio-9p", fs_unlinkat_hardlink,
+                  &opts);
++    qos_add_test("local/use_after_unlink", "virtio-9p", fs_use_after_unlink,
++                 &opts);
+ }
+ 
+ libqos_init(register_virtio_9p_test);

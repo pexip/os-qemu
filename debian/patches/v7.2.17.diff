@@ -1,0 +1,1397 @@
+Subject: v7.2.17
+Date: Wed Mar 26 12:13:29 2025 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.16
+and upstream qemu v7.2.17.
+
+ VERSION                            |   2 +-
+ backends/cryptodev-vhost.c         |   2 +-
+ block/qed.c                        |   1 +
+ block/snapshot.c                   |   1 +
+ docs/devel/build-system.rst        |  10 +--
+ docs/devel/kconfig.rst             |  16 ++--
+ hw/arm/Kconfig                     |   6 +-
+ hw/gpio/npcm7xx_gpio.c             |   3 +-
+ hw/i386/amd_iommu.c                |  10 +--
+ hw/i386/amd_iommu.h                |   2 +-
+ hw/intc/arm_gicv3_cpuif.c          |   9 ---
+ hw/misc/aspeed_hace.c              |   5 ++
+ hw/net/smc91c111.c                 | 149 +++++++++++++++++++++++++++++++++----
+ hw/ppc/pnv_occ.c                   |  33 ++++----
+ hw/rtc/goldfish_rtc.c              |  43 ++++-------
+ hw/usb/Kconfig                     |   4 +
+ hw/usb/meson.build                 |   2 +-
+ hw/virtio/vhost-shadow-virtqueue.c |  18 +++--
+ linux-user/syscall.c               |   4 +-
+ net/vhost-vdpa.c                   |  13 ++++
+ target/arm/cpu.h                   |   1 +
+ target/arm/helper.c                |  21 ++++--
+ target/arm/op_helper.c             |  13 +++-
+ target/arm/translate-a64.c         |  37 ++++-----
+ target/arm/translate-a64.h         |   2 +-
+ target/arm/translate.h             |  10 ++-
+ target/ppc/cpu_init.c              |   8 --
+ target/riscv/cpu_helper.c          |  18 +++++
+ target/riscv/debug.c               |   6 +-
+ target/riscv/vector_helper.c       |   8 +-
+ target/sparc/gdbstub.c             |  18 ++++-
+ ui/cocoa.m                         |   5 ++
+ ui/meson.build                     |   2 -
+ ui/sdl2.c                          |  26 -------
+ util/cacheflush.c                  |   4 +-
+ 35 files changed, 333 insertions(+), 179 deletions(-)
+
+diff --git a/VERSION b/VERSION
+index a1f5232276..a961ff94f2 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.16
++7.2.17
+diff --git a/backends/cryptodev-vhost.c b/backends/cryptodev-vhost.c
+index 572f87b3be..af1d232a9e 100644
+--- a/backends/cryptodev-vhost.c
++++ b/backends/cryptodev-vhost.c
+@@ -54,7 +54,7 @@ cryptodev_vhost_init(
+     CryptoDevBackendVhost *crypto;
+     Error *local_err = NULL;
+ 
+-    crypto = g_new(CryptoDevBackendVhost, 1);
++    crypto = g_new0(CryptoDevBackendVhost, 1);
+     crypto->dev.max_queues = 1;
+     crypto->dev.nvqs = 1;
+     crypto->dev.vqs = crypto->vqs;
+diff --git a/block/qed.c b/block/qed.c
+index 2f36ad342c..1ebb00fe04 100644
+--- a/block/qed.c
++++ b/block/qed.c
+@@ -340,6 +340,7 @@ static void bdrv_qed_detach_aio_context(BlockDriverState *bs)
+ 
+     qed_cancel_need_check_timer(s);
+     timer_free(s->need_check_timer);
++    s->need_check_timer = NULL;
+ }
+ 
+ static void bdrv_qed_attach_aio_context(BlockDriverState *bs,
+diff --git a/block/snapshot.c b/block/snapshot.c
+index 86e29ca59f..2f6c35f7eb 100644
+--- a/block/snapshot.c
++++ b/block/snapshot.c
+@@ -286,6 +286,7 @@ int bdrv_snapshot_goto(BlockDriverState *bs,
+         bdrv_unref_child(bs, fallback);
+ 
+         ret = bdrv_snapshot_goto(fallback_bs, snapshot_id, errp);
++        memset(bs->opaque, 0, drv->instance_size);
+         open_ret = drv->bdrv_open(bs, options, bs->open_flags, &local_err);
+         qobject_unref(options);
+         if (open_ret < 0) {
+diff --git a/docs/devel/build-system.rst b/docs/devel/build-system.rst
+index 1894721743..21fff65d28 100644
+--- a/docs/devel/build-system.rst
++++ b/docs/devel/build-system.rst
+@@ -193,7 +193,7 @@ Target-dependent emulator sourcesets:
+   Each emulator also includes sources for files in the ``hw/`` and ``target/``
+   subdirectories.  The subdirectory used for each emulator comes
+   from the target's definition of ``TARGET_BASE_ARCH`` or (if missing)
+-  ``TARGET_ARCH``, as found in ``default-configs/targets/*.mak``.
++  ``TARGET_ARCH``, as found in ``configs/targets/*.mak``.
+ 
+   Each subdirectory in ``hw/`` adds one sourceset to the ``hw_arch`` dictionary,
+   for example::
+@@ -250,8 +250,8 @@ Utility sourcesets:
+ The following files concur in the definition of which files are linked
+ into each emulator:
+ 
+-``default-configs/devices/*.mak``
+-  The files under ``default-configs/devices/`` control the boards and devices
++``configs/devices/*.mak``
++  The files under ``configs/devices/`` control the boards and devices
+   that are built into each QEMU system emulation targets. They merely contain
+   a list of config variable definitions such as::
+ 
+@@ -260,11 +260,11 @@ into each emulator:
+     CONFIG_XLNX_VERSAL=y
+ 
+ ``*/Kconfig``
+-  These files are processed together with ``default-configs/devices/*.mak`` and
++  These files are processed together with ``configs/devices/*.mak`` and
+   describe the dependencies between various features, subsystems and
+   device models.  They are described in :ref:`kconfig`
+ 
+-``default-configs/targets/*.mak``
++``configs/targets/*.mak``
+   These files mostly define symbols that appear in the ``*-config-target.h``
+   file for each emulator [#cfgtarget]_.  However, the ``TARGET_ARCH``
+   and ``TARGET_BASE_ARCH`` will also be used to select the ``hw/`` and
+diff --git a/docs/devel/kconfig.rst b/docs/devel/kconfig.rst
+index 69674d008a..ba5e1f399a 100644
+--- a/docs/devel/kconfig.rst
++++ b/docs/devel/kconfig.rst
+@@ -38,7 +38,7 @@ originated in the Linux kernel, though it was heavily simplified and
+ the handling of dependencies is stricter in QEMU.
+ 
+ Unlike Linux, there is no user interface to edit the configuration, which
+-is instead specified in per-target files under the ``default-configs/``
++is instead specified in per-target files under the ``configs/``
+ directory of the QEMU source tree.  This is because, unlike Linux,
+ configuration and dependencies can be treated as a black box when building
+ QEMU; the default configuration that QEMU ships with should be okay in
+@@ -103,7 +103,7 @@ directives can be included:
+ **default value**: ``default <value> [if <expr>]``
+ 
+   Default values are assigned to the config symbol if no other value was
+-  set by the user via ``default-configs/*.mak`` files, and only if
++  set by the user via ``configs/*.mak`` files, and only if
+   ``select`` or ``depends on`` directives do not force the value to true
+   or false respectively.  ``<value>`` can be ``y`` or ``n``; it cannot
+   be an arbitrary Boolean expression.  However, a condition for applying
+@@ -119,7 +119,7 @@ directives can be included:
+   This is similar to ``select`` as it applies a lower limit of ``y``
+   to another symbol.  However, the lower limit is only a default
+   and the "implied" symbol's value may still be set to ``n`` from a
+-  ``default-configs/*.mak`` files.  The following two examples are
++  ``configs/*.mak`` files.  The following two examples are
+   equivalent::
+ 
+     config FOO
+@@ -146,7 +146,7 @@ declares its dependencies in different ways:
+       bool
+ 
+   Subsystems always default to false (they have no ``default`` directive)
+-  and are never visible in ``default-configs/*.mak`` files.  It's
++  and are never visible in ``configs/*.mak`` files.  It's
+   up to other symbols to ``select`` whatever subsystems they require.
+ 
+   They sometimes have ``select`` directives to bring in other required
+@@ -229,7 +229,7 @@ declares its dependencies in different ways:
+   cannot be started at all without it.  It should be listed under
+   ``imply`` if (depending on the QEMU command line) the board may or
+   may not be started without it.  Boards also default to false; they are
+-  enabled by the ``default-configs/*.mak`` for the target they apply to.
++  enabled by the ``configs/*.mak`` for the target they apply to.
+ 
+ **internal elements**
+ 
+@@ -241,18 +241,18 @@ declares its dependencies in different ways:
+ 
+   Internal elements group code that is useful in several boards or
+   devices.  They are usually enabled with ``select`` and in turn select
+-  other elements; they are never visible in ``default-configs/*.mak``
++  other elements; they are never visible in ``configs/*.mak``
+   files, and often not even in the Makefile.
+ 
+ Writing and modifying default configurations
+ --------------------------------------------
+ 
+ In addition to the Kconfig files under hw/, each target also includes
+-a file called ``default-configs/TARGETNAME-softmmu.mak``.  These files
++a file called ``configs/TARGETNAME-softmmu.mak``.  These files
+ initialize some Kconfig variables to non-default values and provide the
+ starting point to turn on devices and subsystems.
+ 
+-A file in ``default-configs/`` looks like the following example::
++A file in ``configs/`` looks like the following example::
+ 
+     # Default configuration for alpha-softmmu
+ 
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index 17fcde8e1c..837d0c5d41 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -300,7 +300,7 @@ config ZYNQ
+     select PL330
+     select SDHCI
+     select SSI_M25P80
+-    select USB_EHCI_SYSBUS
++    select USB_CHIPIDEA
+     select XILINX # UART
+     select XILINX_AXI
+     select XILINX_SPI
+@@ -416,6 +416,7 @@ config FSL_IMX25
+     select IMX
+     select IMX_FEC
+     select IMX_I2C
++    select USB_CHIPIDEA
+     select WDT_IMX2
+     select SDHCI
+ 
+@@ -438,6 +439,7 @@ config FSL_IMX6
+     select IMX_USBPHY
+     select WDT_IMX2
+     select SDHCI
++    select USB_CHIPIDEA
+ 
+ config ASPEED_SOC
+     bool
+@@ -488,6 +490,7 @@ config FSL_IMX7
+     select PCI_EXPRESS_DESIGNWARE
+     select SDHCI
+     select UNIMP
++    select USB_CHIPIDEA
+ 
+ config ARM_SMMUV3
+     bool
+@@ -501,6 +504,7 @@ config FSL_IMX6UL
+     select IMX_I2C
+     select WDT_IMX2
+     select SDHCI
++    select USB_CHIPIDEA
+     select UNIMP
+ 
+ config MICROBIT
+diff --git a/hw/gpio/npcm7xx_gpio.c b/hw/gpio/npcm7xx_gpio.c
+index 3376901ab1..c75f9e073d 100644
+--- a/hw/gpio/npcm7xx_gpio.c
++++ b/hw/gpio/npcm7xx_gpio.c
+@@ -220,8 +220,6 @@ static void npcm7xx_gpio_regs_write(void *opaque, hwaddr addr, uint64_t v,
+         return;
+     }
+ 
+-    diff = s->regs[reg] ^ value;
+-
+     switch (reg) {
+     case NPCM7XX_GPIO_TLOCK1:
+     case NPCM7XX_GPIO_TLOCK2:
+@@ -242,6 +240,7 @@ static void npcm7xx_gpio_regs_write(void *opaque, hwaddr addr, uint64_t v,
+     case NPCM7XX_GPIO_PU:
+     case NPCM7XX_GPIO_PD:
+     case NPCM7XX_GPIO_IEM:
++        diff = s->regs[reg] ^ value;
+         s->regs[reg] = value;
+         npcm7xx_gpio_update_pins(s, diff);
+         break;
+diff --git a/hw/i386/amd_iommu.c b/hw/i386/amd_iommu.c
+index 02597db1e1..d68e85b606 100644
+--- a/hw/i386/amd_iommu.c
++++ b/hw/i386/amd_iommu.c
+@@ -1279,15 +1279,15 @@ static int amdvi_int_remap_msi(AMDVIState *iommu,
+         ret = -AMDVI_IR_ERR;
+         break;
+     case AMDVI_IOAPIC_INT_TYPE_NMI:
+-        pass = dte[3] & AMDVI_DEV_NMI_PASS_MASK;
++        pass = dte[2] & AMDVI_DEV_NMI_PASS_MASK;
+         trace_amdvi_ir_delivery_mode("nmi");
+         break;
+     case AMDVI_IOAPIC_INT_TYPE_INIT:
+-        pass = dte[3] & AMDVI_DEV_INT_PASS_MASK;
++        pass = dte[2] & AMDVI_DEV_INT_PASS_MASK;
+         trace_amdvi_ir_delivery_mode("init");
+         break;
+     case AMDVI_IOAPIC_INT_TYPE_EINT:
+-        pass = dte[3] & AMDVI_DEV_EINT_PASS_MASK;
++        pass = dte[2] & AMDVI_DEV_EINT_PASS_MASK;
+         trace_amdvi_ir_delivery_mode("eint");
+         break;
+     default:
+@@ -1514,9 +1514,9 @@ static void amdvi_init(AMDVIState *s)
+     /* reset AMDVI specific capabilities, all r/o */
+     pci_set_long(s->pci.dev.config + s->capab_offset, AMDVI_CAPAB_FEATURES);
+     pci_set_long(s->pci.dev.config + s->capab_offset + AMDVI_CAPAB_BAR_LOW,
+-                 s->mmio.addr & ~(0xffff0000));
++                 AMDVI_BASE_ADDR & MAKE_64BIT_MASK(14, 18));
+     pci_set_long(s->pci.dev.config + s->capab_offset + AMDVI_CAPAB_BAR_HIGH,
+-                (s->mmio.addr & ~(0xffff)) >> 16);
++                AMDVI_BASE_ADDR >> 32);
+     pci_set_long(s->pci.dev.config + s->capab_offset + AMDVI_CAPAB_RANGE,
+                  0xff000000);
+     pci_set_long(s->pci.dev.config + s->capab_offset + AMDVI_CAPAB_MISC, 0);
+diff --git a/hw/i386/amd_iommu.h b/hw/i386/amd_iommu.h
+index 210a37dfb1..1899e9aee1 100644
+--- a/hw/i386/amd_iommu.h
++++ b/hw/i386/amd_iommu.h
+@@ -185,7 +185,7 @@
+         AMDVI_CAPAB_FLAG_HTTUNNEL |  AMDVI_CAPAB_EFR_SUP)
+ 
+ /* AMDVI default address */
+-#define AMDVI_BASE_ADDR 0xfed80000
++#define AMDVI_BASE_ADDR 0xfed80000ULL
+ 
+ /* page management constants */
+ #define AMDVI_PAGE_SHIFT 12
+diff --git a/hw/intc/arm_gicv3_cpuif.c b/hw/intc/arm_gicv3_cpuif.c
+index 9811fb3fb4..8d36f57f3d 100644
+--- a/hw/intc/arm_gicv3_cpuif.c
++++ b/hw/intc/arm_gicv3_cpuif.c
+@@ -2097,9 +2097,6 @@ static CPAccessResult gicv3_irqfiq_access(CPUARMState *env,
+         }
+     }
+ 
+-    if (r == CP_ACCESS_TRAP_EL3 && !arm_el_is_aa64(env, 3)) {
+-        r = CP_ACCESS_TRAP;
+-    }
+     return r;
+ }
+ 
+@@ -2162,9 +2159,6 @@ static CPAccessResult gicv3_fiq_access(CPUARMState *env,
+         }
+     }
+ 
+-    if (r == CP_ACCESS_TRAP_EL3 && !arm_el_is_aa64(env, 3)) {
+-        r = CP_ACCESS_TRAP;
+-    }
+     return r;
+ }
+ 
+@@ -2201,9 +2195,6 @@ static CPAccessResult gicv3_irq_access(CPUARMState *env,
+         }
+     }
+ 
+-    if (r == CP_ACCESS_TRAP_EL3 && !arm_el_is_aa64(env, 3)) {
+-        r = CP_ACCESS_TRAP;
+-    }
+     return r;
+ }
+ 
+diff --git a/hw/misc/aspeed_hace.c b/hw/misc/aspeed_hace.c
+index 69175e972d..11bd25708e 100644
+--- a/hw/misc/aspeed_hace.c
++++ b/hw/misc/aspeed_hace.c
+@@ -123,6 +123,11 @@ static bool has_padding(AspeedHACEState *s, struct iovec *iov,
+     if (*total_msg_len <= s->total_req_len) {
+         uint32_t padding_size = s->total_req_len - *total_msg_len;
+         uint8_t *padding = iov->iov_base;
++
++        if (padding_size > req_len) {
++            return false;
++        }
++
+         *pad_offset = req_len - padding_size;
+         if (padding[*pad_offset] == 0x80) {
+             return true;
+diff --git a/hw/net/smc91c111.c b/hw/net/smc91c111.c
+index 4eda971ef3..81e5c823d1 100644
+--- a/hw/net/smc91c111.c
++++ b/hw/net/smc91c111.c
+@@ -13,6 +13,7 @@
+ #include "net/net.h"
+ #include "hw/irq.h"
+ #include "hw/net/smc91c111.h"
++#include "hw/registerfields.h"
+ #include "hw/qdev-properties.h"
+ #include "qapi/error.h"
+ #include "qemu/log.h"
+@@ -23,6 +24,13 @@
+ 
+ /* Number of 2k memory pages available.  */
+ #define NUM_PACKETS 4
++/*
++ * Maximum size of a data frame, including the leading status word
++ * and byte count fields and the trailing CRC, last data byte
++ * and control byte (per figure 8-1 in the Microchip Technology
++ * LAN91C111 datasheet).
++ */
++#define MAX_PACKET_SIZE 2048
+ 
+ #define TYPE_SMC91C111 "smc91c111"
+ OBJECT_DECLARE_SIMPLE_TYPE(smc91c111_state, SMC91C111)
+@@ -119,6 +127,18 @@ static const VMStateDescription vmstate_smc91c111 = {
+ #define RS_TOOSHORT     0x0400
+ #define RS_MULTICAST    0x0001
+ 
++FIELD(PTR, PTR, 0, 11)
++FIELD(PTR, NOT_EMPTY, 11, 1)
++FIELD(PTR, RESERVED, 12, 1)
++FIELD(PTR, READ, 13, 1)
++FIELD(PTR, AUTOINCR, 14, 1)
++FIELD(PTR, RCV, 15, 1)
++
++static inline bool packetnum_valid(int packet_num)
++{
++    return packet_num >= 0 && packet_num < NUM_PACKETS;
++}
++
+ /* Update interrupt status.  */
+ static void smc91c111_update(smc91c111_state *s)
+ {
+@@ -183,6 +203,15 @@ static void smc91c111_pop_rx_fifo(smc91c111_state *s)
+ {
+     int i;
+ 
++    if (s->rx_fifo_len == 0) {
++        /*
++         * The datasheet doesn't document what the behaviour is if the
++         * guest tries to pop an empty RX FIFO, and there's no obvious
++         * error status register to report it. Just ignore the attempt.
++         */
++        return;
++    }
++
+     s->rx_fifo_len--;
+     if (s->rx_fifo_len) {
+         for (i = 0; i < s->rx_fifo_len; i++)
+@@ -210,12 +239,33 @@ static void smc91c111_pop_tx_fifo_done(smc91c111_state *s)
+ /* Release the memory allocated to a packet.  */
+ static void smc91c111_release_packet(smc91c111_state *s, int packet)
+ {
++    if (!packetnum_valid(packet)) {
++        /*
++         * Data sheet doesn't document behaviour in this guest error
++         * case, and there is no error status register to report it.
++         * Log and ignore the attempt.
++         */
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "smc91c111: attempt to release invalid packet %d\n",
++                      packet);
++        return;
++    }
+     s->allocated &= ~(1 << packet);
+     if (s->tx_alloc == 0x80)
+         smc91c111_tx_alloc(s);
+     smc91c111_flush_queued_packets(s);
+ }
+ 
++static void smc91c111_complete_tx_packet(smc91c111_state *s, int packetnum)
++{
++    if (s->ctr & CTR_AUTO_RELEASE) {
++        /* Race?  */
++        smc91c111_release_packet(s, packetnum);
++    } else if (s->tx_fifo_done_len < NUM_PACKETS) {
++        s->tx_fifo_done[s->tx_fifo_done_len++] = packetnum;
++    }
++}
++
+ /* Flush the TX FIFO.  */
+ static void smc91c111_do_tx(smc91c111_state *s)
+ {
+@@ -231,12 +281,25 @@ static void smc91c111_do_tx(smc91c111_state *s)
+         return;
+     for (i = 0; i < s->tx_fifo_len; i++) {
+         packetnum = s->tx_fifo[i];
++        /* queue_tx checked the packet number was valid */
++        assert(packetnum_valid(packetnum));
+         p = &s->data[packetnum][0];
+         /* Set status word.  */
+         *(p++) = 0x01;
+         *(p++) = 0x40;
+         len = *(p++);
+         len |= ((int)*(p++)) << 8;
++        if (len > MAX_PACKET_SIZE) {
++            /*
++             * Datasheet doesn't say what to do here, and there is no
++             * relevant tx error condition listed. Log, and drop the packet.
++             */
++            qemu_log_mask(LOG_GUEST_ERROR,
++                          "smc91c111: tx packet with bad length %d, dropping\n",
++                          len);
++            smc91c111_complete_tx_packet(s, packetnum);
++            continue;
++        }
+         len -= 6;
+         control = p[len + 1];
+         if (control & 0x20)
+@@ -265,11 +328,7 @@ static void smc91c111_do_tx(smc91c111_state *s)
+             }
+         }
+ #endif
+-        if (s->ctr & CTR_AUTO_RELEASE)
+-            /* Race?  */
+-            smc91c111_release_packet(s, packetnum);
+-        else if (s->tx_fifo_done_len < NUM_PACKETS)
+-            s->tx_fifo_done[s->tx_fifo_done_len++] = packetnum;
++        smc91c111_complete_tx_packet(s, packetnum);
+         qemu_send_packet(qemu_get_queue(s->nic), p, len);
+     }
+     s->tx_fifo_len = 0;
+@@ -279,6 +338,17 @@ static void smc91c111_do_tx(smc91c111_state *s)
+ /* Add a packet to the TX FIFO.  */
+ static void smc91c111_queue_tx(smc91c111_state *s, int packet)
+ {
++    if (!packetnum_valid(packet)) {
++        /*
++         * Datasheet doesn't document behaviour in this error case, and
++         * there's no error status register we could report it in.
++         * Log and ignore.
++         */
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "smc91c111: attempt to queue invalid packet %d\n",
++                      packet);
++        return;
++    }
+     if (s->tx_fifo_len == NUM_PACKETS)
+         return;
+     s->tx_fifo[s->tx_fifo_len++] = packet;
+@@ -310,6 +380,49 @@ static void smc91c111_reset(DeviceState *dev)
+ #define SET_LOW(name, val) s->name = (s->name & 0xff00) | val
+ #define SET_HIGH(name, val) s->name = (s->name & 0xff) | (val << 8)
+ 
++/*
++ * The pointer register's pointer is an 11 bit value (so it exactly
++ * indexes a 2048-byte data frame). Add the specified offset to it,
++ * wrapping around at the 2048 byte mark, and return the resulting
++ * wrapped value. There are flag bits in the top part of the register,
++ * but we can ignore them here as the mask will mask them out.
++ */
++static int ptr_reg_add(smc91c111_state *s, int offset)
++{
++    return (s->ptr + offset) & R_PTR_PTR_MASK;
++}
++
++/*
++ * For an access to the Data Register at @offset, return the
++ * required offset into the packet's data frame. This will
++ * perform the pointer register autoincrement if required, and
++ * guarantees to return an in-bounds offset.
++ */
++static int data_reg_ptr(smc91c111_state *s, int offset)
++{
++    int p;
++
++    if (s->ptr & R_PTR_AUTOINCR_MASK) {
++        /*
++         * Autoincrement: use the current pointer value, and
++         * increment the pointer register's pointer field.
++         */
++        p = FIELD_EX32(s->ptr, PTR, PTR);
++        s->ptr = FIELD_DP32(s->ptr, PTR, PTR, ptr_reg_add(s, 1));
++    } else {
++        /*
++         * No autoincrement: register offset determines which
++         * byte we're addressing. Setting the pointer to the top
++         * of the data buffer and then using the pointer wrapping
++         * to read the bottom byte of the buffer is not something
++         * sensible guest software will do, but the datasheet
++         * doesn't say what the behaviour is, so we don't forbid it.
++         */
++        p = ptr_reg_add(s, offset & 3);
++    }
++    return p;
++}
++
+ static void smc91c111_writeb(void *opaque, hwaddr offset,
+                              uint32_t value)
+ {
+@@ -449,12 +562,14 @@ static void smc91c111_writeb(void *opaque, hwaddr offset,
+                     n = s->rx_fifo[0];
+                 else
+                     n = s->packet_num;
+-                p = s->ptr & 0x07ff;
+-                if (s->ptr & 0x4000) {
+-                    s->ptr = (s->ptr & 0xf800) | ((s->ptr + 1) & 0x7ff);
+-                } else {
+-                    p += (offset & 3);
++                if (!packetnum_valid(n)) {
++                    /* Datasheet doesn't document what to do here */
++                    qemu_log_mask(LOG_GUEST_ERROR,
++                                  "smc91c111: attempt to write data to invalid packet %d\n",
++                                  n);
++                    return;
+                 }
++                p = data_reg_ptr(s, offset);
+                 s->data[n][p] = value;
+             }
+             return;
+@@ -597,12 +712,14 @@ static uint32_t smc91c111_readb(void *opaque, hwaddr offset)
+                     n = s->rx_fifo[0];
+                 else
+                     n = s->packet_num;
+-                p = s->ptr & 0x07ff;
+-                if (s->ptr & 0x4000) {
+-                    s->ptr = (s->ptr & 0xf800) | ((s->ptr + 1) & 0x07ff);
+-                } else {
+-                    p += (offset & 3);
++                if (!packetnum_valid(n)) {
++                    /* Datasheet doesn't document what to do here */
++                    qemu_log_mask(LOG_GUEST_ERROR,
++                                  "smc91c111: attempt to read data from invalid packet %d\n",
++                                  n);
++                    return 0;
+                 }
++                p = data_reg_ptr(s, offset);
+                 return s->data[n][p];
+             }
+         case 12: /* Interrupt status.  */
+@@ -705,6 +822,8 @@ static ssize_t smc91c111_receive(NetClientState *nc, const uint8_t *buf, size_t
+         return -1;
+     s->rx_fifo[s->rx_fifo_len++] = packetnum;
+ 
++    /* allocate_packet() will not hand us back an invalid packet number */
++    assert(packetnum_valid(packetnum));
+     p = &s->data[packetnum][0];
+     /* ??? Multicast packets?  */
+     status = 0;
+diff --git a/hw/ppc/pnv_occ.c b/hw/ppc/pnv_occ.c
+index 9fa6d91d31..fe00a62b94 100644
+--- a/hw/ppc/pnv_occ.c
++++ b/hw/ppc/pnv_occ.c
+@@ -32,22 +32,21 @@
+ #define OCB_OCI_OCCMISC_OR      0x4022
+ 
+ /* OCC sensors */
+-#define OCC_SENSOR_DATA_BLOCK_OFFSET          0x580000
+-#define OCC_SENSOR_DATA_VALID                 0x580001
+-#define OCC_SENSOR_DATA_VERSION               0x580002
+-#define OCC_SENSOR_DATA_READING_VERSION       0x580004
+-#define OCC_SENSOR_DATA_NR_SENSORS            0x580008
+-#define OCC_SENSOR_DATA_NAMES_OFFSET          0x580010
+-#define OCC_SENSOR_DATA_READING_PING_OFFSET   0x580014
+-#define OCC_SENSOR_DATA_READING_PONG_OFFSET   0x58000c
+-#define OCC_SENSOR_DATA_NAME_LENGTH           0x58000d
+-#define OCC_SENSOR_NAME_STRUCTURE_TYPE        0x580023
+-#define OCC_SENSOR_LOC_CORE                   0x580022
+-#define OCC_SENSOR_LOC_GPU                    0x580020
+-#define OCC_SENSOR_TYPE_POWER                 0x580003
+-#define OCC_SENSOR_NAME                       0x580005
+-#define HWMON_SENSORS_MASK                    0x58001e
+-#define SLW_IMAGE_BASE                        0x0
++#define OCC_SENSOR_DATA_BLOCK_OFFSET          0x0000
++#define OCC_SENSOR_DATA_VALID                 0x0001
++#define OCC_SENSOR_DATA_VERSION               0x0002
++#define OCC_SENSOR_DATA_READING_VERSION       0x0004
++#define OCC_SENSOR_DATA_NR_SENSORS            0x0008
++#define OCC_SENSOR_DATA_NAMES_OFFSET          0x0010
++#define OCC_SENSOR_DATA_READING_PING_OFFSET   0x0014
++#define OCC_SENSOR_DATA_READING_PONG_OFFSET   0x000c
++#define OCC_SENSOR_DATA_NAME_LENGTH           0x000d
++#define OCC_SENSOR_NAME_STRUCTURE_TYPE        0x0023
++#define OCC_SENSOR_LOC_CORE                   0x0022
++#define OCC_SENSOR_LOC_GPU                    0x0020
++#define OCC_SENSOR_TYPE_POWER                 0x0003
++#define OCC_SENSOR_NAME                       0x0005
++#define HWMON_SENSORS_MASK                    0x001e
+ 
+ static void pnv_occ_set_misc(PnvOCC *occ, uint64_t val)
+ {
+@@ -129,8 +128,6 @@ static uint64_t pnv_occ_common_area_read(void *opaque, hwaddr addr,
+     case HWMON_SENSORS_MASK:
+     case OCC_SENSOR_LOC_GPU:
+         return 0x8e00;
+-    case SLW_IMAGE_BASE:
+-        return 0x1000000000000000;
+     }
+     return 0;
+ }
+diff --git a/hw/rtc/goldfish_rtc.c b/hw/rtc/goldfish_rtc.c
+index 19a56402a0..81cc942b46 100644
+--- a/hw/rtc/goldfish_rtc.c
++++ b/hw/rtc/goldfish_rtc.c
+@@ -178,38 +178,21 @@ static void goldfish_rtc_write(void *opaque, hwaddr offset,
+     trace_goldfish_rtc_write(offset, value);
+ }
+ 
+-static int goldfish_rtc_pre_save(void *opaque)
+-{
+-    uint64_t delta;
+-    GoldfishRTCState *s = opaque;
+-
+-    /*
+-     * We want to migrate this offset, which sounds straightforward.
+-     * Unfortunately, we cannot directly pass tick_offset because
+-     * rtc_clock on destination Host might not be same source Host.
+-     *
+-     * To tackle, this we pass tick_offset relative to vm_clock from
+-     * source Host and make it relative to rtc_clock at destination Host.
+-     */
+-    delta = qemu_clock_get_ns(rtc_clock) -
+-            qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+-    s->tick_offset_vmstate = s->tick_offset + delta;
+-
+-    return 0;
+-}
+-
+ static int goldfish_rtc_post_load(void *opaque, int version_id)
+ {
+-    uint64_t delta;
+     GoldfishRTCState *s = opaque;
+ 
+-    /*
+-     * We extract tick_offset from tick_offset_vmstate by doing
+-     * reverse math compared to pre_save() function.
+-     */
+-    delta = qemu_clock_get_ns(rtc_clock) -
+-            qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+-    s->tick_offset = s->tick_offset_vmstate - delta;
++    if (version_id < 3) {
++        /*
++         * Previous versions didn't migrate tick_offset directly. Instead, they
++         * migrated tick_offset_vmstate, which is a recalculation based on
++         * QEMU_CLOCK_VIRTUAL. We use tick_offset_vmstate when migrating from
++         * older versions.
++         */
++        uint64_t delta = qemu_clock_get_ns(rtc_clock) -
++                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++        s->tick_offset = s->tick_offset_vmstate - delta;
++    }
+ 
+     goldfish_rtc_set_alarm(s);
+ 
+@@ -239,8 +222,7 @@ static const MemoryRegionOps goldfish_rtc_ops[2] = {
+ 
+ static const VMStateDescription goldfish_rtc_vmstate = {
+     .name = TYPE_GOLDFISH_RTC,
+-    .version_id = 2,
+-    .pre_save = goldfish_rtc_pre_save,
++    .version_id = 3,
+     .post_load = goldfish_rtc_post_load,
+     .fields = (VMStateField[]) {
+         VMSTATE_UINT64(tick_offset_vmstate, GoldfishRTCState),
+@@ -249,6 +231,7 @@ static const VMStateDescription goldfish_rtc_vmstate = {
+         VMSTATE_UINT32(irq_pending, GoldfishRTCState),
+         VMSTATE_UINT32(irq_enabled, GoldfishRTCState),
+         VMSTATE_UINT32(time_high, GoldfishRTCState),
++        VMSTATE_UINT64_V(tick_offset, GoldfishRTCState, 3),
+         VMSTATE_END_OF_LIST()
+     }
+ };
+diff --git a/hw/usb/Kconfig b/hw/usb/Kconfig
+index ce4f433976..db17750a64 100644
+--- a/hw/usb/Kconfig
++++ b/hw/usb/Kconfig
+@@ -138,3 +138,7 @@ config XLNX_USB_SUBSYS
+     bool
+     default y if XLNX_VERSAL
+     select USB_DWC3
++
++config USB_CHIPIDEA
++    bool
++    select USB_EHCI_SYSBUS
+diff --git a/hw/usb/meson.build b/hw/usb/meson.build
+index 793df42e21..ed5d0ad7e5 100644
+--- a/hw/usb/meson.build
++++ b/hw/usb/meson.build
+@@ -25,9 +25,9 @@ softmmu_ss.add(when: 'CONFIG_USB_XHCI_NEC', if_true: files('hcd-xhci-nec.c'))
+ softmmu_ss.add(when: 'CONFIG_USB_MUSB', if_true: files('hcd-musb.c'))
+ softmmu_ss.add(when: 'CONFIG_USB_DWC2', if_true: files('hcd-dwc2.c'))
+ softmmu_ss.add(when: 'CONFIG_USB_DWC3', if_true: files('hcd-dwc3.c'))
++softmmu_ss.add(when: 'CONFIG_USB_CHIPIDEA', if_true: files('chipidea.c'))
+ 
+ softmmu_ss.add(when: 'CONFIG_TUSB6010', if_true: files('tusb6010.c'))
+-softmmu_ss.add(when: 'CONFIG_IMX', if_true: files('chipidea.c'))
+ softmmu_ss.add(when: 'CONFIG_IMX_USBPHY', if_true: files('imx-usb-phy.c'))
+ softmmu_ss.add(when: 'CONFIG_VT82C686', if_true: files('vt82c686-uhci-pci.c'))
+ specific_ss.add(when: 'CONFIG_XLNX_VERSAL', if_true: files('xlnx-versal-usb2-ctrl-regs.c'))
+diff --git a/hw/virtio/vhost-shadow-virtqueue.c b/hw/virtio/vhost-shadow-virtqueue.c
+index d422418f2d..20dcc7d2a0 100644
+--- a/hw/virtio/vhost-shadow-virtqueue.c
++++ b/hw/virtio/vhost-shadow-virtqueue.c
+@@ -165,10 +165,10 @@ static bool vhost_svq_vring_write_descs(VhostShadowVirtqueue *svq, hwaddr *sg,
+         descs[i].len = cpu_to_le32(iovec[n].iov_len);
+ 
+         last = i;
+-        i = cpu_to_le16(svq->desc_next[i]);
++        i = svq->desc_next[i];
+     }
+ 
+-    svq->free_head = le16_to_cpu(svq->desc_next[last]);
++    svq->free_head = svq->desc_next[last];
+     return true;
+ }
+ 
+@@ -228,10 +228,12 @@ static void vhost_svq_kick(VhostShadowVirtqueue *svq)
+     smp_mb();
+ 
+     if (virtio_vdev_has_feature(svq->vdev, VIRTIO_RING_F_EVENT_IDX)) {
+-        uint16_t avail_event = *(uint16_t *)(&svq->vring.used->ring[svq->vring.num]);
++        uint16_t avail_event = le16_to_cpu(
++                *(uint16_t *)(&svq->vring.used->ring[svq->vring.num]));
+         needs_kick = vring_need_event(avail_event, svq->shadow_avail_idx, svq->shadow_avail_idx - 1);
+     } else {
+-        needs_kick = !(svq->vring.used->flags & VRING_USED_F_NO_NOTIFY);
++        needs_kick =
++                !(svq->vring.used->flags & cpu_to_le16(VRING_USED_F_NO_NOTIFY));
+     }
+ 
+     if (!needs_kick) {
+@@ -365,7 +367,7 @@ static bool vhost_svq_more_used(VhostShadowVirtqueue *svq)
+         return true;
+     }
+ 
+-    svq->shadow_used_idx = cpu_to_le16(*(volatile uint16_t *)used_idx);
++    svq->shadow_used_idx = le16_to_cpu(*(volatile uint16_t *)used_idx);
+ 
+     return svq->last_used_idx != svq->shadow_used_idx;
+ }
+@@ -383,7 +385,7 @@ static bool vhost_svq_enable_notification(VhostShadowVirtqueue *svq)
+ {
+     if (virtio_vdev_has_feature(svq->vdev, VIRTIO_RING_F_EVENT_IDX)) {
+         uint16_t *used_event = (uint16_t *)&svq->vring.avail->ring[svq->vring.num];
+-        *used_event = svq->shadow_used_idx;
++        *used_event = cpu_to_le16(svq->shadow_used_idx);
+     } else {
+         svq->vring.avail->flags &= ~cpu_to_le16(VRING_AVAIL_F_NO_INTERRUPT);
+     }
+@@ -408,7 +410,7 @@ static uint16_t vhost_svq_last_desc_of_chain(const VhostShadowVirtqueue *svq,
+                                              uint16_t num, uint16_t i)
+ {
+     for (uint16_t j = 0; j < (num - 1); ++j) {
+-        i = le16_to_cpu(svq->desc_next[i]);
++        i = svq->desc_next[i];
+     }
+ 
+     return i;
+@@ -670,7 +672,7 @@ void vhost_svq_start(VhostShadowVirtqueue *svq, VirtIODevice *vdev,
+     svq->desc_state = g_new0(SVQDescState, svq->vring.num);
+     svq->desc_next = g_new0(uint16_t, svq->vring.num);
+     for (unsigned i = 0; i < svq->vring.num - 1; i++) {
+-        svq->desc_next[i] = cpu_to_le16(i + 1);
++        svq->desc_next[i] = i + 1;
+     }
+ }
+ 
+diff --git a/linux-user/syscall.c b/linux-user/syscall.c
+index 236076e647..737065c28c 100644
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -352,7 +352,8 @@ _syscall3(int, sys_sched_getaffinity, pid_t, pid, unsigned int, len,
+ #define __NR_sys_sched_setaffinity __NR_sched_setaffinity
+ _syscall3(int, sys_sched_setaffinity, pid_t, pid, unsigned int, len,
+           unsigned long *, user_mask_ptr);
+-/* sched_attr is not defined in glibc */
++/* sched_attr is not defined in glibc < 2.41 */
++#ifndef SCHED_ATTR_SIZE_VER0
+ struct sched_attr {
+     uint32_t size;
+     uint32_t sched_policy;
+@@ -365,6 +366,7 @@ struct sched_attr {
+     uint32_t sched_util_min;
+     uint32_t sched_util_max;
+ };
++#endif
+ #define __NR_sys_sched_getattr __NR_sched_getattr
+ _syscall4(int, sys_sched_getattr, pid_t, pid, struct sched_attr *, attr,
+           unsigned int, size, unsigned int, flags);
+diff --git a/net/vhost-vdpa.c b/net/vhost-vdpa.c
+index 1b1a27de02..fcc9406a20 100644
+--- a/net/vhost-vdpa.c
++++ b/net/vhost-vdpa.c
+@@ -203,6 +203,18 @@ static bool vhost_vdpa_has_ufo(NetClientState *nc)
+ 
+ }
+ 
++/*
++ * FIXME: vhost_vdpa doesn't have an API to "set h/w endianness". But it's
++ * reasonable to assume that h/w is LE by default, because LE is what
++ * virtio 1.0 and later ask for. So, this function just says "yes, the h/w is
++ * LE". Otherwise, on a BE machine, higher-level code would mistakely think
++ * the h/w is BE and can't support VDPA for a virtio 1.0 client.
++ */
++static int vhost_vdpa_set_vnet_le(NetClientState *nc, bool enable)
++{
++    return 0;
++}
++
+ static bool vhost_vdpa_check_peer_type(NetClientState *nc, ObjectClass *oc,
+                                        Error **errp)
+ {
+@@ -230,6 +242,7 @@ static NetClientInfo net_vhost_vdpa_info = {
+         .cleanup = vhost_vdpa_cleanup,
+         .has_vnet_hdr = vhost_vdpa_has_vnet_hdr,
+         .has_ufo = vhost_vdpa_has_ufo,
++        .set_vnet_le = vhost_vdpa_set_vnet_le,
+         .check_peer_type = vhost_vdpa_check_peer_type,
+ };
+ 
+diff --git a/target/arm/cpu.h b/target/arm/cpu.h
+index a9cd7178f8..32b0bf8e2d 100644
+--- a/target/arm/cpu.h
++++ b/target/arm/cpu.h
+@@ -57,6 +57,7 @@
+ #define EXCP_UNALIGNED      22   /* v7M UNALIGNED UsageFault */
+ #define EXCP_DIVBYZERO      23   /* v7M DIVBYZERO UsageFault */
+ #define EXCP_VSERR          24
++#define EXCP_MON_TRAP       29   /* AArch32 trap to Monitor mode */
+ /* NB: add new EXCP_ defines to the array in arm_log_exception() too */
+ 
+ #define ARMV7M_EXCP_RESET   1
+diff --git a/target/arm/helper.c b/target/arm/helper.c
+index 5c22626b80..6cffbcb276 100644
+--- a/target/arm/helper.c
++++ b/target/arm/helper.c
+@@ -2505,7 +2505,7 @@ static CPAccessResult gt_stimer_access(CPUARMState *env,
+     switch (arm_current_el(env)) {
+     case 1:
+         if (!arm_is_secure(env)) {
+-            return CP_ACCESS_TRAP;
++            return CP_ACCESS_TRAP_UNCATEGORIZED;
+         }
+         if (!(env->cp15.scr_el3 & SCR_ST)) {
+             return CP_ACCESS_TRAP_EL3;
+@@ -2513,7 +2513,7 @@ static CPAccessResult gt_stimer_access(CPUARMState *env,
+         return CP_ACCESS_OK;
+     case 0:
+     case 2:
+-        return CP_ACCESS_TRAP;
++        return CP_ACCESS_TRAP_UNCATEGORIZED;
+     case 3:
+         return CP_ACCESS_OK;
+     default:
+@@ -3516,7 +3516,7 @@ static CPAccessResult at_s1e2_access(CPUARMState *env, const ARMCPRegInfo *ri,
+ {
+     if (arm_current_el(env) == 3 &&
+         !(env->cp15.scr_el3 & (SCR_NS | SCR_EEL2))) {
+-        return CP_ACCESS_TRAP;
++        return CP_ACCESS_TRAP_UNCATEGORIZED;
+     }
+     return CP_ACCESS_OK;
+ }
+@@ -6650,8 +6650,8 @@ static CPAccessResult access_lor_other(CPUARMState *env,
+                                        const ARMCPRegInfo *ri, bool isread)
+ {
+     if (arm_is_secure_below_el3(env)) {
+-        /* Access denied in secure mode.  */
+-        return CP_ACCESS_TRAP;
++        /* UNDEF if SCR_EL3.NS == 0 */
++        return CP_ACCESS_TRAP_UNCATEGORIZED;
+     }
+     return access_lor_ns(env, ri, isread);
+ }
+@@ -9475,6 +9475,7 @@ void arm_log_exception(CPUState *cs)
+             [EXCP_UNALIGNED] = "v7M UNALIGNED UsageFault",
+             [EXCP_DIVBYZERO] = "v7M DIVBYZERO UsageFault",
+             [EXCP_VSERR] = "Virtual SERR",
++            [EXCP_MON_TRAP] = "Monitor Trap",
+         };
+ 
+         if (idx >= 0 && idx < ARRAY_SIZE(excnames)) {
+@@ -10036,6 +10037,16 @@ static void arm_cpu_do_interrupt_aarch32(CPUState *cs)
+         mask = CPSR_A | CPSR_I | CPSR_F;
+         offset = 0;
+         break;
++    case EXCP_MON_TRAP:
++        new_mode = ARM_CPU_MODE_MON;
++        addr = 0x04;
++        mask = CPSR_A | CPSR_I | CPSR_F;
++        if (env->thumb) {
++            offset = 2;
++        } else {
++            offset = 4;
++        }
++        break;
+     default:
+         cpu_abort(cs, "Unhandled exception 0x%x\n", cs->exception_index);
+         return; /* Never happens.  Keep compiler happy.  */
+diff --git a/target/arm/op_helper.c b/target/arm/op_helper.c
+index 70672bcd9f..9b07c79392 100644
+--- a/target/arm/op_helper.c
++++ b/target/arm/op_helper.c
+@@ -631,6 +631,7 @@ void HELPER(access_check_cp_reg)(CPUARMState *env, void *rip, uint32_t syndrome,
+     const ARMCPRegInfo *ri = rip;
+     CPAccessResult res = CP_ACCESS_OK;
+     int target_el;
++    uint32_t excp;
+ 
+     if (arm_feature(env, ARM_FEATURE_XSCALE) && ri->cp < 14
+         && extract32(env->cp15.c15_cpar, ri->cp, 1) == 0) {
+@@ -667,8 +668,18 @@ void HELPER(access_check_cp_reg)(CPUARMState *env, void *rip, uint32_t syndrome,
+     }
+ 
+  fail:
++    excp = EXCP_UDEF;
+     switch (res & ~CP_ACCESS_EL_MASK) {
+     case CP_ACCESS_TRAP:
++        /*
++         * If EL3 is AArch32 then there's no syndrome register; the cases
++         * where we would raise a SystemAccessTrap to AArch64 EL3 all become
++         * raising a Monitor trap exception. (Because there's no visible
++         * syndrome it doesn't matter what we pass to raise_exception().)
++         */
++        if ((res & CP_ACCESS_EL_MASK) == 3 && !arm_el_is_aa64(env, 3)) {
++            excp = EXCP_MON_TRAP;
++        }
+         break;
+     case CP_ACCESS_TRAP_UNCATEGORIZED:
+         if (cpu_isar_feature(aa64_ids, cpu) && isread &&
+@@ -702,7 +713,7 @@ void HELPER(access_check_cp_reg)(CPUARMState *env, void *rip, uint32_t syndrome,
+         g_assert_not_reached();
+     }
+ 
+-    raise_exception(env, EXCP_UDEF, syndrome, target_el);
++    raise_exception(env, excp, syndrome, target_el);
+ }
+ 
+ void HELPER(set_cp_reg)(CPUARMState *env, void *rip, uint32_t value)
+diff --git a/target/arm/translate-a64.c b/target/arm/translate-a64.c
+index f0b8db7ce5..190574cb29 100644
+--- a/target/arm/translate-a64.c
++++ b/target/arm/translate-a64.c
+@@ -1176,14 +1176,14 @@ static bool fp_access_check_only(DisasContext *s)
+ {
+     if (s->fp_excp_el) {
+         assert(!s->fp_access_checked);
+-        s->fp_access_checked = true;
++        s->fp_access_checked = -1;
+ 
+         gen_exception_insn_el(s, 0, EXCP_UDEF,
+                               syn_fp_access_trap(1, 0xe, false, 0),
+                               s->fp_excp_el);
+         return false;
+     }
+-    s->fp_access_checked = true;
++    s->fp_access_checked = 1;
+     return true;
+ }
+ 
+@@ -1208,23 +1208,23 @@ static bool fp_access_check(DisasContext *s)
+ bool sve_access_check(DisasContext *s)
+ {
+     if (s->pstate_sm || !dc_isar_feature(aa64_sve, s)) {
++        bool ret;
++
+         assert(dc_isar_feature(aa64_sme, s));
+-        if (!sme_sm_enabled_check(s)) {
+-            goto fail_exit;
+-        }
+-    } else if (s->sve_excp_el) {
++        ret = sme_sm_enabled_check(s);
++        s->sve_access_checked = (ret ? 1 : -1);
++        return ret;
++    }
++    if (s->sve_excp_el) {
++        /* Assert that we only raise one exception per instruction. */
++        assert(!s->sve_access_checked);
+         gen_exception_insn_el(s, 0, EXCP_UDEF,
+                               syn_sve_access_trap(), s->sve_excp_el);
+-        goto fail_exit;
++        s->sve_access_checked = -1;
++        return false;
+     }
+-    s->sve_access_checked = true;
++    s->sve_access_checked = 1;
+     return fp_access_check(s);
+-
+- fail_exit:
+-    /* Assert that we only raise one exception per instruction. */
+-    assert(!s->sve_access_checked);
+-    s->sve_access_checked = true;
+-    return false;
+ }
+ 
+ /*
+@@ -1252,8 +1252,9 @@ bool sme_enabled_check(DisasContext *s)
+      * sme_excp_el by itself for cpregs access checks.
+      */
+     if (!s->fp_excp_el || s->sme_excp_el < s->fp_excp_el) {
+-        s->fp_access_checked = true;
+-        return sme_access_check(s);
++        bool ret = sme_access_check(s);
++        s->fp_access_checked = (ret ? 1 : -1);
++        return ret;
+     }
+     return fp_access_check_only(s);
+ }
+@@ -14870,8 +14871,8 @@ static void aarch64_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
+     s->insn = insn;
+     s->base.pc_next = pc + 4;
+ 
+-    s->fp_access_checked = false;
+-    s->sve_access_checked = false;
++    s->fp_access_checked = 0;
++    s->sve_access_checked = 0;
+ 
+     if (s->pstate_il) {
+         /*
+diff --git a/target/arm/translate-a64.h b/target/arm/translate-a64.h
+index ad3762d1ac..f01d2d973c 100644
+--- a/target/arm/translate-a64.h
++++ b/target/arm/translate-a64.h
+@@ -66,7 +66,7 @@ TCGv_i64 gen_mte_checkN(DisasContext *s, TCGv_i64 addr, bool is_write,
+ static inline void assert_fp_access_checked(DisasContext *s)
+ {
+ #ifdef CONFIG_DEBUG_TCG
+-    if (unlikely(!s->fp_access_checked || s->fp_excp_el)) {
++    if (unlikely(s->fp_access_checked <= 0)) {
+         fprintf(stderr, "target-arm: FP access check missing for "
+                 "instruction 0x%08x\n", s->insn);
+         abort();
+diff --git a/target/arm/translate.h b/target/arm/translate.h
+index 3cdc7dbc2f..3856df8060 100644
+--- a/target/arm/translate.h
++++ b/target/arm/translate.h
+@@ -85,15 +85,19 @@ typedef struct DisasContext {
+     uint64_t features; /* CPU features bits */
+     bool aarch64;
+     bool thumb;
+-    /* Because unallocated encodings generate different exception syndrome
++    /*
++     * Because unallocated encodings generate different exception syndrome
+      * information from traps due to FP being disabled, we can't do a single
+      * "is fp access disabled" check at a high level in the decode tree.
+      * To help in catching bugs where the access check was forgotten in some
+      * code path, we set this flag when the access check is done, and assert
+      * that it is set at the point where we actually touch the FP regs.
++     *   0: not checked,
++     *   1: checked, access ok
++     *  -1: checked, access denied
+      */
+-    bool fp_access_checked;
+-    bool sve_access_checked;
++    int8_t fp_access_checked;
++    int8_t sve_access_checked;
+     /* ARMv8 single-step state (this is distinct from the QEMU gdbstub
+      * single-step support).
+      */
+diff --git a/target/ppc/cpu_init.c b/target/ppc/cpu_init.c
+index 294a18a5b7..3f22e0b02e 100644
+--- a/target/ppc/cpu_init.c
++++ b/target/ppc/cpu_init.c
+@@ -2712,14 +2712,6 @@ static void init_proc_e200(CPUPPCState *env)
+                  SPR_NOACCESS, SPR_NOACCESS,
+                  &spr_read_generic, &spr_write_generic,
+                  0x00000000); /* TOFIX */
+-    spr_register(env, SPR_BOOKE_DSRR0, "DSRR0",
+-                 SPR_NOACCESS, SPR_NOACCESS,
+-                 &spr_read_generic, &spr_write_generic,
+-                 0x00000000);
+-    spr_register(env, SPR_BOOKE_DSRR1, "DSRR1",
+-                 SPR_NOACCESS, SPR_NOACCESS,
+-                 &spr_read_generic, &spr_write_generic,
+-                 0x00000000);
+ #if !defined(CONFIG_USER_ONLY)
+     env->nb_tlb = 64;
+     env->nb_ways = 1;
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+index 278d163803..b68327e13f 100644
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -25,6 +25,7 @@
+ #include "exec/exec-all.h"
+ #include "instmap.h"
+ #include "tcg/tcg-op.h"
++#include "hw/core/tcg-cpu-ops.h"
+ #include "trace.h"
+ #include "semihosting/common-semi.h"
+ #include "cpu_bits.h"
+@@ -1345,6 +1346,23 @@ bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
+     } else if (probe) {
+         return false;
+     } else {
++        int wp_access = 0;
++
++        if (access_type == MMU_DATA_LOAD) {
++            wp_access |= BP_MEM_READ;
++        } else if (access_type == MMU_DATA_STORE) {
++            wp_access |= BP_MEM_WRITE;
++        }
++
++        /*
++         * If a watchpoint isn't found for 'addr' this will
++         * be a no-op and we'll resume the mmu_exception path.
++         * Otherwise we'll throw a debug exception and execution
++         * will continue elsewhere.
++         */
++        cpu_check_watchpoint(cs, address, size, MEMTXATTRS_UNSPECIFIED,
++                             wp_access, retaddr);
++
+         raise_mmu_exception(env, address, access_type, pmp_violation,
+                             first_stage_error,
+                             riscv_cpu_virt_enabled(env) ||
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index 26ea764407..cf71b52899 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -305,7 +305,7 @@ static void type2_breakpoint_insert(CPURISCVState *env, target_ulong index)
+     bool enabled = type2_breakpoint_enabled(ctrl);
+     CPUState *cs = env_cpu(env);
+     int flags = BP_CPU | BP_STOP_BEFORE_ACCESS;
+-    uint32_t size;
++    uint32_t size, def_size;
+ 
+     if (!enabled) {
+         return;
+@@ -328,7 +328,9 @@ static void type2_breakpoint_insert(CPURISCVState *env, target_ulong index)
+             cpu_watchpoint_insert(cs, addr, size, flags,
+                                   &env->cpu_watchpoint[index]);
+         } else {
+-            cpu_watchpoint_insert(cs, addr, 8, flags,
++            def_size = riscv_cpu_mxl(env) == MXL_RV64 ? 8 : 4;
++
++            cpu_watchpoint_insert(cs, addr, def_size, flags,
+                                   &env->cpu_watchpoint[index]);
+         }
+     }
+diff --git a/target/riscv/vector_helper.c b/target/riscv/vector_helper.c
+index a6ac61c724..d2fe96e5c8 100644
+--- a/target/riscv/vector_helper.c
++++ b/target/riscv/vector_helper.c
+@@ -4621,7 +4621,9 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1,          \
+         }                                                 \
+         s1 = OP(s1, (TD)s2);                              \
+     }                                                     \
+-    *((TD *)vd + HD(0)) = s1;                             \
++    if (vl > 0) {                                         \
++        *((TD *)vd + HD(0)) = s1;                         \
++    }                                                     \
+     env->vstart = 0;                                      \
+     /* set tail elements to 1s */                         \
+     vext_set_elems_1s(vd, vta, esz, vlenb);               \
+@@ -4707,7 +4709,9 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1,           \
+         }                                                  \
+         s1 = OP(s1, (TD)s2, &env->fp_status);              \
+     }                                                      \
+-    *((TD *)vd + HD(0)) = s1;                              \
++    if (vl > 0) {                                          \
++        *((TD *)vd + HD(0)) = s1;                          \
++    }                                                      \
+     env->vstart = 0;                                       \
+     /* set tail elements to 1s */                          \
+     vext_set_elems_1s(vd, vta, esz, vlenb);                \
+diff --git a/target/sparc/gdbstub.c b/target/sparc/gdbstub.c
+index 5d1e808e8c..2bbc494d81 100644
+--- a/target/sparc/gdbstub.c
++++ b/target/sparc/gdbstub.c
+@@ -80,8 +80,13 @@ int sparc_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n)
+         }
+     }
+     if (n < 80) {
+-        /* f32-f62 (double width, even numbers only) */
+-        return gdb_get_reg64(mem_buf, env->fpr[(n - 32) / 2].ll);
++        /* f32-f62 (16 double width registers, even register numbers only)
++         * n == 64: f32 : env->fpr[16]
++         * n == 65: f34 : env->fpr[17]
++         * etc...
++         * n == 79: f62 : env->fpr[31]
++         */
++        return gdb_get_reg64(mem_buf, env->fpr[(n - 64) + 16].ll);
+     }
+     switch (n) {
+     case 80:
+@@ -174,8 +179,13 @@ int sparc_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
+         }
+         return 4;
+     } else if (n < 80) {
+-        /* f32-f62 (double width, even numbers only) */
+-        env->fpr[(n - 32) / 2].ll = tmp;
++        /* f32-f62 (16 double width registers, even register numbers only)
++         * n == 64: f32 : env->fpr[16]
++         * n == 65: f34 : env->fpr[17]
++         * etc...
++         * n == 79: f62 : env->fpr[31]
++         */
++        env->fpr[(n - 64) + 16].ll = tmp;
+     } else {
+         switch (n) {
+         case 80:
+diff --git a/ui/cocoa.m b/ui/cocoa.m
+index c41689e951..54acf14794 100644
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -549,6 +549,9 @@ - (void) setContentDimensions
+     }
+ }
+ 
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++
+ - (void) updateUIInfoLocked
+ {
+     /* Must be called with the iothread lock, i.e. via updateUIInfo */
+@@ -594,6 +597,8 @@ - (void) updateUIInfoLocked
+     dpy_set_ui_info(dcl.con, &info, TRUE);
+ }
+ 
++#pragma clang diagnostic pop
++
+ - (void) updateUIInfo
+ {
+     if (!allow_events) {
+diff --git a/ui/meson.build b/ui/meson.build
+index 76c6644b3f..7756760789 100644
+--- a/ui/meson.build
++++ b/ui/meson.build
+@@ -110,8 +110,6 @@ if gtk.found()
+ endif
+ 
+ if sdl.found()
+-  softmmu_ss.add(when: 'CONFIG_WIN32', if_true: files('win32-kbd-hook.c'))
+-
+   sdl_ss = ss.source_set()
+   sdl_ss.add(sdl, sdl_image, pixman, glib, files(
+     'sdl2-2d.c',
+diff --git a/ui/sdl2.c b/ui/sdl2.c
+index fc7e8639c2..f9e7402151 100644
+--- a/ui/sdl2.c
++++ b/ui/sdl2.c
+@@ -32,7 +32,6 @@
+ #include "sysemu/runstate.h"
+ #include "sysemu/runstate-action.h"
+ #include "sysemu/sysemu.h"
+-#include "ui/win32-kbd-hook.h"
+ #include "qemu/log.h"
+ 
+ static int sdl2_num_outputs;
+@@ -231,7 +230,6 @@ static void sdl_grab_start(struct sdl2_console *scon)
+     }
+     SDL_SetWindowGrab(scon->real_window, SDL_TRUE);
+     gui_grab = 1;
+-    win32_kbd_set_grab(true);
+     sdl_update_caption(scon);
+ }
+ 
+@@ -239,7 +237,6 @@ static void sdl_grab_end(struct sdl2_console *scon)
+ {
+     SDL_SetWindowGrab(scon->real_window, SDL_FALSE);
+     gui_grab = 0;
+-    win32_kbd_set_grab(false);
+     sdl_show_cursor(scon);
+     sdl_update_caption(scon);
+ }
+@@ -340,19 +337,6 @@ static int get_mod_state(void)
+     }
+ }
+ 
+-static void *sdl2_win32_get_hwnd(struct sdl2_console *scon)
+-{
+-#ifdef CONFIG_WIN32
+-    SDL_SysWMinfo info;
+-
+-    SDL_VERSION(&info.version);
+-    if (SDL_GetWindowWMInfo(scon->real_window, &info)) {
+-        return info.info.win.window;
+-    }
+-#endif
+-    return NULL;
+-}
+-
+ static void handle_keydown(SDL_Event *ev)
+ {
+     int win;
+@@ -576,10 +560,6 @@ static void handle_windowevent(SDL_Event *ev)
+         sdl2_redraw(scon);
+         break;
+     case SDL_WINDOWEVENT_FOCUS_GAINED:
+-        win32_kbd_set_grab(gui_grab);
+-        if (qemu_console_is_graphic(scon->dcl.con)) {
+-            win32_kbd_set_window(sdl2_win32_get_hwnd(scon));
+-        }
+         /* fall through */
+     case SDL_WINDOWEVENT_ENTER:
+         if (!gui_grab && (qemu_input_is_absolute() || absolute_enabled)) {
+@@ -595,9 +575,6 @@ static void handle_windowevent(SDL_Event *ev)
+         scon->ignore_hotkeys = get_mod_state();
+         break;
+     case SDL_WINDOWEVENT_FOCUS_LOST:
+-        if (qemu_console_is_graphic(scon->dcl.con)) {
+-            win32_kbd_set_window(NULL);
+-        }
+         if (gui_grab && !gui_fullscreen) {
+             sdl_grab_end(scon);
+         }
+@@ -849,10 +826,7 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
+ #ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR /* only available since SDL 2.0.8 */
+     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+ #endif
+-#ifndef CONFIG_WIN32
+-    /* QEMU uses its own low level keyboard hook procecure on Windows */
+     SDL_SetHint(SDL_HINT_GRAB_KEYBOARD, "1");
+-#endif
+ #ifdef SDL_HINT_ALLOW_ALT_TAB_WHILE_GRABBED
+     SDL_SetHint(SDL_HINT_ALLOW_ALT_TAB_WHILE_GRABBED, "0");
+ #endif
+diff --git a/util/cacheflush.c b/util/cacheflush.c
+index 2c2c73e085..9b1debd1c1 100644
+--- a/util/cacheflush.c
++++ b/util/cacheflush.c
+@@ -264,9 +264,11 @@ void flush_idcache_range(uintptr_t rx, uintptr_t rw, size_t len)
+         for (p = rw & -dcache_lsize; p < rw + len; p += dcache_lsize) {
+             asm volatile("dc\tcvau, %0" : : "r" (p) : "memory");
+         }
+-        asm volatile("dsb\tish" : : : "memory");
+     }
+ 
++    /* DSB unconditionally to ensure any outstanding writes are committed. */
++    asm volatile("dsb\tish" : : : "memory");
++
+     /*
+      * If CTR_EL0.DIC is enabled, Instruction cache cleaning to the Point
+      * of Unification is not required for instruction to data coherence.
