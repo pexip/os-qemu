@@ -1,0 +1,590 @@
+Subject: v7.2.18
+Date: Mon May 26 10:32:24 2025 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.17
+and upstream qemu v7.2.18.
+
+ Makefile                                  |  6 ++---
+ VERSION                                   |  2 +-
+ common-user/host/riscv/safe-syscall.inc.S |  4 ++--
+ hw/9pfs/9p.c                              | 39 ++++++++++++++++++++++++-------
+ hw/9pfs/9p.h                              |  1 +
+ hw/gpio/imx_gpio.c                        |  2 +-
+ hw/i2c/imx_i2c.c                          | 11 ++++-----
+ hw/mips/fuloong2e.c                       |  1 -
+ hw/mips/loongson3_virt.c                  |  1 -
+ hw/net/virtio-net.c                       |  2 ++
+ hw/pci-host/designware.c                  |  2 +-
+ hw/rtc/goldfish_rtc.c                     | 13 +++++------
+ hw/smbios/smbios.c                        |  3 +++
+ hw/virtio/virtio.c                        |  4 +++-
+ migration/channel-block.c                 |  2 +-
+ plugins/loader.c                          |  2 +-
+ qapi/misc-target.json                     |  4 ++--
+ target/arm/translate.c                    |  3 ++-
+ target/avr/disas.c                        | 21 +++++++++++------
+ target/avr/insn.decode                    |  7 ++----
+ target/avr/translate.c                    |  2 --
+ target/i386/hvf/x86_flags.c               |  1 +
+ target/mips/cpu-param.h                   |  5 ----
+ target/mips/tcg/sysemu/cp0_helper.c       | 32 ++++++++-----------------
+ target/mips/tcg/sysemu/tlb_helper.c       |  4 ++--
+ target/mips/tcg/tcg-internal.h            |  2 +-
+ 26 files changed, 94 insertions(+), 82 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index a48103cc8a..d5aecb9418 100644
+--- a/Makefile
++++ b/Makefile
+@@ -213,10 +213,10 @@ clean: recurse-clean
+ 
+ VERSION = $(shell cat $(SRC_PATH)/VERSION)
+ 
+-dist: qemu-$(VERSION).tar.bz2
++dist: qemu-$(VERSION).tar.xz
+ 
+-qemu-%.tar.bz2:
+-	$(SRC_PATH)/scripts/make-release "$(SRC_PATH)" "$(patsubst qemu-%.tar.bz2,%,$@)"
++qemu-%.tar.xz:
++	$(SRC_PATH)/scripts/make-release "$(SRC_PATH)" "$(patsubst qemu-%.tar.xz,%,$@)"
+ 
+ distclean: clean recurse-distclean
+ 	-$(quiet-@)test -f build.ninja && $(NINJA) $(NINJAFLAGS) -t clean -g || :
+diff --git a/VERSION b/VERSION
+index a961ff94f2..eca46b131d 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.17
++7.2.18
+diff --git a/common-user/host/riscv/safe-syscall.inc.S b/common-user/host/riscv/safe-syscall.inc.S
+index dfe83c300e..c8b81e33d0 100644
+--- a/common-user/host/riscv/safe-syscall.inc.S
++++ b/common-user/host/riscv/safe-syscall.inc.S
+@@ -69,11 +69,11 @@ safe_syscall_end:
+ 
+         /* code path setting errno */
+ 0:      neg     a0, a0
+-        j       safe_syscall_set_errno_tail
++        tail    safe_syscall_set_errno_tail
+ 
+         /* code path when we didn't execute the syscall */
+ 2:      li      a0, QEMU_ERESTARTSYS
+-        j       safe_syscall_set_errno_tail
++        tail    safe_syscall_set_errno_tail
+ 
+         .cfi_endproc
+         .size   safe_syscall_base, .-safe_syscall_base
+diff --git a/hw/9pfs/9p.c b/hw/9pfs/9p.c
+index d950ad6de6..e7cfc77071 100644
+--- a/hw/9pfs/9p.c
++++ b/hw/9pfs/9p.c
+@@ -440,16 +440,24 @@ void coroutine_fn v9fs_reclaim_fd(V9fsPDU *pdu)
+     V9fsFidState *f;
+     GHashTableIter iter;
+     gpointer fid;
++    int err;
++    int nclosed = 0;
++
++    /* prevent multiple coroutines running this function simultaniously */
++    if (s->reclaiming) {
++        return;
++    }
++    s->reclaiming = true;
+ 
+     g_hash_table_iter_init(&iter, s->fids);
+ 
+     QSLIST_HEAD(, V9fsFidState) reclaim_list =
+         QSLIST_HEAD_INITIALIZER(reclaim_list);
+ 
++    /* Pick FIDs to be closed, collect them on reclaim_list. */
+     while (g_hash_table_iter_next(&iter, &fid, (gpointer *) &f)) {
+         /*
+-         * Unlink fids cannot be reclaimed. Check
+-         * for them and skip them. Also skip fids
++         * Unlinked fids cannot be reclaimed, skip those, and also skip fids
+          * currently being operated on.
+          */
+         if (f->ref || f->flags & FID_NON_RECLAIMABLE) {
+@@ -499,23 +507,34 @@ void coroutine_fn v9fs_reclaim_fd(V9fsPDU *pdu)
+         }
+     }
+     /*
+-     * Now close the fid in reclaim list. Free them if they
+-     * are already clunked.
++     * Close the picked FIDs altogether on a background I/O driver thread. Do
++     * this all at once to keep latency (i.e. amount of thread hops between main
++     * thread <-> fs driver background thread) as low as possible.
+      */
++    v9fs_co_run_in_worker({
++        QSLIST_FOREACH(f, &reclaim_list, reclaim_next) {
++            err = (f->fid_type == P9_FID_DIR) ?
++                s->ops->closedir(&s->ctx, &f->fs_reclaim) :
++                s->ops->close(&s->ctx, &f->fs_reclaim);
++            if (!err) {
++                /* total_open_fd must only be mutated on main thread */
++                nclosed++;
++            }
++        }
++    });
++    total_open_fd -= nclosed;
++    /* Free the closed FIDs. */
+     while (!QSLIST_EMPTY(&reclaim_list)) {
+         f = QSLIST_FIRST(&reclaim_list);
+         QSLIST_REMOVE(&reclaim_list, f, V9fsFidState, reclaim_next);
+-        if (f->fid_type == P9_FID_FILE) {
+-            v9fs_co_close(pdu, &f->fs_reclaim);
+-        } else if (f->fid_type == P9_FID_DIR) {
+-            v9fs_co_closedir(pdu, &f->fs_reclaim);
+-        }
+         /*
+          * Now drop the fid reference, free it
+          * if clunked.
+          */
+         put_fid(pdu, f);
+     }
++
++    s->reclaiming = false;
+ }
+ 
+ /*
+@@ -4300,6 +4319,8 @@ int v9fs_device_realize_common(V9fsState *s, const V9fsTransport *t,
+     s->ctx.fst = &fse->fst;
+     fsdev_throttle_init(s->ctx.fst);
+ 
++    s->reclaiming = false;
++
+     rc = 0;
+ out:
+     if (rc) {
+diff --git a/hw/9pfs/9p.h b/hw/9pfs/9p.h
+index 2fce4140d1..1f0449f305 100644
+--- a/hw/9pfs/9p.h
++++ b/hw/9pfs/9p.h
+@@ -363,6 +363,7 @@ struct V9fsState {
+     uint64_t qp_ndevices; /* Amount of entries in qpd_table. */
+     uint16_t qp_affix_next;
+     uint64_t qp_fullpath_next;
++    bool reclaiming;
+ };
+ 
+ /* 9p2000.L open flags */
+diff --git a/hw/gpio/imx_gpio.c b/hw/gpio/imx_gpio.c
+index c7f98b7bb1..ee5eca6b89 100644
+--- a/hw/gpio/imx_gpio.c
++++ b/hw/gpio/imx_gpio.c
+@@ -79,7 +79,7 @@ static void imx_gpio_update_int(IMXGPIOState *s)
+ static void imx_gpio_set_int_line(IMXGPIOState *s, int line, IMXGPIOLevel level)
+ {
+     /* if this signal isn't configured as an input signal, nothing to do */
+-    if (!extract32(s->gdir, line, 1)) {
++    if (extract32(s->gdir, line, 1)) {
+         return;
+     }
+ 
+diff --git a/hw/i2c/imx_i2c.c b/hw/i2c/imx_i2c.c
+index 9792583fea..64dbea41ee 100644
+--- a/hw/i2c/imx_i2c.c
++++ b/hw/i2c/imx_i2c.c
+@@ -90,13 +90,12 @@ static void imx_i2c_reset(DeviceState *dev)
+ 
+ static inline void imx_i2c_raise_interrupt(IMXI2CState *s)
+ {
+-    /*
+-     * raise an interrupt if the device is enabled and it is configured
+-     * to generate some interrupts.
+-     */
+-    if (imx_i2c_is_enabled(s) && imx_i2c_interrupt_is_enabled(s)) {
++    if (imx_i2c_is_enabled(s)) {
+         s->i2sr |= I2SR_IIF;
+-        qemu_irq_raise(s->irq);
++
++        if (imx_i2c_interrupt_is_enabled(s)) {
++            qemu_irq_raise(s->irq);
++        }
+     }
+ }
+ 
+diff --git a/hw/mips/fuloong2e.c b/hw/mips/fuloong2e.c
+index 34befa5dd5..dbd26df00b 100644
+--- a/hw/mips/fuloong2e.c
++++ b/hw/mips/fuloong2e.c
+@@ -336,7 +336,6 @@ static void mips_fuloong2e_machine_init(MachineClass *mc)
+     mc->default_cpu_type = MIPS_CPU_TYPE_NAME("Loongson-2E");
+     mc->default_ram_size = 256 * MiB;
+     mc->default_ram_id = "fuloong2e.ram";
+-    mc->minimum_page_bits = 14;
+ }
+ 
+ DEFINE_MACHINE("fuloong2e", mips_fuloong2e_machine_init)
+diff --git a/hw/mips/loongson3_virt.c b/hw/mips/loongson3_virt.c
+index b4f6bff1b8..dc94e21438 100644
+--- a/hw/mips/loongson3_virt.c
++++ b/hw/mips/loongson3_virt.c
+@@ -616,7 +616,6 @@ static void loongson3v_machine_class_init(ObjectClass *oc, void *data)
+     mc->max_cpus = LOONGSON_MAX_VCPUS;
+     mc->default_ram_id = "loongson3.highram";
+     mc->default_ram_size = 1600 * MiB;
+-    mc->minimum_page_bits = 14;
+ }
+ 
+ static const TypeInfo loongson3_machine_types[] = {
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 204a80ec71..0ba1db5b14 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -1914,6 +1914,8 @@ static ssize_t virtio_net_receive_rcu(NetClientState *nc, const uint8_t *buf,
+                                     sg, elem->in_num,
+                                     offsetof(typeof(mhdr), num_buffers),
+                                     sizeof(mhdr.num_buffers));
++            } else {
++                mhdr.num_buffers = cpu_to_le16(1);
+             }
+ 
+             receive_header(n, sg, elem->in_num, buf, size);
+diff --git a/hw/pci-host/designware.c b/hw/pci-host/designware.c
+index c235b9daa3..2156c7f9de 100644
+--- a/hw/pci-host/designware.c
++++ b/hw/pci-host/designware.c
+@@ -362,7 +362,7 @@ static void designware_pcie_root_config_write(PCIDevice *d, uint32_t address,
+ 
+     case DESIGNWARE_PCIE_ATU_UPPER_TARGET:
+         viewport->target &= 0x00000000FFFFFFFFULL;
+-        viewport->target |= val;
++        viewport->target |= (uint64_t)val << 32;
+         break;
+ 
+     case DESIGNWARE_PCIE_ATU_LIMIT:
+diff --git a/hw/rtc/goldfish_rtc.c b/hw/rtc/goldfish_rtc.c
+index 81cc942b46..84778bbc36 100644
+--- a/hw/rtc/goldfish_rtc.c
++++ b/hw/rtc/goldfish_rtc.c
+@@ -239,15 +239,8 @@ static const VMStateDescription goldfish_rtc_vmstate = {
+ static void goldfish_rtc_reset(DeviceState *dev)
+ {
+     GoldfishRTCState *s = GOLDFISH_RTC(dev);
+-    struct tm tm;
+ 
+     timer_del(s->timer);
+-
+-    qemu_get_timedate(&tm, 0);
+-    s->tick_offset = mktimegm(&tm);
+-    s->tick_offset *= NANOSECONDS_PER_SECOND;
+-    s->tick_offset -= qemu_clock_get_ns(rtc_clock);
+-    s->tick_offset_vmstate = 0;
+     s->alarm_next = 0;
+     s->alarm_running = 0;
+     s->irq_pending = 0;
+@@ -258,6 +251,7 @@ static void goldfish_rtc_realize(DeviceState *d, Error **errp)
+ {
+     SysBusDevice *dev = SYS_BUS_DEVICE(d);
+     GoldfishRTCState *s = GOLDFISH_RTC(d);
++    struct tm tm;
+ 
+     memory_region_init_io(&s->iomem, OBJECT(s),
+                           &goldfish_rtc_ops[s->big_endian], s,
+@@ -267,6 +261,11 @@ static void goldfish_rtc_realize(DeviceState *d, Error **errp)
+     sysbus_init_irq(dev, &s->irq);
+ 
+     s->timer = timer_new_ns(rtc_clock, goldfish_rtc_interrupt, s);
++
++    qemu_get_timedate(&tm, 0);
++    s->tick_offset = mktimegm(&tm);
++    s->tick_offset *= NANOSECONDS_PER_SECOND;
++    s->tick_offset -= qemu_clock_get_ns(rtc_clock);
+ }
+ 
+ static Property goldfish_rtc_properties[] = {
+diff --git a/hw/smbios/smbios.c b/hw/smbios/smbios.c
+index 9f4d007d96..44a88ab69d 100644
+--- a/hw/smbios/smbios.c
++++ b/hw/smbios/smbios.c
+@@ -1221,6 +1221,9 @@ static int save_opt_one(void *opaque,
+             g_byte_array_append(data, (guint8 *)buf, ret);
+         }
+ 
++        buf[0] = '\0';
++        g_byte_array_append(data, (guint8 *)buf, 1);
++
+         qemu_close(fd);
+ 
+         *opt->dest = g_renew(char *, *opt->dest, (*opt->ndest) + 1);
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index d0d13f4766..5914f839ea 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -2578,6 +2578,8 @@ void virtio_queue_enable(VirtIODevice *vdev, uint32_t queue_index)
+     }
+ }
+ 
++static int virtio_set_features_nocheck(VirtIODevice *vdev, uint64_t val);
++
+ void virtio_reset(void *opaque)
+ {
+     VirtIODevice *vdev = opaque;
+@@ -2600,7 +2602,7 @@ void virtio_reset(void *opaque)
+     vdev->start_on_kick = false;
+     vdev->started = false;
+     vdev->broken = false;
+-    vdev->guest_features = 0;
++    virtio_set_features_nocheck(vdev, 0);
+     vdev->queue_sel = 0;
+     vdev->status = 0;
+     vdev->disabled = false;
+diff --git a/migration/channel-block.c b/migration/channel-block.c
+index f4ab53acdb..81ec5c6ac6 100644
+--- a/migration/channel-block.c
++++ b/migration/channel-block.c
+@@ -122,7 +122,7 @@ qio_channel_block_seek(QIOChannel *ioc,
+         bioc->offset = offset;
+         break;
+     case SEEK_CUR:
+-        bioc->offset += whence;
++        bioc->offset += offset;
+         break;
+     case SEEK_END:
+         error_setg(errp, "Size of VMstate region is unknown");
+diff --git a/plugins/loader.c b/plugins/loader.c
+index 88c30bde2d..370fe54836 100644
+--- a/plugins/loader.c
++++ b/plugins/loader.c
+@@ -374,7 +374,7 @@ static void plugin_reset_destroy(struct qemu_plugin_reset_data *data)
+ {
+     qemu_rec_mutex_lock(&plugin.lock);
+     plugin_reset_destroy__locked(data);
+-    qemu_rec_mutex_lock(&plugin.lock);
++    qemu_rec_mutex_unlock(&plugin.lock);
+ }
+ 
+ static void plugin_flush_destroy(CPUState *cpu, run_on_cpu_data arg)
+diff --git a/qapi/misc-target.json b/qapi/misc-target.json
+index 4944c0528f..d3a6ce355e 100644
+--- a/qapi/misc-target.json
++++ b/qapi/misc-target.json
+@@ -352,7 +352,7 @@
+ ##
+ # @query-sgx:
+ #
+-# Returns information about SGX
++# Returns information about configured SGX capabilities of guest
+ #
+ # Returns: @SGXInfo
+ #
+@@ -372,7 +372,7 @@
+ ##
+ # @query-sgx-capabilities:
+ #
+-# Returns information from host SGX capabilities
++# Returns information about SGX capabilities of host
+ #
+ # Returns: @SGXInfo
+ #
+diff --git a/target/arm/translate.c b/target/arm/translate.c
+index 10dfa11a2b..ed9ed8ed0a 100644
+--- a/target/arm/translate.c
++++ b/target/arm/translate.c
+@@ -9545,7 +9545,8 @@ static bool arm_check_ss_active(DisasContext *dc)
+ 
+ static void arm_post_translate_insn(DisasContext *dc)
+ {
+-    if (dc->condjmp && dc->base.is_jmp == DISAS_NEXT) {
++    if (dc->condjmp &&
++        (dc->base.is_jmp == DISAS_NEXT || dc->base.is_jmp == DISAS_TOO_MANY)) {
+         if (dc->pc_save != dc->condlabel.pc_save) {
+             gen_update_pc(dc, dc->condlabel.pc_save - dc->pc_save);
+         }
+diff --git a/target/avr/disas.c b/target/avr/disas.c
+index b7689e8d7c..d341030174 100644
+--- a/target/avr/disas.c
++++ b/target/avr/disas.c
+@@ -68,28 +68,35 @@ static bool decode_insn(DisasContext *ctx, uint16_t insn);
+ 
+ int avr_print_insn(bfd_vma addr, disassemble_info *info)
+ {
+-    DisasContext ctx;
++    DisasContext ctx = { info };
+     DisasContext *pctx = &ctx;
+     bfd_byte buffer[4];
+     uint16_t insn;
+     int status;
+ 
+-    ctx.info = info;
+-
+-    status = info->read_memory_func(addr, buffer, 4, info);
++    status = info->read_memory_func(addr, buffer, 2, info);
+     if (status != 0) {
+         info->memory_error_func(status, addr, info);
+         return -1;
+     }
+     insn = bfd_getl16(buffer);
+-    ctx.next_word = bfd_getl16(buffer + 2);
+-    ctx.next_word_used = false;
++
++    status = info->read_memory_func(addr + 2, buffer + 2, 2, info);
++    if (status == 0) {
++        ctx.next_word = bfd_getl16(buffer + 2);
++    }
+ 
+     if (!decode_insn(&ctx, insn)) {
+         output(".db", "0x%02x, 0x%02x", buffer[0], buffer[1]);
+     }
+ 
+-    return ctx.next_word_used ? 4 : 2;
++    if (!ctx.next_word_used) {
++        return 2;
++    } else if (status == 0) {
++        return 4;
++    }
++    info->memory_error_func(status, addr + 2, info);
++    return -1;
+ }
+ 
+ 
+diff --git a/target/avr/insn.decode b/target/avr/insn.decode
+index 482c23ad0c..cc302249db 100644
+--- a/target/avr/insn.decode
++++ b/target/avr/insn.decode
+@@ -118,11 +118,8 @@ BRBC            1111 01 ....... ...         @op_bit_imm
+ @io_rd_imm      .... . .. ..... ....        &rd_imm     rd=%rd imm=%io_imm
+ @ldst_d         .. . . .. . rd:5  . ...     &rd_imm     imm=%ldst_d_imm
+ 
+-# The 16-bit immediate is completely in the next word.
+-# Fields cannot be defined with no bits, so we cannot play
+-# the same trick and append to a zero-bit value.
+-# Defer reading the immediate until trans_{LDS,STS}.
+-@ldst_s         .... ... rd:5 ....          imm=0
++%ldst_imm       !function=next_word
++@ldst_s         .... ... rd:5 ....          imm=%ldst_imm
+ 
+ MOV             0010 11 . ..... ....        @op_rd_rr
+ MOVW            0000 0001 .... ....         &rd_rr      rd=%rd_d rr=%rr_d
+diff --git a/target/avr/translate.c b/target/avr/translate.c
+index 2bed56f135..a1bfa500bf 100644
+--- a/target/avr/translate.c
++++ b/target/avr/translate.c
+@@ -1690,7 +1690,6 @@ static bool trans_LDS(DisasContext *ctx, arg_LDS *a)
+     TCGv Rd = cpu_r[a->rd];
+     TCGv addr = tcg_temp_new_i32();
+     TCGv H = cpu_rampD;
+-    a->imm = next_word(ctx);
+ 
+     tcg_gen_mov_tl(addr, H); /* addr = H:M:L */
+     tcg_gen_shli_tl(addr, addr, 16);
+@@ -1925,7 +1924,6 @@ static bool trans_STS(DisasContext *ctx, arg_STS *a)
+     TCGv Rd = cpu_r[a->rd];
+     TCGv addr = tcg_temp_new_i32();
+     TCGv H = cpu_rampD;
+-    a->imm = next_word(ctx);
+ 
+     tcg_gen_mov_tl(addr, H); /* addr = H:M:L */
+     tcg_gen_shli_tl(addr, addr, 16);
+diff --git a/target/i386/hvf/x86_flags.c b/target/i386/hvf/x86_flags.c
+index 03d6de5efc..fedc70a1b8 100644
+--- a/target/i386/hvf/x86_flags.c
++++ b/target/i386/hvf/x86_flags.c
+@@ -293,6 +293,7 @@ void set_SF(CPUX86State *env, bool val)
+ 
+ void lflags_to_rflags(CPUX86State *env)
+ {
++    env->eflags &= ~(CC_C|CC_P|CC_A|CC_Z|CC_S|CC_O);
+     env->eflags |= get_CF(env) ? CC_C : 0;
+     env->eflags |= get_PF(env) ? CC_P : 0;
+     env->eflags |= get_AF(env) ? CC_A : 0;
+diff --git a/target/mips/cpu-param.h b/target/mips/cpu-param.h
+index f4c76994ea..4d9f4297f1 100644
+--- a/target/mips/cpu-param.h
++++ b/target/mips/cpu-param.h
+@@ -23,12 +23,7 @@
+ #  define TARGET_VIRT_ADDR_SPACE_BITS 32
+ #endif
+ #endif
+-#ifdef CONFIG_USER_ONLY
+ #define TARGET_PAGE_BITS 12
+-#else
+-#define TARGET_PAGE_BITS_VARY
+-#define TARGET_PAGE_BITS_MIN 12
+-#endif
+ #define NB_MMU_MODES 4
+ 
+ #endif
+diff --git a/target/mips/tcg/sysemu/cp0_helper.c b/target/mips/tcg/sysemu/cp0_helper.c
+index 5da1124589..80260ecd8a 100644
+--- a/target/mips/tcg/sysemu/cp0_helper.c
++++ b/target/mips/tcg/sysemu/cp0_helper.c
+@@ -887,36 +887,24 @@ void helper_mtc0_memorymapid(CPUMIPSState *env, target_ulong arg1)
+     }
+ }
+ 
+-void update_pagemask(CPUMIPSState *env, target_ulong arg1, int32_t *pagemask)
++uint32_t compute_pagemask(uint32_t val)
+ {
+-    uint32_t mask;
+-    int maskbits;
+-
+     /* Don't care MASKX as we don't support 1KB page */
+-    mask = extract32((uint32_t)arg1, CP0PM_MASK, 16);
+-    maskbits = cto32(mask);
++    uint32_t mask = extract32(val, CP0PM_MASK, 16);
++    int maskbits = cto32(mask);
+ 
+-    /* Ensure no more set bit after first zero */
+-    if ((mask >> maskbits) != 0) {
+-        goto invalid;
+-    }
+-    /* We don't support VTLB entry smaller than target page */
+-    if ((maskbits + TARGET_PAGE_BITS_MIN) < TARGET_PAGE_BITS) {
+-        goto invalid;
++    /* Ensure no more set bit after first zero, and maskbits even. */
++    if ((mask >> maskbits) == 0 && maskbits % 2 == 0) {
++        return mask << CP0PM_MASK;
++    } else {
++        /* When invalid, set to default target page size. */
++        return 0;
+     }
+-    env->CP0_PageMask = mask << CP0PM_MASK;
+-
+-    return;
+-
+-invalid:
+-    /* When invalid, set to default target page size. */
+-    mask = (~TARGET_PAGE_MASK >> TARGET_PAGE_BITS_MIN);
+-    env->CP0_PageMask = mask << CP0PM_MASK;
+ }
+ 
+ void helper_mtc0_pagemask(CPUMIPSState *env, target_ulong arg1)
+ {
+-    update_pagemask(env, arg1, &env->CP0_PageMask);
++    env->CP0_PageMask = compute_pagemask(arg1);
+ }
+ 
+ void helper_mtc0_pagegrain(CPUMIPSState *env, target_ulong arg1)
+diff --git a/target/mips/tcg/sysemu/tlb_helper.c b/target/mips/tcg/sysemu/tlb_helper.c
+index 9d16859c0a..cce3dcdc0e 100644
+--- a/target/mips/tcg/sysemu/tlb_helper.c
++++ b/target/mips/tcg/sysemu/tlb_helper.c
+@@ -877,8 +877,8 @@ refill:
+             break;
+         }
+     }
+-    pw_pagemask = m >> TARGET_PAGE_BITS_MIN;
+-    update_pagemask(env, pw_pagemask << CP0PM_MASK, &pw_pagemask);
++    pw_pagemask = m >> TARGET_PAGE_BITS;
++    pw_pagemask = compute_pagemask(pw_pagemask << CP0PM_MASK);
+     pw_entryhi = (address & ~0x1fff) | (env->CP0_EntryHi & 0xFF);
+     {
+         target_ulong tmp_entryhi = env->CP0_EntryHi;
+diff --git a/target/mips/tcg/tcg-internal.h b/target/mips/tcg/tcg-internal.h
+index aef032c48d..be398665e6 100644
+--- a/target/mips/tcg/tcg-internal.h
++++ b/target/mips/tcg/tcg-internal.h
+@@ -45,7 +45,7 @@ bool mips_cpu_exec_interrupt(CPUState *cpu, int int_req);
+ 
+ void mmu_init(CPUMIPSState *env, const mips_def_t *def);
+ 
+-void update_pagemask(CPUMIPSState *env, target_ulong arg1, int32_t *pagemask);
++uint32_t compute_pagemask(uint32_t val);
+ 
+ void r4k_invalidate_tlb(CPUMIPSState *env, int idx, int use_extra);
+ uint32_t cpu_mips_get_random(CPUMIPSState *env);
