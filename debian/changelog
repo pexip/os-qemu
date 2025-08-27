@@ -1,3 +1,51 @@
+qemu (1:7.2+dfsg-7+deb12u15+pexip24u1) pexip; urgency=medium
+
+  * New upstream release
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Wed, 27 Aug 2025 11:58:02 +0100
+
+qemu (1:7.2+dfsg-7+deb12u15) bookworm-security; urgency=medium
+
+  * d/binfmt-install: stop using C (Credentials) flag for binfmt_misc
+    registration.  qemu-user binaries were never meant to be used in
+    suid/sgid scenarios, but was used in debian since late 2009.  Any
+    foreign suid/sgid binary accessible to the users, in presence of
+    qemu-user binfmt, is trivially exploitable to gain elevated privileges.
+    This change might break existing setups since for many years people
+    relied on qemu-user binfmt working with suid binaries, but this is
+    a situation where it is definitely better be safe than sorry.
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 15 Aug 2025 23:27:17 +0300
+
+qemu (1:7.2+dfsg-7+deb12u14) bookworm; urgency=medium
+
+  * v7.2.18:
+   -  Update version for 7.2.18 release
+   -  qapi/misc-target: Fix the doc to distinguish
+      query-sgx and query-sgx-capabilities
+   -  common-user/host/riscv: use tail pseudoinstruction for calling tail
+   -  virtio: Call set_features during reset
+   -  9pfs: fix FD leak and reduce latency of v9fs_reclaim_fd()
+   -  9pfs: fix concurrent v9fs_reclaim_fd() calls
+   -  hw/i2c/imx: Always set interrupt status bit if interrupt condition occurs
+   -  hw/gpio/imx_gpio: Fix interpretation of GDIR polarity
+   -  target/arm: Don't assert() for ISB/SB inside IT block
+   -  target/avr: Improve decode of LDS, STS
+   -  target/i386/hvf: fix lflags_to_rflags
+   -  plugins/loader: fix deadlock when resetting/uninstalling a plugin
+   -  smbios: Fix buffer overrun when using path= option
+   -  virtio-net: Fix num_buffers for version 1
+   -  migration: fix SEEK_CUR offset calculation in qio_channel_block_seek
+   -  target/mips: Simplify and fix update_pagemask
+   -  target/mips: Require even maskbits in update_pagemask
+   -  target/mips: Revert TARGET_PAGE_BITS_VARY
+   -  target/avr: Fix buffer read in avr_print_insn
+   -  hw/pci-host/designware: Fix ATU_UPPER_TARGET register access
+   -  hw/rtc/goldfish: keep time offset when resetting
+   -  Makefile: "make dist" generates a .xz, not .bz2
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 10 Jul 2025 09:25:36 +0300
+
 qemu (1:7.2+dfsg-7+deb12u13+pexip24u1) pexip; urgency=medium
 
   * New upstream release
