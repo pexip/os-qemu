@@ -1,0 +1,867 @@
+Subject: v7.2.19
+Date: Tue Jul 22 20:46:34 2025 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.18
+and upstream qemu v7.2.19.
+
+ VERSION                          |  2 +-
+ audio/audio.c                    |  4 +++
+ hw/arm/virt.c                    | 15 ++++++----
+ hw/core/qdev-properties-system.c |  1 +
+ hw/i386/amd_iommu.c              | 17 +++++------
+ hw/i386/amd_iommu.h              | 59 +++++++++++++++++++-------------------
+ hw/loongarch/acpi-build.c        |  4 +--
+ hw/misc/aspeed_hace.c            | 18 ++++++------
+ hw/pci/pci.c                     |  2 +-
+ hw/virtio/virtio-pci.c           |  7 ++++-
+ include/hw/pci/pci.h             |  1 +
+ linux-user/arm/cpu_loop.c        |  1 +
+ linux-user/fd-trans.h            | 10 +++++++
+ linux-user/main.c                |  2 ++
+ migration/ram.c                  |  4 ++-
+ qemu-options.hx                  |  8 +++---
+ target/arm/hvf/hvf.c             |  2 +-
+ target/arm/kvm64.c               |  2 +-
+ target/arm/sme_helper.c          | 62 +++++++++++++++++++++++++++++-----------
+ target/arm/translate-a64.c       | 29 +++++++++++++------
+ target/arm/translate-sve.c       | 44 +++++++++++++++++++---------
+ tcg/tcg.c                        |  2 +-
+ ui/vnc-enc-zlib.c                | 30 +++++++++----------
+ ui/vnc.c                         | 13 +++++++--
+ ui/vnc.h                         |  2 +-
+ 25 files changed, 220 insertions(+), 121 deletions(-)
+
+diff --git a/VERSION b/VERSION
+index eca46b131d..c38925f4c2 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.18
++7.2.19
+diff --git a/audio/audio.c b/audio/audio.c
+index 065602ce1b..0caf41fff6 100644
+--- a/audio/audio.c
++++ b/audio/audio.c
+@@ -894,6 +894,10 @@ size_t AUD_read(SWVoiceIn *sw, void *buf, size_t size)
+ 
+ int AUD_get_buffer_size_out(SWVoiceOut *sw)
+ {
++    if (!sw) {
++        return 0;
++    }
++
+     return sw->hw->samples * sw->hw->info.bytes_per_frame;
+ }
+ 
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index b871350856..5bf58ff550 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -1390,9 +1390,12 @@ static void create_virtio_iommu_dt_bindings(VirtMachineState *vms)
+     qemu_fdt_setprop_cell(ms->fdt, node, "phandle", vms->iommu_phandle);
+     g_free(node);
+ 
+-    qemu_fdt_setprop_cells(ms->fdt, vms->pciehb_nodename, "iommu-map",
+-                           0x0, vms->iommu_phandle, 0x0, bdf,
+-                           bdf + 1, vms->iommu_phandle, bdf + 1, 0xffff - bdf);
++    if (!vms->default_bus_bypass_iommu) {
++        qemu_fdt_setprop_cells(ms->fdt, vms->pciehb_nodename, "iommu-map",
++                               0x0, vms->iommu_phandle, 0x0, bdf,
++                               bdf + 1, vms->iommu_phandle, bdf + 1,
++                               0xffff - bdf);
++    }
+ }
+ 
+ static void create_pcie(VirtMachineState *vms)
+@@ -1522,8 +1525,10 @@ static void create_pcie(VirtMachineState *vms)
+         switch (vms->iommu) {
+         case VIRT_IOMMU_SMMUV3:
+             create_smmu(vms, vms->bus);
+-            qemu_fdt_setprop_cells(ms->fdt, nodename, "iommu-map",
+-                                   0x0, vms->iommu_phandle, 0x0, 0x10000);
++            if (!vms->default_bus_bypass_iommu) {
++                qemu_fdt_setprop_cells(ms->fdt, nodename, "iommu-map",
++                                       0x0, vms->iommu_phandle, 0x0, 0x10000);
++            }
+             break;
+         default:
+             g_assert_not_reached();
+diff --git a/hw/core/qdev-properties-system.c b/hw/core/qdev-properties-system.c
+index d350789e76..15dacbee6d 100644
+--- a/hw/core/qdev-properties-system.c
++++ b/hw/core/qdev-properties-system.c
+@@ -116,6 +116,7 @@ static void set_drive_helper(Object *obj, Visitor *v, const char *name,
+         if (ctx != bdrv_get_aio_context(bs)) {
+             error_setg(errp, "Different aio context is not supported for new "
+                        "node");
++            return;
+         }
+ 
+         aio_context_acquire(ctx);
+diff --git a/hw/i386/amd_iommu.c b/hw/i386/amd_iommu.c
+index d68e85b606..09c7d3c560 100644
+--- a/hw/i386/amd_iommu.c
++++ b/hw/i386/amd_iommu.c
+@@ -127,7 +127,7 @@ static void amdvi_writeq(AMDVIState *s, hwaddr addr, uint64_t val)
+ {
+     uint64_t romask = ldq_le_p(&s->romask[addr]);
+     uint64_t w1cmask = ldq_le_p(&s->w1cmask[addr]);
+-    uint32_t oldval = ldq_le_p(&s->mmior[addr]);
++    uint64_t oldval = ldq_le_p(&s->mmior[addr]);
+     stq_le_p(&s->mmior[addr],
+             ((oldval & romask) | (val & ~romask)) & ~(val & w1cmask));
+ }
+@@ -483,7 +483,7 @@ static void amdvi_inval_inttable(AMDVIState *s, uint64_t *cmd)
+ static void iommu_inval_iotlb(AMDVIState *s, uint64_t *cmd)
+ {
+ 
+-    uint16_t devid = extract64(cmd[0], 0, 16);
++    uint16_t devid = cpu_to_le16(extract64(cmd[0], 0, 16));
+     if (extract64(cmd[1], 1, 1) || extract64(cmd[1], 3, 1) ||
+         extract64(cmd[1], 6, 6)) {
+         amdvi_log_illegalcom_error(s, extract64(cmd[0], 60, 4),
+@@ -496,7 +496,7 @@ static void iommu_inval_iotlb(AMDVIState *s, uint64_t *cmd)
+                                     &devid);
+     } else {
+         amdvi_iotlb_remove_page(s, cpu_to_le64(extract64(cmd[1], 12, 52)) << 12,
+-                                cpu_to_le16(extract64(cmd[1], 0, 16)));
++                                devid);
+     }
+     trace_amdvi_iotlb_inval();
+ }
+@@ -640,8 +640,8 @@ static inline void amdvi_handle_devtab_write(AMDVIState *s)
+     uint64_t val = amdvi_readq(s, AMDVI_MMIO_DEVICE_TABLE);
+     s->devtab = (val & AMDVI_MMIO_DEVTAB_BASE_MASK);
+ 
+-    /* set device table length */
+-    s->devtab_len = ((val & AMDVI_MMIO_DEVTAB_SIZE_MASK) + 1 *
++    /* set device table length (i.e. number of entries table can hold) */
++    s->devtab_len = (((val & AMDVI_MMIO_DEVTAB_SIZE_MASK) + 1) *
+                     (AMDVI_MMIO_DEVTAB_SIZE_UNIT /
+                      AMDVI_MMIO_DEVTAB_ENTRY_SIZE));
+ }
+@@ -823,9 +823,10 @@ static inline uint64_t amdvi_get_perms(uint64_t entry)
+ static bool amdvi_validate_dte(AMDVIState *s, uint16_t devid,
+                                uint64_t *dte)
+ {
+-    if ((dte[0] & AMDVI_DTE_LOWER_QUAD_RESERVED)
+-        || (dte[1] & AMDVI_DTE_MIDDLE_QUAD_RESERVED)
+-        || (dte[2] & AMDVI_DTE_UPPER_QUAD_RESERVED) || dte[3]) {
++    if ((dte[0] & AMDVI_DTE_QUAD0_RESERVED) ||
++        (dte[1] & AMDVI_DTE_QUAD1_RESERVED) ||
++        (dte[2] & AMDVI_DTE_QUAD2_RESERVED) ||
++        (dte[3] & AMDVI_DTE_QUAD3_RESERVED)) {
+         amdvi_log_illegaldevtab_error(s, devid,
+                                       s->devtab +
+                                       devid * AMDVI_DEVTAB_ENTRY_SIZE, 0);
+diff --git a/hw/i386/amd_iommu.h b/hw/i386/amd_iommu.h
+index 1899e9aee1..c8d1a6d353 100644
+--- a/hw/i386/amd_iommu.h
++++ b/hw/i386/amd_iommu.h
+@@ -25,6 +25,8 @@
+ #include "hw/i386/x86-iommu.h"
+ #include "qom/object.h"
+ 
++#define GENMASK64(h, l)  (((~0ULL) >> (63 - (h) + (l))) << (l))
++
+ /* Capability registers */
+ #define AMDVI_CAPAB_BAR_LOW           0x04
+ #define AMDVI_CAPAB_BAR_HIGH          0x08
+@@ -66,34 +68,34 @@
+ 
+ #define AMDVI_MMIO_SIZE               0x4000
+ 
+-#define AMDVI_MMIO_DEVTAB_SIZE_MASK   ((1ULL << 12) - 1)
+-#define AMDVI_MMIO_DEVTAB_BASE_MASK   (((1ULL << 52) - 1) & ~ \
+-                                       AMDVI_MMIO_DEVTAB_SIZE_MASK)
++#define AMDVI_MMIO_DEVTAB_SIZE_MASK     GENMASK64(8, 0)
++#define AMDVI_MMIO_DEVTAB_BASE_MASK     GENMASK64(51, 12)
++
+ #define AMDVI_MMIO_DEVTAB_ENTRY_SIZE  32
+ #define AMDVI_MMIO_DEVTAB_SIZE_UNIT   4096
+ 
+ /* some of this are similar but just for readability */
+ #define AMDVI_MMIO_CMDBUF_SIZE_BYTE       (AMDVI_MMIO_COMMAND_BASE + 7)
+ #define AMDVI_MMIO_CMDBUF_SIZE_MASK       0x0f
+-#define AMDVI_MMIO_CMDBUF_BASE_MASK       AMDVI_MMIO_DEVTAB_BASE_MASK
+-#define AMDVI_MMIO_CMDBUF_HEAD_MASK       (((1ULL << 19) - 1) & ~0x0f)
+-#define AMDVI_MMIO_CMDBUF_TAIL_MASK       AMDVI_MMIO_EVTLOG_HEAD_MASK
++#define AMDVI_MMIO_CMDBUF_BASE_MASK       GENMASK64(51, 12)
++#define AMDVI_MMIO_CMDBUF_HEAD_MASK       GENMASK64(18, 4)
++#define AMDVI_MMIO_CMDBUF_TAIL_MASK       GENMASK64(18, 4)
+ 
+ #define AMDVI_MMIO_EVTLOG_SIZE_BYTE       (AMDVI_MMIO_EVENT_BASE + 7)
+-#define AMDVI_MMIO_EVTLOG_SIZE_MASK       AMDVI_MMIO_CMDBUF_SIZE_MASK
+-#define AMDVI_MMIO_EVTLOG_BASE_MASK       AMDVI_MMIO_CMDBUF_BASE_MASK
+-#define AMDVI_MMIO_EVTLOG_HEAD_MASK       (((1ULL << 19) - 1) & ~0x0f)
+-#define AMDVI_MMIO_EVTLOG_TAIL_MASK       AMDVI_MMIO_EVTLOG_HEAD_MASK
++#define AMDVI_MMIO_EVTLOG_SIZE_MASK       0x0f
++#define AMDVI_MMIO_EVTLOG_BASE_MASK       GENMASK64(51, 12)
++#define AMDVI_MMIO_EVTLOG_HEAD_MASK       GENMASK64(18, 4)
++#define AMDVI_MMIO_EVTLOG_TAIL_MASK       GENMASK64(18, 4)
+ 
+-#define AMDVI_MMIO_PPRLOG_SIZE_BYTE       (AMDVI_MMIO_EVENT_BASE + 7)
+-#define AMDVI_MMIO_PPRLOG_HEAD_MASK       AMDVI_MMIO_EVTLOG_HEAD_MASK
+-#define AMDVI_MMIO_PPRLOG_TAIL_MASK       AMDVI_MMIO_EVTLOG_HEAD_MASK
+-#define AMDVI_MMIO_PPRLOG_BASE_MASK       AMDVI_MMIO_EVTLOG_BASE_MASK
+-#define AMDVI_MMIO_PPRLOG_SIZE_MASK       AMDVI_MMIO_EVTLOG_SIZE_MASK
++#define AMDVI_MMIO_PPRLOG_SIZE_BYTE       (AMDVI_MMIO_PPR_BASE + 7)
++#define AMDVI_MMIO_PPRLOG_SIZE_MASK       0x0f
++#define AMDVI_MMIO_PPRLOG_BASE_MASK       GENMASK64(51, 12)
++#define AMDVI_MMIO_PPRLOG_HEAD_MASK       GENMASK64(18, 4)
++#define AMDVI_MMIO_PPRLOG_TAIL_MASK       GENMASK64(18, 4)
+ 
+ #define AMDVI_MMIO_EXCL_ENABLED_MASK      (1ULL << 0)
+ #define AMDVI_MMIO_EXCL_ALLOW_MASK        (1ULL << 1)
+-#define AMDVI_MMIO_EXCL_LIMIT_MASK        AMDVI_MMIO_DEVTAB_BASE_MASK
++#define AMDVI_MMIO_EXCL_LIMIT_MASK        GENMASK64(51, 12)
+ #define AMDVI_MMIO_EXCL_LIMIT_LOW         0xfff
+ 
+ /* mmio control register flags */
+@@ -130,14 +132,14 @@
+ #define AMDVI_DEV_TRANSLATION_VALID       (1ULL << 1)
+ #define AMDVI_DEV_MODE_MASK               0x7
+ #define AMDVI_DEV_MODE_RSHIFT             9
+-#define AMDVI_DEV_PT_ROOT_MASK            0xffffffffff000
++#define AMDVI_DEV_PT_ROOT_MASK            GENMASK64(51, 12)
+ #define AMDVI_DEV_PT_ROOT_RSHIFT          12
+ #define AMDVI_DEV_PERM_SHIFT              61
+ #define AMDVI_DEV_PERM_READ               (1ULL << 61)
+ #define AMDVI_DEV_PERM_WRITE              (1ULL << 62)
+ 
+ /* Device table entry bits 64:127 */
+-#define AMDVI_DEV_DOMID_ID_MASK          ((1ULL << 16) - 1)
++#define AMDVI_DEV_DOMID_ID_MASK             GENMASK64(15, 0)
+ 
+ /* Event codes and flags, as stored in the info field */
+ #define AMDVI_EVENT_ILLEGAL_DEVTAB_ENTRY  (0x1U << 12)
+@@ -161,9 +163,10 @@
+ #define AMDVI_FEATURE_PC                  (1ULL << 9) /* Perf counters       */
+ 
+ /* reserved DTE bits */
+-#define AMDVI_DTE_LOWER_QUAD_RESERVED  0x80300000000000fc
+-#define AMDVI_DTE_MIDDLE_QUAD_RESERVED 0x0000000000000100
+-#define AMDVI_DTE_UPPER_QUAD_RESERVED  0x08f0000000000000
++#define AMDVI_DTE_QUAD0_RESERVED        (GENMASK64(6, 2) | GENMASK64(63, 63))
++#define AMDVI_DTE_QUAD1_RESERVED        0
++#define AMDVI_DTE_QUAD2_RESERVED        GENMASK64(53, 52)
++#define AMDVI_DTE_QUAD3_RESERVED        (GENMASK64(14, 0) | GENMASK64(53, 48))
+ 
+ /* AMDVI paging mode */
+ #define AMDVI_GATS_MODE                 (2ULL <<  12)
+@@ -192,16 +195,12 @@
+ #define AMDVI_PAGE_SIZE  (1ULL << AMDVI_PAGE_SHIFT)
+ 
+ #define AMDVI_PAGE_SHIFT_4K 12
+-#define AMDVI_PAGE_MASK_4K  (~((1ULL << AMDVI_PAGE_SHIFT_4K) - 1))
+-
+-#define AMDVI_MAX_VA_ADDR          (48UL << 5)
+-#define AMDVI_MAX_PH_ADDR          (40UL << 8)
+-#define AMDVI_MAX_GVA_ADDR         (48UL << 15)
++#define AMDVI_PAGE_MASK_4K      GENMASK64(63, 12)
+ 
+-/* Completion Wait data size */
+-#define AMDVI_COMPLETION_DATA_SIZE    8
++#define AMDVI_MAX_GVA_ADDR      (2UL << 5)
++#define AMDVI_MAX_PH_ADDR       (40UL << 8)
++#define AMDVI_MAX_VA_ADDR       (48UL << 15)
+ 
+-#define AMDVI_COMMAND_SIZE   16
+ /* Completion Wait data size */
+ #define AMDVI_COMPLETION_DATA_SIZE    8
+ 
+@@ -226,7 +225,7 @@
+ #define AMDVI_IR_INTCTL_PASS            1
+ #define AMDVI_IR_INTCTL_REMAP           2
+ 
+-#define AMDVI_IR_PHYS_ADDR_MASK         (((1ULL << 45) - 1) << 6)
++#define AMDVI_IR_PHYS_ADDR_MASK         GENMASK64(51, 6)
+ 
+ /* MSI data 10:0 bits (section 2.2.5.1 Fig 14) */
+ #define AMDVI_IRTE_OFFSET               0x7ff
+diff --git a/hw/loongarch/acpi-build.c b/hw/loongarch/acpi-build.c
+index 7d5f5a757d..5959d3b88e 100644
+--- a/hw/loongarch/acpi-build.c
++++ b/hw/loongarch/acpi-build.c
+@@ -393,8 +393,8 @@ static void acpi_build(AcpiBuildTables *tables, MachineState *machine)
+     acpi_add_table(table_offsets, tables_blob);
+     {
+         AcpiMcfgInfo mcfg = {
+-           .base = cpu_to_le64(VIRT_PCI_CFG_BASE),
+-           .size = cpu_to_le64(VIRT_PCI_CFG_SIZE),
++           .base = VIRT_PCI_CFG_BASE,
++           .size = VIRT_PCI_CFG_SIZE,
+         };
+         build_mcfg(tables_blob, tables->linker, &mcfg, lams->oem_id,
+                    lams->oem_table_id);
+diff --git a/hw/misc/aspeed_hace.c b/hw/misc/aspeed_hace.c
+index 11bd25708e..20f645f49b 100644
+--- a/hw/misc/aspeed_hace.c
++++ b/hw/misc/aspeed_hace.c
+@@ -278,12 +278,6 @@ static void do_hash_operation(AspeedHACEState *s, int algo, bool sg_mode,
+                             iov[i - 1].iov_len, false,
+                             iov[i - 1].iov_len);
+     }
+-
+-    /*
+-     * Set status bits to indicate completion. Testing shows hardware sets
+-     * these irrespective of HASH_IRQ_EN.
+-     */
+-    s->regs[R_STATUS] |= HASH_IRQ;
+ }
+ 
+ static uint64_t aspeed_hace_read(void *opaque, hwaddr addr, unsigned int size)
+@@ -358,10 +352,16 @@ static void aspeed_hace_write(void *opaque, hwaddr addr, uint64_t data,
+                 qemu_log_mask(LOG_GUEST_ERROR,
+                         "%s: Invalid hash algorithm selection 0x%"PRIx64"\n",
+                         __func__, data & ahc->hash_mask);
+-                break;
++        } else {
++            do_hash_operation(s, algo, data & HASH_SG_EN,
++                    ((data & HASH_HMAC_MASK) == HASH_DIGEST_ACCUM));
+         }
+-        do_hash_operation(s, algo, data & HASH_SG_EN,
+-                ((data & HASH_HMAC_MASK) == HASH_DIGEST_ACCUM));
++
++        /*
++         * Set status bits to indicate completion. Testing shows hardware sets
++         * these irrespective of HASH_IRQ_EN.
++         */
++        s->regs[R_STATUS] |= HASH_IRQ;
+ 
+         if (data & HASH_IRQ_EN) {
+             qemu_irq_raise(s->irq);
+diff --git a/hw/pci/pci.c b/hw/pci/pci.c
+index 2f450f6a72..c389172f27 100644
+--- a/hw/pci/pci.c
++++ b/hw/pci/pci.c
+@@ -1484,7 +1484,7 @@ static void pci_update_mappings(PCIDevice *d)
+     pci_update_vga(d);
+ }
+ 
+-static inline int pci_irq_disabled(PCIDevice *d)
++int pci_irq_disabled(PCIDevice *d)
+ {
+     return pci_get_word(d->config + PCI_COMMAND) & PCI_COMMAND_INTX_DISABLE;
+ }
+diff --git a/hw/virtio/virtio-pci.c b/hw/virtio/virtio-pci.c
+index e5e74a7160..a447a2bd0f 100644
+--- a/hw/virtio/virtio-pci.c
++++ b/hw/virtio/virtio-pci.c
+@@ -1040,7 +1040,12 @@ static int virtio_pci_set_guest_notifier(DeviceState *d, int n, bool assign,
+ static bool virtio_pci_query_guest_notifiers(DeviceState *d)
+ {
+     VirtIOPCIProxy *proxy = to_virtio_pci_proxy(d);
+-    return msix_enabled(&proxy->pci_dev);
++
++    if (msix_enabled(&proxy->pci_dev)) {
++        return true;
++    } else {
++        return pci_irq_disabled(&proxy->pci_dev);
++    }
+ }
+ 
+ static int virtio_pci_set_guest_notifiers(DeviceState *d, int nvqs, bool assign)
+diff --git a/include/hw/pci/pci.h b/include/hw/pci/pci.h
+index 6ccaaf5154..9c3fe56323 100644
+--- a/include/hw/pci/pci.h
++++ b/include/hw/pci/pci.h
+@@ -749,6 +749,7 @@ void lsi53c8xx_handle_legacy_cmdline(DeviceState *lsi_dev);
+ 
+ qemu_irq pci_allocate_irq(PCIDevice *pci_dev);
+ void pci_set_irq(PCIDevice *pci_dev, int level);
++int pci_irq_disabled(PCIDevice *d);
+ 
+ static inline int pci_intx(PCIDevice *pci_dev)
+ {
+diff --git a/linux-user/arm/cpu_loop.c b/linux-user/arm/cpu_loop.c
+index 85804c367a..f87e85c9e6 100644
+--- a/linux-user/arm/cpu_loop.c
++++ b/linux-user/arm/cpu_loop.c
+@@ -395,6 +395,7 @@ void cpu_loop(CPUARMState *env)
+                     switch (n) {
+                     case ARM_NR_cacheflush:
+                         /* nop */
++                        env->regs[0] = 0;
+                         break;
+                     case ARM_NR_set_tls:
+                         cpu_set_tls(env, env->regs[0]);
+diff --git a/linux-user/fd-trans.h b/linux-user/fd-trans.h
+index 910faaf237..e14f96059c 100644
+--- a/linux-user/fd-trans.h
++++ b/linux-user/fd-trans.h
+@@ -36,6 +36,16 @@ static inline void fd_trans_init(void)
+     qemu_mutex_init(&target_fd_trans_lock);
+ }
+ 
++static inline void fd_trans_prefork(void)
++{
++    qemu_mutex_lock(&target_fd_trans_lock);
++}
++
++static inline void fd_trans_postfork(void)
++{
++    qemu_mutex_unlock(&target_fd_trans_lock);
++}
++
+ static inline TargetFdDataFunc fd_trans_target_to_host_data(int fd)
+ {
+     if (fd < 0) {
+diff --git a/linux-user/main.c b/linux-user/main.c
+index a17fed045b..3572d95e69 100644
+--- a/linux-user/main.c
++++ b/linux-user/main.c
+@@ -143,10 +143,12 @@ void fork_start(void)
+     mmap_fork_start();
+     cpu_list_lock();
+     qemu_plugin_user_prefork_lock();
++    fd_trans_prefork();
+ }
+ 
+ void fork_end(int child)
+ {
++    fd_trans_postfork();
+     qemu_plugin_user_postfork(child);
+     mmap_fork_end(child);
+     if (child) {
+diff --git a/migration/ram.c b/migration/ram.c
+index f25ebd9620..e3ab67acd4 100644
+--- a/migration/ram.c
++++ b/migration/ram.c
+@@ -3930,7 +3930,9 @@ static int ram_load_cleanup(void *opaque)
+     RAMBlock *rb;
+ 
+     RAMBLOCK_FOREACH_NOT_IGNORED(rb) {
+-        qemu_ram_block_writeback(rb);
++        if (memory_region_is_nonvolatile(rb->mr)) {
++            qemu_ram_block_writeback(rb);
++        }
+     }
+ 
+     xbzrle_load_cleanup();
+diff --git a/qemu-options.hx b/qemu-options.hx
+index 2c00ceac83..9a2ddb7be7 100644
+--- a/qemu-options.hx
++++ b/qemu-options.hx
+@@ -4497,13 +4497,13 @@ SRST
+     with actual performance.
+ 
+     When the virtual cpu is sleeping, the virtual time will advance at
+-    default speed unless ``sleep=on`` is specified. With
+-    ``sleep=on``, the virtual time will jump to the next timer
++    default speed unless ``sleep=off`` is specified. With
++    ``sleep=off``, the virtual time will jump to the next timer
+     deadline instantly whenever the virtual cpu goes to sleep mode and
+     will not advance if no timer is enabled. This behavior gives
+     deterministic execution times from the guest point of view.
+-    The default if icount is enabled is ``sleep=off``.
+-    ``sleep=on`` cannot be used together with either ``shift=auto``
++    The default if icount is enabled is ``sleep=on``.
++    ``sleep=off`` cannot be used together with either ``shift=auto``
+     or ``align=on``.
+ 
+     ``align=on`` will activate the delay algorithm which will try to
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+index 047cb8fc50..dfce8181f9 100644
+--- a/target/arm/hvf/hvf.c
++++ b/target/arm/hvf/hvf.c
+@@ -489,7 +489,7 @@ static bool hvf_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
+     hv_vcpu_exit_t *exit;
+     int i;
+ 
+-    ahcf->dtb_compatible = "arm,arm-v8";
++    ahcf->dtb_compatible = "arm,armv8";
+     ahcf->features = (1ULL << ARM_FEATURE_V8) |
+                      (1ULL << ARM_FEATURE_NEON) |
+                      (1ULL << ARM_FEATURE_AARCH64) |
+diff --git a/target/arm/kvm64.c b/target/arm/kvm64.c
+index ed85bcfb5c..de69d8ade9 100644
+--- a/target/arm/kvm64.c
++++ b/target/arm/kvm64.c
+@@ -546,7 +546,7 @@ bool kvm_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
+     }
+ 
+     ahcf->target = init.target;
+-    ahcf->dtb_compatible = "arm,arm-v8";
++    ahcf->dtb_compatible = "arm,armv8";
+ 
+     err = read_sys_reg64(fdarray[2], &ahcf->isar.id_aa64pfr0,
+                          ARM64_SYS_REG(3, 0, 0, 4, 0));
+diff --git a/target/arm/sme_helper.c b/target/arm/sme_helper.c
+index fd5625c87e..e8b4ca38ff 100644
+--- a/target/arm/sme_helper.c
++++ b/target/arm/sme_helper.c
+@@ -1022,25 +1022,55 @@ static float32 f16_dotadd(float32 sum, uint32_t e1, uint32_t e2,
+      *  - we have pre-set-up copy of s_std which is set to round-to-odd,
+      *    for the multiply (see below)
+      */
+-    float64 e1r = float16_to_float64(e1 & 0xffff, true, s_f16);
+-    float64 e1c = float16_to_float64(e1 >> 16, true, s_f16);
+-    float64 e2r = float16_to_float64(e2 & 0xffff, true, s_f16);
+-    float64 e2c = float16_to_float64(e2 >> 16, true, s_f16);
+-    float64 t64;
++    float16 h1r = e1 & 0xffff;
++    float16 h1c = e1 >> 16;
++    float16 h2r = e2 & 0xffff;
++    float16 h2c = e2 >> 16;
+     float32 t32;
+ 
+-    /*
+-     * The ARM pseudocode function FPDot performs both multiplies
+-     * and the add with a single rounding operation.  Emulate this
+-     * by performing the first multiply in round-to-odd, then doing
+-     * the second multiply as fused multiply-add, and rounding to
+-     * float32 all in one step.
+-     */
+-    t64 = float64_mul(e1r, e2r, s_odd);
+-    t64 = float64r32_muladd(e1c, e2c, t64, 0, s_std);
++    /* C.f. FPProcessNaNs4 */
++    if (float16_is_any_nan(h1r) || float16_is_any_nan(h1c) ||
++        float16_is_any_nan(h2r) || float16_is_any_nan(h2c)) {
++        float16 t16;
++
++        if (float16_is_signaling_nan(h1r, s_f16)) {
++            t16 = h1r;
++        } else if (float16_is_signaling_nan(h1c, s_f16)) {
++            t16 = h1c;
++        } else if (float16_is_signaling_nan(h2r, s_f16)) {
++            t16 = h2r;
++        } else if (float16_is_signaling_nan(h2c, s_f16)) {
++            t16 = h2c;
++        } else if (float16_is_any_nan(h1r)) {
++            t16 = h1r;
++        } else if (float16_is_any_nan(h1c)) {
++            t16 = h1c;
++        } else if (float16_is_any_nan(h2r)) {
++            t16 = h2r;
++        } else {
++            t16 = h2c;
++        }
++        t32 = float16_to_float32(t16, true, s_f16);
++    } else {
++        float64 e1r = float16_to_float64(h1r, true, s_f16);
++        float64 e1c = float16_to_float64(h1c, true, s_f16);
++        float64 e2r = float16_to_float64(h2r, true, s_f16);
++        float64 e2c = float16_to_float64(h2c, true, s_f16);
++        float64 t64;
+ 
+-    /* This conversion is exact, because we've already rounded. */
+-    t32 = float64_to_float32(t64, s_std);
++        /*
++         * The ARM pseudocode function FPDot performs both multiplies
++         * and the add with a single rounding operation.  Emulate this
++         * by performing the first multiply in round-to-odd, then doing
++         * the second multiply as fused multiply-add, and rounding to
++         * float32 all in one step.
++         */
++        t64 = float64_mul(e1r, e2r, s_odd);
++        t64 = float64r32_muladd(e1c, e2c, t64, 0, s_std);
++
++        /* This conversion is exact, because we've already rounded. */
++        t32 = float64_to_float32(t64, s_std);
++    }
+ 
+     /* The final accumulation step is not fused. */
+     return float32_add(sum, t32, s_std);
+diff --git a/target/arm/translate-a64.c b/target/arm/translate-a64.c
+index 190574cb29..7210a9cc4d 100644
+--- a/target/arm/translate-a64.c
++++ b/target/arm/translate-a64.c
+@@ -1187,11 +1187,8 @@ static bool fp_access_check_only(DisasContext *s)
+     return true;
+ }
+ 
+-static bool fp_access_check(DisasContext *s)
++static bool nonstreaming_check(DisasContext *s)
+ {
+-    if (!fp_access_check_only(s)) {
+-        return false;
+-    }
+     if (s->sme_trap_nonstreaming && s->is_nonstreaming) {
+         gen_exception_insn(s, 0, EXCP_UDEF,
+                            syn_smetrap(SME_ET_Streaming, false));
+@@ -1200,6 +1197,11 @@ static bool fp_access_check(DisasContext *s)
+     return true;
+ }
+ 
++static bool fp_access_check(DisasContext *s)
++{
++    return fp_access_check_only(s) && nonstreaming_check(s);
++}
++
+ /*
+  * Check that SVE access is enabled.  If it is, return true.
+  * If not, emit code to generate an appropriate exception and return false.
+@@ -1207,14 +1209,24 @@ static bool fp_access_check(DisasContext *s)
+  */
+ bool sve_access_check(DisasContext *s)
+ {
+-    if (s->pstate_sm || !dc_isar_feature(aa64_sve, s)) {
++    if (dc_isar_feature(aa64_sme, s)) {
+         bool ret;
+ 
+-        assert(dc_isar_feature(aa64_sme, s));
+-        ret = sme_sm_enabled_check(s);
++        if (s->pstate_sm) {
++            ret = sme_enabled_check(s);
++        } else if (dc_isar_feature(aa64_sve, s)) {
++            goto continue_sve;
++        } else {
++            ret = sme_sm_enabled_check(s);
++        }
++        if (ret) {
++            ret = nonstreaming_check(s);
++        }
+         s->sve_access_checked = (ret ? 1 : -1);
+         return ret;
+     }
++
++ continue_sve:
+     if (s->sve_excp_el) {
+         /* Assert that we only raise one exception per instruction. */
+         assert(!s->sve_access_checked);
+@@ -1251,7 +1263,8 @@ bool sme_enabled_check(DisasContext *s)
+      * to be zero when fp_excp_el has priority.  This is because we need
+      * sme_excp_el by itself for cpregs access checks.
+      */
+-    if (!s->fp_excp_el || s->sme_excp_el < s->fp_excp_el) {
++    if (s->sme_excp_el
++        && (!s->fp_excp_el || s->sme_excp_el <= s->fp_excp_el)) {
+         bool ret = sme_access_check(s);
+         s->fp_access_checked = (ret ? 1 : -1);
+         return ret;
+diff --git a/target/arm/translate-sve.c b/target/arm/translate-sve.c
+index 034e816491..a6371345f5 100644
+--- a/target/arm/translate-sve.c
++++ b/target/arm/translate-sve.c
+@@ -2538,6 +2538,23 @@ TRANS_FEAT(PUNPKHI, aa64_sve, do_perm_pred2, a, 1, gen_helper_sve_punpk_p)
+  *** SVE Permute - Interleaving Group
+  */
+ 
++static bool do_interleave_q(DisasContext *s, gen_helper_gvec_3 *fn,
++                            arg_rrr_esz *a, int data)
++{
++    if (sve_access_check(s)) {
++        unsigned vsz = vec_full_reg_size(s);
++        if (vsz < 32) {
++            unallocated_encoding(s);
++        } else {
++            tcg_gen_gvec_3_ool(vec_full_reg_offset(s, a->rd),
++                               vec_full_reg_offset(s, a->rn),
++                               vec_full_reg_offset(s, a->rm),
++                               vsz, vsz, data, fn);
++        }
++    }
++    return true;
++}
++
+ static gen_helper_gvec_3 * const zip_fns[4] = {
+     gen_helper_sve_zip_b, gen_helper_sve_zip_h,
+     gen_helper_sve_zip_s, gen_helper_sve_zip_d,
+@@ -2547,11 +2564,11 @@ TRANS_FEAT(ZIP1_z, aa64_sve, gen_gvec_ool_arg_zzz,
+ TRANS_FEAT(ZIP2_z, aa64_sve, gen_gvec_ool_arg_zzz,
+            zip_fns[a->esz], a, vec_full_reg_size(s) / 2)
+ 
+-TRANS_FEAT(ZIP1_q, aa64_sve_f64mm, gen_gvec_ool_arg_zzz,
+-           gen_helper_sve2_zip_q, a, 0)
+-TRANS_FEAT(ZIP2_q, aa64_sve_f64mm, gen_gvec_ool_arg_zzz,
+-           gen_helper_sve2_zip_q, a,
+-           QEMU_ALIGN_DOWN(vec_full_reg_size(s), 32) / 2)
++TRANS_FEAT_NONSTREAMING(ZIP1_q, aa64_sve_f64mm, do_interleave_q,
++                        gen_helper_sve2_zip_q, a, 0)
++TRANS_FEAT_NONSTREAMING(ZIP2_q, aa64_sve_f64mm, do_interleave_q,
++                        gen_helper_sve2_zip_q, a,
++                        QEMU_ALIGN_DOWN(vec_full_reg_size(s), 32) / 2)
+ 
+ static gen_helper_gvec_3 * const uzp_fns[4] = {
+     gen_helper_sve_uzp_b, gen_helper_sve_uzp_h,
+@@ -2563,10 +2580,10 @@ TRANS_FEAT(UZP1_z, aa64_sve, gen_gvec_ool_arg_zzz,
+ TRANS_FEAT(UZP2_z, aa64_sve, gen_gvec_ool_arg_zzz,
+            uzp_fns[a->esz], a, 1 << a->esz)
+ 
+-TRANS_FEAT(UZP1_q, aa64_sve_f64mm, gen_gvec_ool_arg_zzz,
+-           gen_helper_sve2_uzp_q, a, 0)
+-TRANS_FEAT(UZP2_q, aa64_sve_f64mm, gen_gvec_ool_arg_zzz,
+-           gen_helper_sve2_uzp_q, a, 16)
++TRANS_FEAT_NONSTREAMING(UZP1_q, aa64_sve_f64mm, do_interleave_q,
++                        gen_helper_sve2_uzp_q, a, 0)
++TRANS_FEAT_NONSTREAMING(UZP2_q, aa64_sve_f64mm, do_interleave_q,
++                        gen_helper_sve2_uzp_q, a, 16)
+ 
+ static gen_helper_gvec_3 * const trn_fns[4] = {
+     gen_helper_sve_trn_b, gen_helper_sve_trn_h,
+@@ -2578,10 +2595,10 @@ TRANS_FEAT(TRN1_z, aa64_sve, gen_gvec_ool_arg_zzz,
+ TRANS_FEAT(TRN2_z, aa64_sve, gen_gvec_ool_arg_zzz,
+            trn_fns[a->esz], a, 1 << a->esz)
+ 
+-TRANS_FEAT(TRN1_q, aa64_sve_f64mm, gen_gvec_ool_arg_zzz,
+-           gen_helper_sve2_trn_q, a, 0)
+-TRANS_FEAT(TRN2_q, aa64_sve_f64mm, gen_gvec_ool_arg_zzz,
+-           gen_helper_sve2_trn_q, a, 16)
++TRANS_FEAT_NONSTREAMING(TRN1_q, aa64_sve_f64mm, do_interleave_q,
++                        gen_helper_sve2_trn_q, a, 0)
++TRANS_FEAT_NONSTREAMING(TRN2_q, aa64_sve_f64mm, do_interleave_q,
++                        gen_helper_sve2_trn_q, a, 16)
+ 
+ /*
+  *** SVE Permute Vector - Predicated Group
+@@ -7484,6 +7501,7 @@ static bool trans_PSEL(DisasContext *s, arg_psel *a)
+     tcg_gen_neg_i64(tmp, tmp);
+ 
+     /* Apply to either copy the source, or write zeros. */
++    pl = size_for_gvec(pl);
+     tcg_gen_gvec_ands(MO_64, pred_full_reg_offset(s, a->pd),
+                       pred_full_reg_offset(s, a->pn), tmp, pl, pl);
+ 
+diff --git a/tcg/tcg.c b/tcg/tcg.c
+index e7aa02c447..6c8f86ecb7 100644
+--- a/tcg/tcg.c
++++ b/tcg/tcg.c
+@@ -3491,7 +3491,7 @@ static void tcg_reg_alloc_dup(TCGContext *s, const TCGOp *op)
+ 
+     if (its->val_type == TEMP_VAL_CONST) {
+         /* Propagate constant via movi -> dupi.  */
+-        tcg_target_ulong val = its->val;
++        tcg_target_ulong val = dup_const(vece, its->val);
+         if (IS_DEAD_ARG(1)) {
+             temp_dead(s, its);
+         }
+diff --git a/ui/vnc-enc-zlib.c b/ui/vnc-enc-zlib.c
+index 900ae5b30f..52e9193eab 100644
+--- a/ui/vnc-enc-zlib.c
++++ b/ui/vnc-enc-zlib.c
+@@ -48,21 +48,21 @@ void vnc_zlib_zfree(void *x, void *addr)
+ 
+ static void vnc_zlib_start(VncState *vs)
+ {
+-    buffer_reset(&vs->zlib.zlib);
++    buffer_reset(&vs->zlib->zlib);
+ 
+     // make the output buffer be the zlib buffer, so we can compress it later
+-    vs->zlib.tmp = vs->output;
+-    vs->output = vs->zlib.zlib;
++    vs->zlib->tmp = vs->output;
++    vs->output = vs->zlib->zlib;
+ }
+ 
+ static int vnc_zlib_stop(VncState *vs)
+ {
+-    z_streamp zstream = &vs->zlib.stream;
++    z_streamp zstream = &vs->zlib->stream;
+     int previous_out;
+ 
+     // switch back to normal output/zlib buffers
+-    vs->zlib.zlib = vs->output;
+-    vs->output = vs->zlib.tmp;
++    vs->zlib->zlib = vs->output;
++    vs->output = vs->zlib->tmp;
+ 
+     // compress the zlib buffer
+ 
+@@ -85,24 +85,24 @@ static int vnc_zlib_stop(VncState *vs)
+             return -1;
+         }
+ 
+-        vs->zlib.level = vs->tight->compression;
++        vs->zlib->level = vs->tight->compression;
+         zstream->opaque = vs;
+     }
+ 
+-    if (vs->tight->compression != vs->zlib.level) {
++    if (vs->tight->compression != vs->zlib->level) {
+         if (deflateParams(zstream, vs->tight->compression,
+                           Z_DEFAULT_STRATEGY) != Z_OK) {
+             return -1;
+         }
+-        vs->zlib.level = vs->tight->compression;
++        vs->zlib->level = vs->tight->compression;
+     }
+ 
+     // reserve memory in output buffer
+-    buffer_reserve(&vs->output, vs->zlib.zlib.offset + 64);
++    buffer_reserve(&vs->output, vs->zlib->zlib.offset + 64);
+ 
+     // set pointers
+-    zstream->next_in = vs->zlib.zlib.buffer;
+-    zstream->avail_in = vs->zlib.zlib.offset;
++    zstream->next_in = vs->zlib->zlib.buffer;
++    zstream->avail_in = vs->zlib->zlib.offset;
+     zstream->next_out = vs->output.buffer + vs->output.offset;
+     zstream->avail_out = vs->output.capacity - vs->output.offset;
+     previous_out = zstream->avail_out;
+@@ -147,8 +147,8 @@ int vnc_zlib_send_framebuffer_update(VncState *vs, int x, int y, int w, int h)
+ 
+ void vnc_zlib_clear(VncState *vs)
+ {
+-    if (vs->zlib.stream.opaque) {
+-        deflateEnd(&vs->zlib.stream);
++    if (vs->zlib->stream.opaque) {
++        deflateEnd(&vs->zlib->stream);
+     }
+-    buffer_free(&vs->zlib.zlib);
++    buffer_free(&vs->zlib->zlib);
+ }
+diff --git a/ui/vnc.c b/ui/vnc.c
+index 629a500adc..e56ef2609a 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -56,6 +56,11 @@
+ #include "io/dns-resolver.h"
+ #include "monitor/monitor.h"
+ 
++typedef struct VncConnection {
++    VncState vs;
++    VncZlib zlib;
++} VncConnection;
++
+ #define VNC_REFRESH_INTERVAL_BASE GUI_REFRESH_INTERVAL_DEFAULT
+ #define VNC_REFRESH_INTERVAL_INC  50
+ #define VNC_REFRESH_INTERVAL_MAX  GUI_REFRESH_INTERVAL_IDLE
+@@ -1378,7 +1383,7 @@ void vnc_disconnect_finish(VncState *vs)
+     vs->magic = 0;
+     g_free(vs->zrle);
+     g_free(vs->tight);
+-    g_free(vs);
++    g_free(container_of(vs, VncConnection, vs));
+ }
+ 
+ size_t vnc_client_io_error(VncState *vs, ssize_t ret, Error *err)
+@@ -3242,11 +3247,13 @@ static void vnc_refresh(DisplayChangeListener *dcl)
+ static void vnc_connect(VncDisplay *vd, QIOChannelSocket *sioc,
+                         bool skipauth, bool websocket)
+ {
+-    VncState *vs = g_new0(VncState, 1);
++    VncConnection *vc = g_new0(VncConnection, 1);
++    VncState *vs = &vc->vs;
+     bool first_client = QTAILQ_EMPTY(&vd->clients);
+     int i;
+ 
+     trace_vnc_client_connect(vs, sioc);
++    vs->zlib = &vc->zlib;
+     vs->zrle = g_new0(VncZrle, 1);
+     vs->tight = g_new0(VncTight, 1);
+     vs->magic = VNC_MAGIC;
+@@ -3269,7 +3276,7 @@ static void vnc_connect(VncDisplay *vd, QIOChannelSocket *sioc,
+ #ifdef CONFIG_PNG
+     buffer_init(&vs->tight->png,      "vnc-tight-png/%p", sioc);
+ #endif
+-    buffer_init(&vs->zlib.zlib,      "vnc-zlib/%p", sioc);
++    buffer_init(&vc->zlib.zlib,      "vnc-zlib/%p", sioc);
+     buffer_init(&vs->zrle->zrle,      "vnc-zrle/%p", sioc);
+     buffer_init(&vs->zrle->fb,        "vnc-zrle-fb/%p", sioc);
+     buffer_init(&vs->zrle->zlib,      "vnc-zrle-zlib/%p", sioc);
+diff --git a/ui/vnc.h b/ui/vnc.h
+index a60fb13115..e0888c6bb5 100644
+--- a/ui/vnc.h
++++ b/ui/vnc.h
+@@ -342,7 +342,7 @@ struct VncState
+      *  update vnc_async_encoding_start()
+      */
+     VncTight *tight;
+-    VncZlib zlib;
++    VncZlib *zlib;
+     VncHextile hextile;
+     VncZrle *zrle;
+     VncZywrle zywrle;

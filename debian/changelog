@@ -1,3 +1,45 @@
+qemu (1:7.2+dfsg-7+deb12u16+pexip24u1) pexip; urgency=medium
+
+  * New upstream release
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Wed, 10 Sep 2025 12:36:20 +0100
+
+qemu (1:7.2+dfsg-7+deb12u16) bookworm; urgency=medium
+
+  * v7.2.19:
+   - Update version for 7.2.19 release
+   - ui/vnc: Do not copy z_stream
+   - amd_iommu: Fix truncation of oldval in amdvi_writeq
+   - amd_iommu: Remove duplicated definitions
+   - amd_iommu: Fix the calculation for Device Table size
+   - amd_iommu: Fix mask to retrieve Interrupt Table Root Pointer from DTE
+   - amd_iommu: Fix masks for various IOMMU MMIO Registers
+   - amd_iommu: Update bitmasks representing DTE reserved fields
+   - amd_iommu: Fix Device ID decoding for INVALIDATE_IOTLB_PAGES command
+   - amd_iommu: Fix Miscellaneous Information Register 0 encoding
+   - migration: Don't sync volatile memory after migration completes
+   - linux-user: Hold the fd-trans lock across fork
+     https://gitlab.com/qemu-project/qemu/-/issues/2846
+     https://github.com/astral-sh/uv/issues/6105
+   - target/arm: Fix f16_dotadd vs nan selection
+   - target/arm: Fix PSEL size operands to tcg_gen_gvec_ands
+   - target/arm: Fix 128-bit element ZIP, UZP, TRN
+   - target/arm: Fix sve_access_check for SME
+   - target/arm: Fix SME vs AdvSIMD exception priority
+   - target/arm: Correct KVM & HVF dtb_compatible value
+   - tcg: Fix constant propagation in tcg_reg_alloc_dup
+     https://gitlab.com/qemu-project/qemu/-/issues/3002
+   - linux-user/arm: Fix return value of SYS_cacheflush
+   - qemu-options.hx: Fix reversed description of icount sleep behavior
+   - hw/arm/virt: Check bypass iommu is not set for iommu-map DT property
+   - hw/loongarch/virt: Fix big endian support with MCFG table
+   - hw/core/qdev-properties-system: Add missing return in set_drive_helper()
+   - audio: fix SIGSEGV in AUD_get_buffer_size_out()
+   - vhost: Don't set vring call if guest notifier is unused
+   - hw/misc/aspeed_hace: Ensure HASH_IRQ is always set to prevent firmware hang
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 23 Aug 2025 00:37:57 +0300
+
 qemu (1:7.2+dfsg-7+deb12u15+pexip24u1) pexip; urgency=medium
 
   * New upstream release
