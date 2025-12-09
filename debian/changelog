@@ -1,3 +1,417 @@
+qemu (1:10.0.6+ds-0+deb13u2) trixie; urgency=medium
+
+  * d/changelog: remove wrong closes: #1095935 from the previous changelog
+    entry (and reopen the bug): I confused it with another bug
+  * linux-user-use-correct-type-for-FIBMAP-and-FIGETBSZ.patch - add a patch
+    from upstream stable series (before next stable release) - fix wrong
+    emulation of FIBMAP and FIGETBSZ ioctls.  Needed for s390x cloud images.
+    Will be in next upstream stable release, so will be removed in next debian.
+    (Closes: #1119257)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 04 Nov 2025 16:40:44 +0300
+
+qemu (1:10.0.6+ds-0+deb13u1) trixie; urgency=medium
+
+  * new upstream stable/bugfix release:
+   - Update version for 10.0.6 release
+   - linux-user/microblaze: Fix little-endianness binary
+   - target/hppa: correct size bit parity for fmpyadd
+   - target/i386: user: do not set up a valid LDT on reset
+   - async: access bottom half flags with qatomic_read
+   - target/i386: fix x86_64 pushw op
+   - i386/tcg/smm_helper: Properly apply DR values on SMM entry / exit
+   - i386/cpu: Prevent delivering SIPI during SMM in TCG mode
+   - i386/kvm: Expose ARCH_CAP_FB_CLEAR when invulnerable to MDS
+   - target/i386: Fix CR2 handling for non-canonical addresses
+   - block/curl.c: Use explicit long constants in curl_easy_setopt calls
+   - pcie_sriov: Fix broken MMIO accesses from SR-IOV VFs
+   - target/riscv: rvv: Fix vslide1[up|down].vx unexpected result
+     when XLEN=32 and SEW=64
+   - target/riscv: Fix ssamoswap error handling
+   - target/riscv: Fix SSP CSR error handling in VU/VS mode
+   - target/riscv: Fix the mepc when sspopchk triggers the exception
+   - target/arm: Don't set HCR.RW for AArch32 only CPUs
+   - pcie_sriov: make pcie_sriov_pf_exit() safe on non-SR-IOV devices
+   - docs/devel: Correct uefi-vars-x64 device name
+   - hid: fix incorrect return value for hid
+   - ui/gtk: Fix callback function signature
+   - ui/gtk: Consider scaling when propagating ui info
+   - Revert "i386/cpu: Move adjustment of CPUID_EXT_PDCM
+     before feature_dependencies[] check"
+   - Revert "target/i386: do not expose ARCH_CAPABILITIES on AMD CPU"
+  * new upstream stable/bugfix release:
+   - Update version for 10.0.5 release
+   - tests/functional/test_aarch64_sbsaref_freebsd:
+     Fix the URL of the ISO image
+   - tests/functional/test_ppc_bamboo: Replace broken link with working assets
+   - physmem: Destroy all CPU AddressSpaces on unrealize
+   - memory: New AS helper to serialize destroy+free
+   - include/system/memory.h: Clarify address_space_destroy() behaviour
+   - migration: Fix state transition in postcopy_start() error handling
+   - target/riscv: rvv: Modify minimum VLEN according to enabled
+     vector extensions
+   - target/riscv: rvv: Replace checking V by checking Zve32x
+   - target/riscv: Fix endianness swap on compressed instructions
+   - hw/riscv/riscv-iommu: Fixup PDT Nested Walk
+   - target/riscv: do not use translator_ldl in opcode_at
+   - target/riscv: use riscv_csrr in riscv_csr_read
+   - hw/char: sifive_uart: Raise IRQ according to the Tx/Rx
+     watermark thresholds
+   - docs/interop/firmware: Add riscv64 to FirmwareArchitecture
+   - hw/riscv/riscv-iommu: Fix MSI table size limit
+   - ui/icons/qemu.svg: Add metadata information (author, license) to the logo
+   - ui/spice: Fix abort on macOS
+   - ppc/spapr: init lrdr-capapcity phys with ram size if maxmem not provided
+   - hw/intc/xics: Add missing call to register vmstate_icp_server
+   - hw/usb/hcd-uhci: don't assert for SETUP to non-0 endpoint
+     Closes: #1082377 (CVE-2024-8354)
+   - tests/tcg/multiarch: Add tb-link test
+   - accel/tcg: Properly unlink a TB linked to itself
+   - tests: Fix "make check-functional" for targets without thorough tests
+   - .gitlab-ci.d/buildtest.yml: Unset CI_COMMIT_DESCRIPTION for htags
+   - tcg/optimize: Fix folding of vector bitsel
+   - hw/pci-host/astro: Don't call pci_regsiter_root_bus() in init
+   - hw/pci-host/dino: Don't call pci_register_root_bus() in init
+   - target/sparc: Relax decode of rs2_or_imm for v7
+   - target/sparc: Loosen decode of RDTBR for v7
+   - target/sparc: Loosen decode of RDWIM for v7
+   - target/sparc: Loosen decode of RDPSR for v7
+   - target/sparc: Loosen decode of RDY for v7
+   - target/sparc: Loosen decode of STBAR for v8
+   - target/sparc: Allow TRANS macro with no extra arguments
+   - linux-user: avoid -Werror=int-in-bool-context
+   - multiboot: Fix the split lock
+   - target/i386: Define enum X86ASIdx for x86's address spaces
+   - i386/cpu: Enable SMM cpu address space under KVM
+   - hw/usb/network: Remove hardcoded 0x40 prefix in STRING_ETHADDR response
+   - rust: hpet: fix new warning
+   - ci: run RISC-V cross jobs by default
+   - tests/docker/dockerfiles/python.docker: pull fedora:40 image
+     instead of fedora:latest
+   - .gitmodules: move u-boot mirrors to qemu-project-mirrors
+   - iotests/check: always enable all python warnings
+   - iotests/151: ensure subprocesses are cleaned up
+   - iotests/147: ensure temporary sockets are closed before exiting
+   - python: ensure QEMUQtestProtocol closes its socket
+   - iotests: drop compat for old version context manager
+   - python: backport 'avoid creating additional event loops per thread'
+   - python: backport 'Remove deprecated get_event_loop calls'
+   - python: backport 'qmp-tui: Do not crash if optional dependencies
+     are not met'
+   - python: backport 'qmp-shell-wrap: handle missing binary gracefully'
+   - python: backport 'Use @asynciocontextmanager'
+   - python: backport 'drop Python3.6 workarounds'
+   - python: backport 'kick event queue on legacy event_pull()'
+   - ui/vnc: Fix crash when specifying [vnc] without id in the config file
+   - target/loongarch: Guard 64-bit-only insn translation with TRANS64 macro
+   - target/loongarch: Add CRC feature flag and use it to gate CRC instructions
+  * new upstream stable/bugfix release:
+   - Update version for 10.0.4 release
+   - block/curl: fix curl internal handles handling
+     (Closes: #1111809)
+   - hw/gpio/pca9554: Avoid leak in pca9554_set_pin()
+   - hw/ppc: Fix build error with CONFIG_POWERNV disabled
+   - target/mips: fix TLB huge page check to use 64-bit shift
+   - linux-user/mips: Select M14Kc CPU to run microMIPS binaries
+   - linux-user/mips: Select 74Kf CPU to run MIPS16e binaries
+   - elf: Add EF_MIPS_ARCH_ASE definitions
+   - e1000e: Prevent crash from legacy interrupt firing after MSI-X enable
+   - Revert "tests/qtest: use qos_printf instead of g_test_message"
+   - vfio scsi ui: Error-check qio_channel_socket_connect_sync() the same way
+   - i386/kvm/vmsr_energy: Plug memory leak on failure to connect socket
+   - qga: Fix truncated output handling in guest-exec status reporting
+   - qga-vss: Write hex value of error in log
+   - qga/installer: Remove QGA VSS if QGA installation failed
+   - hw/arm/stm32f205_soc: Don't leak TYPE_OR_IRQ objects
+   - qemu/atomic: Finish renaming atomic128-cas.h headers
+   - scripts/kernel-doc: Avoid new Perl precedence warning
+   - target/arm: Trap PMCR when MDCR_EL2.TPMCR is set
+   - hw/intc/arm_gicv3_kvm: preserve pending interrupts during cpr
+   - linux-user: Add strace for rseq
+   - i386/tcg/svm: fix incorrect canonicalization
+   - python: mkvenv: fix messages printed by mkvenv
+   - hw/uefi: open json file in binary mode
+   - hw/uefi: check access for first variable
+   - hw/uefi: return success for notifications
+   - hw/uefi: clear uefi-vars buffer in uefi_vars_write callback
+   - mkvenv: Support pip 25.2
+   - hw/sd/ssi-sd: Return noise (dummy byte) when no card connected
+   - qemu-iotests: Ignore indentation in Killed messages
+   - rbd: Fix .bdrv_get_specific_info implementation
+   - hw/nvme: cap MDTS value for internal limitation
+   - hw/nvme: revert CMIC behavior
+   - hw/nvme: fix namespace attachment
+   - target/loongarch: Fix [X]VLDI raising exception incorrectly
+   - ui/curses: Fix infinite loop on windows
+   - ppc/xive2: Fix treatment of PIPR in CPPR update
+   - ppc/xive2: Fix irq preempted by lower priority group irq
+   - ppc/xive2: Reset Generation Flipped bit on END Cache Watch
+   - ppc/xive: Fix PHYS NSR ring matching
+   - ppc/xive2: fix context push calculation of IPB priority
+   - ppc/xive2: Remote VSDs need to match on forwarding address
+   - ppc/xive2: Fix calculation of END queue sizes
+   - ppc/xive: Report access size in XIVE TM operation error logs
+   - ppc/xive: Fix xive trace event output
+   - target/i386/cpu: Move addressable ID encoding out of compat property
+     in CPUID[0x1]
+   - i386/cpu: Fix cpu number overflow in CPUID.01H.EBX[23:16]
+   - i386/cpu: Fix number of addressable IDs field for CPUID.01H.EBX[23:16]
+   - i386/cpu: Move adjustment of CPUID_EXT_PDCM before feature_dependencies[]
+     check
+   - Revert "i386/cpu: Fix cpu number overflow in CPUID.01H.EBX[23:16]"
+   - qga: correctly write to /sys/power/state on linux
+     (Closes: #1108387)
+   - scripts/make-release: Go back to cloning all the EDK2 submodules
+   - target/arm: add support for 64-bit PMCCNTR in AArch32 mode
+   - hw/ssi/aspeed_smc: Fix incorrect FMC_WDT2 register read on AST1030
+   - target/arm: Fix handling of setting SVE registers from gdb
+   - target/arm: Fix big-endian handling of NEON gdb remote debugging
+   - hw/intc/arm_gicv3_kvm: Write all 1's to clear enable/active
+   - hw/i386/amd_iommu: Move IOAPIC memory region initialization to the end
+   - intel_iommu: Allow both Status Write and Interrupt Flag in QI wait
+   - pcie_sriov: Fix configuration and state synchronization
+   - virtio-net: Fix VLAN filter table reset timing
+   - vhost: Do not abort on log-stop error
+   - vhost: Do not abort on log-start error
+   - virtio: fix off-by-one and invalid access in virtqueue_ordered_fill
+   - target/loongarch: Fix valid virtual address checking
+   - target/riscv: Restrict midelegh access to S-mode harts
+   - target/riscv: Restrict mideleg/medeleg/medelegh access to S-mode harts
+   - intc/riscv_aplic: Fix target register read when source is inactive
+   - target/riscv: Fix pmp range wraparound on zero
+   - target/riscv: Fix exception type when VU accesses supervisor CSRs
+   - target/riscv: do not call GETPC() in check_ret_from_m_mode()
+   - linux-user/strace.list: add riscv_hwprobe entry
+   - roms/Makefile: fix npcmNxx_bootrom build rules
+   - system/physmem: fix use-after-free with dispatch
+   - hw/net/cadence_gem: fix register mask initialization
+   - target/mips: Only update MVPControl.EVP bit if executed by master VPE
+   - docs/user: clarify user-mode expects the same OS
+   - linux-user/aarch64: Support TPIDR2_MAGIC signal frame record
+   - linux-user/aarch64: Clear TPIDR2_EL0 when delivering signals
+   - target/i386: fix width of third operand of VINSERTx128
+   - hw/display/qxl-render.c: fix qxl_unpack_chunks() chunk size calculation
+   - host-utils: Drop workaround for buggy Apple Clang __builtin_subcll()
+  * drop patches included upstream:
+   - hw-display-qxl-render.c-fix-qxl_unpack_chunks-chunk-.patch
+   - pcie_sriov-Fix-configuration-and-state-synchronizati.patch
+   - system-physmem-fix-use-after-free-with-dispatch.patch
+  * d/control.mk: 10.0.6+ds
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 10 Sep 2025 09:50:46 +0300
+
+qemu (1:10.0.3+ds-0+deb13u1) trixie; urgency=medium
+
+  * new upstream stable/bugfix release:
+   - Update version for 10.0.3 release
+   - hvf: arm: Emulate ICC_RPR_EL1 accesses properly
+   - target/arm: Correct encoding of Debug Communications Channel registers
+     https://gitlab.com/qemu-project/qemu/-/issues/2986
+   - ui: fix setting client_endian field defaults
+   - hw/net/npcm_gmac.c: Send the right data for second packet in a row
+   - target/i386: do not expose ARCH_CAPABILITIES on AMD CPU
+   - i386/cpu: Honor maximum value for CPUID.8000001DH.EAX[25:14]
+   - i386/cpu: Fix overflow of cache topology fields in CPUID.04H
+   - i386/cpu: Fix cpu number overflow in CPUID.01H.EBX[23:16]
+   - ui/vnc: Do not copy z_stream
+   - vhost: Fix used memslot tracking when destroying a vhost device
+   - roms: re-remove execute bit from hppa-firmware*
+   - file-posix: Fix aio=reads performance regression after enablign FUA
+     https://issues.redhat.com/browse/RHEL-96854
+   - amd_iommu: Fix truncation of oldval in amdvi_writeq
+   - amd_iommu: Remove duplicated definitions
+   - amd_iommu: Fix the calculation for Device Table size
+   - amd_iommu: Fix mask to retrieve Interrupt Table Root Pointer from DTE
+   - amd_iommu: Fix masks for various IOMMU MMIO Registers
+   - amd_iommu: Update bitmasks representing DTE reserved fields
+   - amd_iommu: Fix Device ID decoding for INVALIDATE_IOTLB_PAGES command
+   - amd_iommu: Fix Miscellaneous Information Register 0 encoding
+   - virtio-net: Add queues for RSS during migration
+   - net: fix buffer overflow in af_xdp_umem_create()
+   - accel/kvm: Adjust the note about the minimum required kernel version
+   - linux-user: Use qemu_set_cloexec() to mark pidfd as FD_CLOEXEC
+   - migration: Don't sync volatile memory after migration completes
+   - linux-user: Hold the fd-trans lock across fork
+     https://gitlab.com/qemu-project/qemu/-/issues/2846
+   - linux-user: Check for EFAULT failure in nanosleep
+   - linux-user: Implement fchmodat2 syscall
+     https://gitlab.com/qemu-project/qemu/-/issues/3019
+   - hw/arm/fsl-imx8mp: Wire VIRQ and VFIQ
+   - target/arm: Don't enforce NSE,NS check for EL3->EL3 returns
+     https://gitlab.com/qemu-project/qemu/-/issues/3016
+   - target/i386: fix TB exit logic in gen_movl_seg() when writing to SS
+     https://gitlab.com/qemu-project/qemu/-/issues/2987
+   - target/arm: Fix bfdotadd_ebf vs nan selection
+   - target/arm: Fix f16_dotadd vs nan selection
+   - target/arm: Fix PSEL size operands to tcg_gen_gvec_ands
+   - target/arm: Fix 128-bit element ZIP, UZP, TRN
+   - target/arm: Fix sve_access_check for SME
+   - target/arm: Fix SME vs AdvSIMD exception priority
+   - hw/s390x/ccw-device: Fix memory leak in loadparm setter
+   - virtio-gpu: support context init multiple timeline
+   - target/arm: Correct KVM & HVF dtb_compatible value
+   - target/arm: Make RETA[AB] UNDEF when pauth is not implemented
+   - tcg: Fix constant propagation in tcg_reg_alloc_dup
+     https://gitlab.com/qemu-project/qemu/-/issues/3002
+   - target/loongarch: fix vldi/xvldi raise wrong error
+   - target/loongarch: add check for fcond
+   - linux-user/arm: Fix return value of SYS_cacheflush
+   - hw/arm/mps2: Configure the AN500 CPU with 16 MPU regions
+   - qemu-options.hx: Fix reversed description of icount sleep behavior
+   - hw/arm/virt: Check bypass iommu is not set for iommu-map DT property
+   - hw/loongarch/virt: Fix big endian support with MCFG table
+   - hw/core/qdev-properties-system: Add missing return in set_drive_helper()
+   - iotests: fix 240
+   - target/i386: Remove FRED dependency on WRMSRNS
+   - hw/audio/asc: fix SIGSEGV in asc_realize()
+   - audio: fix size calculation in AUD_get_buffer_size_out()
+   - audio: fix SIGSEGV in AUD_get_buffer_size_out()
+   - hw/i386/amd_iommu: Fix xtsup when vcpus < 255
+   - hw/i386/amd_iommu: Fix device setup failure when PT is on.
+   - hw/i386/pc_piix: Fix RTC ISA IRQ wiring of isapc machine
+   - vhost: Don't set vring call if guest notifier is unused
+   - hw/arm: Add missing psci_conduit to NPCM8XX SoC boot info
+   - ui/vnc: fix tight palette pixel encoding for 8/16-bpp formats
+   - ui/vnc: take account of client byte order in pixman format
+   - ui/vnc.c: replace big endian flag with byte order value
+   - ui/sdl: Consider scaling in mouse event handling
+   - ui/gtk: Update scales in fixed-scale mode when rendering GL area
+   - gtk/ui: Introduce helper gd_update_scale
+   - ui/gtk: Use consistent naming for variables in different coordinates
+   - ui/gtk: Document scale and coordinate handling
+   - hw/arm/aspeed_ast27x0: Fix RAM size detection failure on BE hosts
+   - hw/misc/aspeed_hace: Ensure HASH_IRQ is always set
+     to prevent firmware hang
+  * d/control.mk: 10.0.3+ds
+  * d/gbp.conf: switch to debian/trixie branch
+  * d/watch: switch to 10.0.x branch
+  * qemu-img-options.patch: adjust help text for "convert" subcommand
+    This patch has been accepted upstrem but without the new option, -
+    do not mention it in help so debian users don't get used to it
+    (the option is accepted still)
+  * d/rules: fix typo in comment (it is qemu-system-data, not qemu-user-data)
+  * d/qemu-user.postinst: trigger /usr/lib/binfmt.d (Closes: #1110982)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 21 Aug 2025 18:23:38 +0300
+
+qemu (1:10.0.2+ds-2+deb13u1) trixie-security; urgency=medium
+
+  * d/binfmt-install: stop using C (Credentials) flag for binfmt_misc
+    registration.  qemu-user binaries were never meant to be used in
+    suid/sgid scenarios, but was used in debian since late 2009.  Any
+    foreign suid/sgid binary accessible to the users, in presence of
+    qemu-user binfmt, is trivially exploitable to gain elevated privileges.
+    This change might break existing setups since for many years people
+    relied on qemu-user binfmt working with suid binaries, but this is
+    a situation where it is definitely better be safe than sorry.
+  * pcie_sriov-Fix-configuration-and-state-synchronizati.patch
+    (Closes: #1109989, CVE-2025-54566, CVE-2025-54567)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 15 Aug 2025 12:54:40 +0300
+
+qemu (1:10.0.2+ds-2) unstable; urgency=medium
+
+  * d/control: switch from Static-Built-Using
+    back to Built-Using for qemu-user (Closes: #1106804)
+  * d/rules: simplify qemu:archlist variable generation
+    (does not change the resulting packages)
+  * d/control: drop build dependency alternative on python3-tomli,
+    which was needed for bpo builds before bookworm (Closes: #1105938)
+  * system-physmem-fix-use-after-free-with-dispatch.patch long-awaited
+    fix for UAF which was affected multiple other packages and was quite
+    difficult to track (Closes: #1106792)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 25 Jul 2025 12:05:29 +0300
+
+qemu (1:10.0.2+ds-1) unstable; urgency=medium
+
+  * new upstream stable/bugfix release:
+   o Update version for 10.0.2 release
+   o Drop support for Python 3.8
+   o target/hppa: Fix FPE exceptions
+   o linux-user/hppa: Send proper si_code on SIGFPE exception
+   o target/hppa: Copy instruction code into fr1 on FPU assist fault
+   o migration: Allow caps to be set when preempt or multifd cap enabled
+   o migration/multifd: Don't send device state packets with zerocopy flag
+   o qapi/misc-target: Fix the doc to distinguish query-sgx
+     and query-sgx-capabilities
+   o hw/pci-host: Remove unused pci_host_data_be_ops
+   o hw/pci-host/gt64120: Fix endianness handling
+   o i386/hvf: Make CPUID_HT supported
+   o i386/tcg: Make CPUID_HT and CPUID_EXT3_CMP_LEG supported
+   o target/riscv/kvm: do not read unavailable CSRs
+   o target/riscv/kvm: add kvm_csr_cfgs[]
+   o target/riscv/kvm: turn kvm_riscv_reg_id_ulong() into a macro
+   o target/riscv/kvm: turn u32/u64 reg functions into macros
+   o target/riscv/kvm: fix leak in kvm_riscv_init_multiext_cfg()
+   o target/riscv/kvm: minor fixes/tweaks
+   o target/riscv: Fix vslidedown with rvv_ta_all_1s
+   o target/riscv: Fix the rvv reserved encoding of unmasked instructions
+   o target/riscv: rvv: Apply vext_check_input_eew
+     to vector indexed load/store instructions
+   o target/riscv: rvv: Apply vext_check_input_eew to
+     vector narrow/widen instructions
+   o target/riscv: rvv: Apply vext_check_input_eew to
+     vector integer extension instructions(OPMVV)
+   o target/riscv: rvv: Apply vext_check_input_eew to
+     vector slide instructions(OPIVI/OPIVX)
+   o target/riscv: rvv: Apply vext_check_input_eew to
+     OPIVV/OPFVV(vext_check_sss) instructions
+   o target/riscv: rvv: Apply vext_check_input_eew to
+     OPIVI/OPIVX/OPFVF(vext_check_ss) instructions
+   o target/riscv: rvv: Apply vext_check_input_eew to vrgather
+     instructions to check mismatched input EEWs encoding constraint
+   o target/riscv: rvv: Add CHECK arg to GEN_OPFVF_WIDEN_TRANS
+   o target/riscv: rvv: Source vector registers cannot overlap mask register
+   o common-user/host/riscv: use tail pseudoinstruction for calling tail
+   o target/riscv: fix endless translation loop on big endian systems
+   o hw/riscv: Fix type conflict of GLib function pointers
+   o target/riscv: pmp: fix checks on writes to pmpcfg in Smepmp MML mode
+   o target/riscv: pmp: move Smepmp operation conversion into a function
+   o target/riscv: pmp: don't allow RLB to bypass rule privileges
+   o hw/nvme: fix nvme hotplugging
+   o virtio: Call set_features during reset
+   o s390x: Fix leak in machine_set_loadparm
+   o 9pfs: fix FD leak and reduce latency of v9fs_reclaim_fd()
+   o 9pfs: fix concurrent v9fs_reclaim_fd() calls
+   o hw/i2c/imx: Always set interrupt status bit if interrupt condition occurs
+   o xen: mapcache: Split mapcache_grants by ro and rw
+   o xen: mapcache: Fix finding matching entry
+   o target/i386: do not block singlestep for STI
+   o target/i386: do not trigger IRQ shadow for LSS
+   o hw/gpio/imx_gpio: Fix interpretation of GDIR polarity
+   o docs: Don't define duplicate label in qemu-block-drivers.rst.inc
+   o target/arm: Don't assert() for ISB/SB inside IT block
+   o hw/arm/npcm8xx_boards: Correct valid_cpu_types setting of NPCM8XX SoC
+   o accel/tcg: Don't use TARGET_LONG_BITS in decode_sleb128
+   o meson: Use osdep_prefix for strchrnul()
+   o meson: Share common C source prefixes
+   o meson: Remove CONFIG_STATX and CONFIG_STATX_MNT_ID
+   o meson: Use has_header_symbol() to check getcpu()
+   o target/mips: Fix MIPS16e translation
+   o hw/core/cpu: gdb_arch_name string should not be freed
+   o hw/core: Get default_cpu_type calling machine_class_default_cpu_type()
+   o target/avr: Improve decode of LDS, STS
+   o target/i386/hvf: fix lflags_to_rflags
+   o target/i386: Fix model number of Zhaoxin YongFeng vCPU template
+  * hw-nvme-fix-nvme-hotplugging.patch: remove, applied upstream
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 29 May 2025 10:13:25 +0300
+
+qemu (1:10.0.0+ds-2) unstable; urgency=medium
+
+  * pick hw-nvme-fix-nvme-hotplugging.patch from qemu mailinglist
+    Closes: #1104889
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Mon, 12 May 2025 21:01:08 +0300
+
+qemu (1:10.0.0+ds-1) unstable; urgency=medium
+
+  * new upstream release (final)
+  * d/control.mk: 10.0.0+ds
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 24 Apr 2025 10:22:04 +0300
+
 qemu (1:10.0.0~rc3+ds-2+pexip25u2) pexip-trixie; urgency=medium
 
   * Trixie build for product distribution
