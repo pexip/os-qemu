@@ -1,0 +1,998 @@
+Subject: v7.2.19
+Date: Mon Sep 8 16:11:36 2025 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.19
+and upstream qemu v7.2.20.
+
+ VERSION                             |  2 +-
+ block/curl.c                        |  7 ++---
+ hw/arm/stm32f205_soc.c              | 10 +++----
+ hw/display/qxl-render.c             | 11 +++++++-
+ hw/intc/arm_gicv3_kvm.c             |  2 +-
+ hw/net/cadence_gem.c                |  2 +-
+ hw/net/e1000e_core.c                |  5 ----
+ hw/net/virtio-net.c                 | 17 ++++++++----
+ hw/sd/ssi-sd.c                      |  4 +++
+ hw/ssi/aspeed_smc.c                 |  3 +-
+ hw/virtio/virtio.c                  |  7 +++++
+ include/elf.h                       |  7 +++++
+ include/hw/arm/stm32f205_soc.h      |  2 +-
+ include/hw/virtio/virtio.h          |  8 ++++++
+ linux-user/aarch64/cpu_loop.c       | 11 ++------
+ linux-user/aarch64/signal.c         | 55 ++++++++++++++++++++++++++++---------
+ linux-user/mips/target_elf.h        | 10 +++++--
+ linux-user/mips64/target_elf.h      |  3 --
+ qga/commands.c                      | 10 ++++---
+ scripts/kernel-doc                  |  9 +++---
+ target/arm/cpu.h                    |  2 +-
+ target/arm/gdbstub64.c              | 35 ++++++++++++++++++-----
+ target/arm/helper-sme.h             |  3 +-
+ target/arm/helper.c                 | 41 +++++++++++++++++++++++++--
+ target/arm/sme_helper.c             | 37 ++-----------------------
+ target/arm/translate-a64.c          | 21 ++++++--------
+ target/i386/tcg/decode-new.c.inc    |  4 +--
+ target/i386/tcg/sysemu/svm_helper.c |  2 +-
+ target/mips/tcg/sysemu/cp0_helper.c | 32 +++++++++++----------
+ target/mips/tcg/sysemu/tlb_helper.c |  2 +-
+ tests/qemu-iotests/039.out          | 10 +++----
+ tests/qemu-iotests/061.out          |  4 +--
+ tests/qemu-iotests/137.out          |  2 +-
+ tests/qemu-iotests/common.filter    |  2 +-
+ 34 files changed, 231 insertions(+), 151 deletions(-)
+
+diff --git a/VERSION b/VERSION
+index c38925f4c2..f3cd98c594 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.19
++7.2.20
+diff --git a/block/curl.c b/block/curl.c
+index 0b125095e3..f9c5a1c182 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -161,13 +161,9 @@ static int curl_timer_cb(CURLM *multi, long timeout_ms, void *opaque)
+ static int curl_sock_cb(CURL *curl, curl_socket_t fd, int action,
+                         void *userp, void *sp)
+ {
+-    BDRVCURLState *s;
+-    CURLState *state = NULL;
++    BDRVCURLState *s = userp;
+     CURLSocket *socket;
+ 
+-    curl_easy_getinfo(curl, CURLINFO_PRIVATE, (char **)&state);
+-    s = state->s;
+-
+     socket = g_hash_table_lookup(s->sockets, GINT_TO_POINTER(fd));
+     if (!socket) {
+         socket = g_new0(CURLSocket, 1);
+@@ -612,6 +608,7 @@ static void curl_attach_aio_context(BlockDriverState *bs,
+     assert(!s->multi);
+     s->multi = curl_multi_init();
+     s->aio_context = new_context;
++    curl_multi_setopt(s->multi, CURLMOPT_SOCKETDATA, s);
+     curl_multi_setopt(s->multi, CURLMOPT_SOCKETFUNCTION, curl_sock_cb);
+     curl_multi_setopt(s->multi, CURLMOPT_TIMERDATA, s);
+     curl_multi_setopt(s->multi, CURLMOPT_TIMERFUNCTION, curl_timer_cb);
+diff --git a/hw/arm/stm32f205_soc.c b/hw/arm/stm32f205_soc.c
+index c6b75a381d..bd2f8b5996 100644
+--- a/hw/arm/stm32f205_soc.c
++++ b/hw/arm/stm32f205_soc.c
+@@ -66,7 +66,7 @@ static void stm32f205_soc_initfn(Object *obj)
+                                 TYPE_STM32F2XX_TIMER);
+     }
+ 
+-    s->adc_irqs = OR_IRQ(object_new(TYPE_OR_IRQ));
++    object_initialize_child(obj, "adc-irq-orgate", &s->adc_irqs, TYPE_OR_IRQ);
+ 
+     for (i = 0; i < STM_NUM_ADCS; i++) {
+         object_initialize_child(obj, "adc[*]", &s->adc[i], TYPE_STM32F2XX_ADC);
+@@ -170,12 +170,12 @@ static void stm32f205_soc_realize(DeviceState *dev_soc, Error **errp)
+     }
+ 
+     /* ADC 1 to 3 */
+-    object_property_set_int(OBJECT(s->adc_irqs), "num-lines", STM_NUM_ADCS,
++    object_property_set_int(OBJECT(&s->adc_irqs), "num-lines", STM_NUM_ADCS,
+                             &error_abort);
+-    if (!qdev_realize(DEVICE(s->adc_irqs), NULL, errp)) {
++    if (!qdev_realize(DEVICE(&s->adc_irqs), NULL, errp)) {
+         return;
+     }
+-    qdev_connect_gpio_out(DEVICE(s->adc_irqs), 0,
++    qdev_connect_gpio_out(DEVICE(&s->adc_irqs), 0,
+                           qdev_get_gpio_in(armv7m, ADC_IRQ));
+ 
+     for (i = 0; i < STM_NUM_ADCS; i++) {
+@@ -186,7 +186,7 @@ static void stm32f205_soc_realize(DeviceState *dev_soc, Error **errp)
+         busdev = SYS_BUS_DEVICE(dev);
+         sysbus_mmio_map(busdev, 0, adc_addr[i]);
+         sysbus_connect_irq(busdev, 0,
+-                           qdev_get_gpio_in(DEVICE(s->adc_irqs), i));
++                           qdev_get_gpio_in(DEVICE(&s->adc_irqs), i));
+     }
+ 
+     /* SPI 1 and 2 */
+diff --git a/hw/display/qxl-render.c b/hw/display/qxl-render.c
+index fcfd40c3ac..6d1df16fa4 100644
+--- a/hw/display/qxl-render.c
++++ b/hw/display/qxl-render.c
+@@ -222,6 +222,7 @@ static void qxl_unpack_chunks(void *dest, size_t size, PCIQXLDevice *qxl,
+     uint32_t max_chunks = 32;
+     size_t offset = 0;
+     size_t bytes;
++    QXLPHYSICAL next_chunk_phys = 0;
+ 
+     for (;;) {
+         bytes = MIN(size - offset, chunk->data_size);
+@@ -230,7 +231,15 @@ static void qxl_unpack_chunks(void *dest, size_t size, PCIQXLDevice *qxl,
+         if (offset == size) {
+             return;
+         }
+-        chunk = qxl_phys2virt(qxl, chunk->next_chunk, group_id,
++        next_chunk_phys = chunk->next_chunk;
++        /* fist time, only get the next chunk's data size */
++        chunk = qxl_phys2virt(qxl, next_chunk_phys, group_id,
++                              sizeof(QXLDataChunk));
++        if (!chunk) {
++            return;
++        }
++        /* second time, check data size and get data */
++        chunk = qxl_phys2virt(qxl, next_chunk_phys, group_id,
+                               sizeof(QXLDataChunk) + chunk->data_size);
+         if (!chunk) {
+             return;
+diff --git a/hw/intc/arm_gicv3_kvm.c b/hw/intc/arm_gicv3_kvm.c
+index 3ca643ecba..6d98dafc02 100644
+--- a/hw/intc/arm_gicv3_kvm.c
++++ b/hw/intc/arm_gicv3_kvm.c
+@@ -294,7 +294,7 @@ static void kvm_dist_putbmp(GICv3State *s, uint32_t offset,
+          * the 1 bits.
+          */
+         if (clroffset != 0) {
+-            reg = 0;
++            reg = ~0;
+             kvm_gicd_access(s, clroffset, &reg, true);
+             clroffset += 4;
+         }
+diff --git a/hw/net/cadence_gem.c b/hw/net/cadence_gem.c
+index cb61a76417..338a42daab 100644
+--- a/hw/net/cadence_gem.c
++++ b/hw/net/cadence_gem.c
+@@ -1630,6 +1630,7 @@ static void gem_realize(DeviceState *dev, Error **errp)
+         sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq[i]);
+     }
+ 
++    gem_init_register_masks(s);
+     qemu_macaddr_default_if_unset(&s->conf.macaddr);
+ 
+     s->nic = qemu_new_nic(&net_gem_info, &s->conf,
+@@ -1650,7 +1651,6 @@ static void gem_init(Object *obj)
+ 
+     DB_PRINT("\n");
+ 
+-    gem_init_register_masks(s);
+     memory_region_init_io(&s->iomem, OBJECT(s), &gem_ops, s,
+                           "enet", sizeof(s->regs));
+ 
+diff --git a/hw/net/e1000e_core.c b/hw/net/e1000e_core.c
+index 742f5ec800..5def4cfc1c 100644
+--- a/hw/net/e1000e_core.c
++++ b/hw/net/e1000e_core.c
+@@ -336,11 +336,6 @@ e1000e_intmgr_collect_delayed_causes(E1000ECore *core)
+ {
+     uint32_t res;
+ 
+-    if (msix_enabled(core->owner)) {
+-        assert(core->delayed_causes == 0);
+-        return 0;
+-    }
+-
+     res = core->delayed_causes;
+     core->delayed_causes = 0;
+ 
+diff --git a/hw/net/virtio-net.c b/hw/net/virtio-net.c
+index 0ba1db5b14..785cbbf768 100644
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -2928,11 +2928,10 @@ static void virtio_net_del_queue(VirtIONet *n, int index)
+     virtio_del_queue(vdev, index * 2 + 1);
+ }
+ 
+-static void virtio_net_change_num_queue_pairs(VirtIONet *n, int new_max_queue_pairs)
++static void virtio_net_change_num_queues(VirtIONet *n, int new_num_queues)
+ {
+     VirtIODevice *vdev = VIRTIO_DEVICE(n);
+     int old_num_queues = virtio_get_num_queues(vdev);
+-    int new_num_queues = new_max_queue_pairs * 2 + 1;
+     int i;
+ 
+     assert(old_num_queues >= 3);
+@@ -2968,11 +2967,18 @@ static void virtio_net_set_multiqueue(VirtIONet *n, int multiqueue)
+     int max = multiqueue ? n->max_queue_pairs : 1;
+ 
+     n->multiqueue = multiqueue;
+-    virtio_net_change_num_queue_pairs(n, max);
++    virtio_net_change_num_queues(n, max * 2 + 1);
+ 
+     virtio_net_set_queue_pairs(n);
+ }
+ 
++static int virtio_net_pre_load_queues(VirtIODevice *vdev, uint32_t n)
++{
++    virtio_net_change_num_queues(VIRTIO_NET(vdev), n);
++
++    return 0;
++}
++
+ static int virtio_net_post_load_device(void *opaque, int version_id)
+ {
+     VirtIONet *n = opaque;
+@@ -3640,9 +3646,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
+     n->net_conf.tx_queue_size = MIN(virtio_net_max_tx_queue_size(n),
+                                     n->net_conf.tx_queue_size);
+ 
+-    for (i = 0; i < n->max_queue_pairs; i++) {
+-        virtio_net_add_queue(n, i);
+-    }
++    virtio_net_add_queue(n, 0);
+ 
+     n->ctrl_vq = virtio_add_queue(vdev, 64, virtio_net_handle_ctrl);
+     qemu_macaddr_default_if_unset(&n->nic_conf.macaddr);
+@@ -3912,6 +3916,7 @@ static void virtio_net_class_init(ObjectClass *klass, void *data)
+     vdc->guest_notifier_mask = virtio_net_guest_notifier_mask;
+     vdc->guest_notifier_pending = virtio_net_guest_notifier_pending;
+     vdc->legacy_features |= (0x1 << VIRTIO_NET_F_GSO);
++    vdc->pre_load_queues = virtio_net_pre_load_queues;
+     vdc->post_load = virtio_net_post_load_virtio;
+     vdc->vmsd = &vmstate_virtio_net_device;
+     vdc->primary_unplug_pending = primary_unplug_pending;
+diff --git a/hw/sd/ssi-sd.c b/hw/sd/ssi-sd.c
+index 167c03b780..a912f40f68 100644
+--- a/hw/sd/ssi-sd.c
++++ b/hw/sd/ssi-sd.c
+@@ -106,6 +106,10 @@ static uint32_t ssi_sd_transfer(SSIPeripheral *dev, uint32_t val)
+     SDRequest request;
+     uint8_t longresp[16];
+ 
++    if (!sdbus_get_inserted(&s->sdbus)) {
++        return SSI_DUMMY;
++    }
++
+     /*
+      * Special case: allow CMD12 (STOP TRANSMISSION) while reading data.
+      *
+diff --git a/hw/ssi/aspeed_smc.c b/hw/ssi/aspeed_smc.c
+index 22df4be528..194df7df77 100644
+--- a/hw/ssi/aspeed_smc.c
++++ b/hw/ssi/aspeed_smc.c
+@@ -1761,7 +1761,8 @@ static void aspeed_1030_fmc_class_init(ObjectClass *klass, void *data)
+     asc->resets            = aspeed_1030_fmc_resets;
+     asc->flash_window_base = 0x80000000;
+     asc->flash_window_size = 0x10000000;
+-    asc->features          = ASPEED_SMC_FEATURE_DMA;
++    asc->features          = ASPEED_SMC_FEATURE_DMA |
++                             ASPEED_SMC_FEATURE_WDT_CONTROL;
+     asc->dma_flash_mask    = 0x0FFFFFFC;
+     asc->dma_dram_mask     = 0x000BFFFC;
+     asc->nregs             = ASPEED_SMC_R_MAX;
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index 5914f839ea..82a49b8ab7 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -3663,6 +3663,13 @@ int virtio_load(VirtIODevice *vdev, QEMUFile *f, int version_id)
+         return -1;
+     }
+ 
++    if (vdc->pre_load_queues) {
++        ret = vdc->pre_load_queues(vdev, num);
++        if (ret) {
++            return ret;
++        }
++    }
++
+     for (i = 0; i < num; i++) {
+         vdev->vq[i].vring.num = qemu_get_be32(f);
+         if (k->has_variable_vring_alignment) {
+diff --git a/include/elf.h b/include/elf.h
+index 8bf1e72720..f373f8e872 100644
+--- a/include/elf.h
++++ b/include/elf.h
+@@ -56,6 +56,13 @@ typedef int64_t  Elf64_Sxword;
+ #define EF_MIPS_ARCH_32R6       0x90000000      /* MIPS32r6 code.  */
+ #define EF_MIPS_ARCH_64R6       0xa0000000      /* MIPS64r6 code.  */
+ 
++/* MIPS Architectural Extensions. */
++#define EF_MIPS_ARCH_ASE      0x0f000000
++
++#define EF_MIPS_ARCH_ASE_MICROMIPS 0x02000000
++#define EF_MIPS_ARCH_ASE_M16  0x04000000
++#define EF_MIPS_ARCH_ASE_MDMX 0x08000000
++
+ /* The ABI of a file. */
+ #define EF_MIPS_ABI_O32		0x00001000	/* O32 ABI.  */
+ #define EF_MIPS_ABI_O64		0x00002000	/* O32 extended for 64 bit.  */
+diff --git a/include/hw/arm/stm32f205_soc.h b/include/hw/arm/stm32f205_soc.h
+index 849d3ed889..d7e839ab14 100644
+--- a/include/hw/arm/stm32f205_soc.h
++++ b/include/hw/arm/stm32f205_soc.h
+@@ -63,7 +63,7 @@ struct STM32F205State {
+     STM32F2XXADCState adc[STM_NUM_ADCS];
+     STM32F2XXSPIState spi[STM_NUM_SPIS];
+ 
+-    qemu_or_irq *adc_irqs;
++    qemu_or_irq adc_irqs;
+ 
+     MemoryRegion sram;
+     MemoryRegion flash;
+diff --git a/include/hw/virtio/virtio.h b/include/hw/virtio/virtio.h
+index ab3eb182f4..5ce9144c4a 100644
+--- a/include/hw/virtio/virtio.h
++++ b/include/hw/virtio/virtio.h
+@@ -180,6 +180,14 @@ struct VirtioDeviceClass {
+     void (*guest_notifier_mask)(VirtIODevice *vdev, int n, bool mask);
+     int (*start_ioeventfd)(VirtIODevice *vdev);
+     void (*stop_ioeventfd)(VirtIODevice *vdev);
++    /*
++     * Called before loading queues.
++     * If the number of queues change at runtime, use @n to know the
++     * number and add or remove queues accordingly.
++     * Note that this function is called in the middle of loading vmsd;
++     * no assumption should be made on states being loaded from vmsd.
++     */
++    int (*pre_load_queues)(VirtIODevice *vdev, uint32_t n);
+     /* Saving and loading of a device; trying to deprecate save/load
+      * use vmsd for new devices.
+      */
+diff --git a/linux-user/aarch64/cpu_loop.c b/linux-user/aarch64/cpu_loop.c
+index 9875d609a9..2e2f7cf218 100644
+--- a/linux-user/aarch64/cpu_loop.c
++++ b/linux-user/aarch64/cpu_loop.c
+@@ -89,15 +89,8 @@ void cpu_loop(CPUARMState *env)
+ 
+         switch (trapnr) {
+         case EXCP_SWI:
+-            /*
+-             * On syscall, PSTATE.ZA is preserved, along with the ZA matrix.
+-             * PSTATE.SM is cleared, per SMSTOP, which does ResetSVEState.
+-             */
+-            if (FIELD_EX64(env->svcr, SVCR, SM)) {
+-                env->svcr = FIELD_DP64(env->svcr, SVCR, SM, 0);
+-                arm_rebuild_hflags(env);
+-                arm_reset_sve_state(env);
+-            }
++            /* On syscall, PSTATE.ZA is preserved, PSTATE.SM is cleared. */
++            aarch64_set_svcr(env, 0, R_SVCR_SM_MASK);
+             ret = do_syscall(env,
+                              env->xregs[8],
+                              env->xregs[0],
+diff --git a/linux-user/aarch64/signal.c b/linux-user/aarch64/signal.c
+index 6a2c6e06d2..17865356d8 100644
+--- a/linux-user/aarch64/signal.c
++++ b/linux-user/aarch64/signal.c
+@@ -120,6 +120,13 @@ struct target_za_context {
+ #define TARGET_ZA_SIG_CONTEXT_SIZE(VQ) \
+     TARGET_ZA_SIG_ZAV_OFFSET(VQ, VQ * TARGET_SVE_VQ_BYTES)
+ 
++#define TARGET_TPIDR2_MAGIC 0x54504902
++
++struct target_tpidr2_context {
++    struct target_aarch64_ctx head;
++    uint64_t tpidr2;
++};
++
+ struct target_rt_sigframe {
+     struct target_siginfo info;
+     struct target_ucontext uc;
+@@ -252,6 +259,14 @@ static void target_setup_za_record(struct target_za_context *za,
+     }
+ }
+ 
++static void target_setup_tpidr2_record(struct target_tpidr2_context *tpidr2,
++                                       CPUARMState *env)
++{
++    __put_user(TARGET_TPIDR2_MAGIC, &tpidr2->head.magic);
++    __put_user(sizeof(struct target_tpidr2_context), &tpidr2->head.size);
++    __put_user(env->cp15.tpidr2_el0, &tpidr2->tpidr2);
++}
++
+ static void target_restore_general_frame(CPUARMState *env,
+                                          struct target_rt_sigframe *sf)
+ {
+@@ -402,6 +417,12 @@ static bool target_restore_za_record(CPUARMState *env,
+     return true;
+ }
+ 
++static void target_restore_tpidr2_record(CPUARMState *env,
++                                         struct target_tpidr2_context *tpidr2)
++{
++    __get_user(env->cp15.tpidr2_el0, &tpidr2->tpidr2);
++}
++
+ static int target_restore_sigframe(CPUARMState *env,
+                                    struct target_rt_sigframe *sf)
+ {
+@@ -409,6 +430,7 @@ static int target_restore_sigframe(CPUARMState *env,
+     struct target_fpsimd_context *fpsimd = NULL;
+     struct target_sve_context *sve = NULL;
+     struct target_za_context *za = NULL;
++    struct target_tpidr2_context *tpidr2 = NULL;
+     uint64_t extra_datap = 0;
+     bool used_extra = false;
+     int sve_size = 0;
+@@ -459,6 +481,14 @@ static int target_restore_sigframe(CPUARMState *env,
+             za_size = size;
+             break;
+ 
++        case TARGET_TPIDR2_MAGIC:
++            if (tpidr2 || size != sizeof(struct target_tpidr2_context) ||
++                !cpu_isar_feature(aa64_sme, env_archcpu(env))) {
++                goto err;
++            }
++            tpidr2 = (struct target_tpidr2_context *)ctx;
++            break;
++
+         case TARGET_EXTRA_MAGIC:
+             if (extra || size != sizeof(struct target_extra_context)) {
+                 goto err;
+@@ -496,6 +526,9 @@ static int target_restore_sigframe(CPUARMState *env,
+     if (za && !target_restore_za_record(env, za, za_size, &svcr)) {
+         goto err;
+     }
++    if (tpidr2) {
++        target_restore_tpidr2_record(env, tpidr2);
++    }
+     if (env->svcr != svcr) {
+         env->svcr = svcr;
+         arm_rebuild_hflags(env);
+@@ -567,8 +600,8 @@ static void target_setup_frame(int usig, struct target_sigaction *ka,
+         .total_size = offsetof(struct target_rt_sigframe,
+                                uc.tuc_mcontext.__reserved),
+     };
+-    int fpsimd_ofs, fr_ofs, sve_ofs = 0, za_ofs = 0;
+-    int sve_size = 0, za_size = 0;
++    int fpsimd_ofs, fr_ofs, sve_ofs = 0, za_ofs = 0, tpidr2_ofs = 0;
++    int sve_size = 0, za_size = 0, tpidr2_size = 0;
+     struct target_rt_sigframe *frame;
+     struct target_rt_frame_record *fr;
+     abi_ulong frame_addr, return_addr;
+@@ -584,6 +617,8 @@ static void target_setup_frame(int usig, struct target_sigaction *ka,
+         sve_ofs = alloc_sigframe_space(sve_size, &layout);
+     }
+     if (cpu_isar_feature(aa64_sme, env_archcpu(env))) {
++        tpidr2_size = sizeof(struct target_tpidr2_context);
++        tpidr2_ofs = alloc_sigframe_space(tpidr2_size, &layout);
+         /* ZA state needs saving only if it is enabled.  */
+         if (FIELD_EX64(env->svcr, SVCR, ZA)) {
+             za_size = TARGET_ZA_SIG_CONTEXT_SIZE(sme_vq(env));
+@@ -643,6 +678,9 @@ static void target_setup_frame(int usig, struct target_sigaction *ka,
+     if (za_ofs) {
+         target_setup_za_record((void *)frame + za_ofs, env, za_size);
+     }
++    if (tpidr2_ofs) {
++        target_setup_tpidr2_record((void *)frame + tpidr2_ofs, env);
++    }
+ 
+     /* Set up the stack frame for unwinding.  */
+     fr = (void *)frame + fr_ofs;
+@@ -665,17 +703,8 @@ static void target_setup_frame(int usig, struct target_sigaction *ka,
+         env->btype = 2;
+     }
+ 
+-    /*
+-     * Invoke the signal handler with both SM and ZA disabled.
+-     * When clearing SM, ResetSVEState, per SMSTOP.
+-     */
+-    if (FIELD_EX64(env->svcr, SVCR, SM)) {
+-        arm_reset_sve_state(env);
+-    }
+-    if (env->svcr) {
+-        env->svcr = 0;
+-        arm_rebuild_hflags(env);
+-    }
++    /* Invoke the signal handler with both SM and ZA disabled. */
++    aarch64_set_svcr(env, 0, R_SVCR_SM_MASK | R_SVCR_ZA_MASK);
+ 
+     if (info) {
+         tswap_siginfo(&frame->info, info);
+diff --git a/linux-user/mips/target_elf.h b/linux-user/mips/target_elf.h
+index a98c9bd6ad..d20c6080cc 100644
+--- a/linux-user/mips/target_elf.h
++++ b/linux-user/mips/target_elf.h
+@@ -12,8 +12,14 @@ static inline const char *cpu_get_model(uint32_t eflags)
+     if ((eflags & EF_MIPS_ARCH) == EF_MIPS_ARCH_32R6) {
+         return "mips32r6-generic";
+     }
+-    if ((eflags & EF_MIPS_MACH) == EF_MIPS_MACH_5900) {
+-        return "R5900";
++    if ((eflags & EF_MIPS_ARCH_ASE) == EF_MIPS_ARCH_ASE_MICROMIPS) {
++        return "M14Kc";
++    }
++    if ((eflags & EF_MIPS_ARCH_ASE) == EF_MIPS_ARCH_ASE_M16) {
++        return "74Kf";
++    }
++    if (eflags & EF_MIPS_NAN2008) {
++        return "P5600";
+     }
+     return "24Kf";
+ }
+diff --git a/linux-user/mips64/target_elf.h b/linux-user/mips64/target_elf.h
+index 5f2f2df29f..ec55d8542a 100644
+--- a/linux-user/mips64/target_elf.h
++++ b/linux-user/mips64/target_elf.h
+@@ -12,9 +12,6 @@ static inline const char *cpu_get_model(uint32_t eflags)
+     if ((eflags & EF_MIPS_ARCH) == EF_MIPS_ARCH_64R6) {
+         return "I6400";
+     }
+-    if ((eflags & EF_MIPS_MACH) == EF_MIPS_MACH_5900) {
+-        return "R5900";
+-    }
+     return "5KEf";
+ }
+ #endif
+diff --git a/qga/commands.c b/qga/commands.c
+index 6cf978322e..fb1251111f 100644
+--- a/qga/commands.c
++++ b/qga/commands.c
+@@ -207,16 +207,18 @@ GuestExecStatus *qmp_guest_exec_status(int64_t pid, Error **errp)
+         if (gei->out.length > 0) {
+             ges->has_out_data = true;
+             ges->out_data = g_base64_encode(gei->out.data, gei->out.length);
+-            g_free(gei->out.data);
+-            ges->has_out_truncated = gei->out.truncated;
++            ges->has_out_truncated = true;
++            ges->out_truncated = gei->out.truncated;
+         }
++        g_free(gei->out.data);
+ 
+         if (gei->err.length > 0) {
+             ges->has_err_data = true;
+             ges->err_data = g_base64_encode(gei->err.data, gei->err.length);
+-            g_free(gei->err.data);
+-            ges->has_err_truncated = gei->err.truncated;
++            ges->has_err_truncated = true;
++            ges->err_truncated = gei->err.truncated;
+         }
++        g_free(gei->err.data);
+ 
+         QTAILQ_REMOVE(&guest_exec_state.processes, gei, next);
+         g_free(gei);
+diff --git a/scripts/kernel-doc b/scripts/kernel-doc
+index 240923d509..133d6d1e08 100755
+--- a/scripts/kernel-doc
++++ b/scripts/kernel-doc
+@@ -1594,13 +1594,12 @@ sub push_parameter($$$$$) {
+ 
+ 	if ($type eq "" && $param =~ /\.\.\.$/)
+ 	{
+-	    if (!$param =~ /\w\.\.\.$/) {
+-	      # handles unnamed variable parameters
+-	      $param = "...";
+-	    }
+-	    elsif ($param =~ /\w\.\.\.$/) {
++	    if ($param =~ /\w\.\.\.$/) {
+ 	      # for named variable parameters of the form `x...`, remove the dots
+ 	      $param =~ s/\.\.\.$//;
++	    } else {
++	      # handles unnamed variable parameters
++	      $param = "...";
+ 	    }
+ 	    if (!defined $parameterdescs{$param} || $parameterdescs{$param} eq "") {
+ 		$parameterdescs{$param} = "variable arguments";
+diff --git a/target/arm/cpu.h b/target/arm/cpu.h
+index 32b0bf8e2d..02a084c962 100644
+--- a/target/arm/cpu.h
++++ b/target/arm/cpu.h
+@@ -1118,7 +1118,7 @@ int aarch64_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
+ void aarch64_sve_narrow_vq(CPUARMState *env, unsigned vq);
+ void aarch64_sve_change_el(CPUARMState *env, int old_el,
+                            int new_el, bool el0_a64);
+-void arm_reset_sve_state(CPUARMState *env);
++void aarch64_set_svcr(CPUARMState *env, uint64_t new, uint64_t mask);
+ 
+ /*
+  * SVE registers are encoded in KVM's memory in an endianness-invariant format.
+diff --git a/target/arm/gdbstub64.c b/target/arm/gdbstub64.c
+index 07a6746944..fdbe6ffbd0 100644
+--- a/target/arm/gdbstub64.c
++++ b/target/arm/gdbstub64.c
+@@ -99,8 +99,22 @@ int aarch64_fpu_gdb_set_reg(CPUARMState *env, uint8_t *buf, int reg)
+         /* 128 bit FP register */
+         {
+             uint64_t *q = aa64_vfp_qreg(env, reg);
+-            q[0] = ldq_le_p(buf);
+-            q[1] = ldq_le_p(buf + 8);
++
++            /*
++             * On the wire these are target-endian 128 bit values.
++             * In the CPU state these are host-order uint64_t values
++             * with the least-significant one first. This means they're
++             * the other way around for target_words_bigendian() (which is
++             * only true for us for aarch64_be-linux-user).
++             */
++            if (target_words_bigendian()) {
++                q[1] = ldq_p(buf);
++                q[0] = ldq_p(buf + 8);
++            } else{
++                q[0] = ldq_p(buf);
++                q[1] = ldq_p(buf + 8);
++            }
++
+             return 16;
+         }
+     case 32:
+@@ -174,10 +188,17 @@ int arm_gdb_set_svereg(CPUARMState *env, uint8_t *buf, int reg)
+     case 0 ... 31:
+     {
+         int vq, len = 0;
+-        uint64_t *p = (uint64_t *) buf;
+         for (vq = 0; vq < cpu->sve_max_vq; vq++) {
+-            env->vfp.zregs[reg].d[vq * 2 + 1] = *p++;
+-            env->vfp.zregs[reg].d[vq * 2] = *p++;
++            if (target_words_bigendian()) {
++                env->vfp.zregs[reg].d[vq * 2 + 1] = ldq_p(buf);
++                buf += 8;
++                env->vfp.zregs[reg].d[vq * 2] = ldq_p(buf);
++            } else{
++                env->vfp.zregs[reg].d[vq * 2] = ldq_p(buf);
++                buf += 8;
++                env->vfp.zregs[reg].d[vq * 2 + 1] = ldq_p(buf);
++            }
++            buf += 8;
+             len += 16;
+         }
+         return len;
+@@ -192,9 +213,9 @@ int arm_gdb_set_svereg(CPUARMState *env, uint8_t *buf, int reg)
+     {
+         int preg = reg - 34;
+         int vq, len = 0;
+-        uint64_t *p = (uint64_t *) buf;
+         for (vq = 0; vq < cpu->sve_max_vq; vq = vq + 4) {
+-            env->vfp.pregs[preg].p[vq / 4] = *p++;
++            env->vfp.pregs[preg].p[vq / 4] = ldq_p(buf);
++            buf += 8;
+             len += 8;
+         }
+         return len;
+diff --git a/target/arm/helper-sme.h b/target/arm/helper-sme.h
+index d33fbcd8fd..d22bf9d21b 100644
+--- a/target/arm/helper-sme.h
++++ b/target/arm/helper-sme.h
+@@ -17,8 +17,7 @@
+  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-DEF_HELPER_FLAGS_2(set_pstate_sm, TCG_CALL_NO_RWG, void, env, i32)
+-DEF_HELPER_FLAGS_2(set_pstate_za, TCG_CALL_NO_RWG, void, env, i32)
++DEF_HELPER_FLAGS_3(set_svcr, TCG_CALL_NO_RWG, void, env, i32, i32)
+ 
+ DEF_HELPER_FLAGS_3(sme_zero, TCG_CALL_NO_RWG, void, env, i32, i32)
+ 
+diff --git a/target/arm/helper.c b/target/arm/helper.c
+index 6cffbcb276..05e55aaeeb 100644
+--- a/target/arm/helper.c
++++ b/target/arm/helper.c
+@@ -6429,12 +6429,47 @@ static CPAccessResult access_esm(CPUARMState *env, const ARMCPRegInfo *ri,
+     return CP_ACCESS_OK;
+ }
+ 
++/* ResetSVEState */
++static void arm_reset_sve_state(CPUARMState *env)
++{
++    memset(env->vfp.zregs, 0, sizeof(env->vfp.zregs));
++    /* Recall that FFR is stored as pregs[16]. */
++    memset(env->vfp.pregs, 0, sizeof(env->vfp.pregs));
++    vfp_set_fpsr(env, 0x0800009f);
++}
++
++void aarch64_set_svcr(CPUARMState *env, uint64_t new, uint64_t mask)
++{
++    uint64_t change = (env->svcr ^ new) & mask;
++
++    if (change == 0) {
++        return;
++    }
++    env->svcr ^= change;
++
++    if (change & R_SVCR_SM_MASK) {
++        arm_reset_sve_state(env);
++    }
++
++    /*
++     * ResetSMEState.
++     *
++     * SetPSTATE_ZA zeros on enable and disable.  We can zero this only
++     * on enable: while disabled, the storage is inaccessible and the
++     * value does not matter.  We're not saving the storage in vmstate
++     * when disabled either.
++     */
++    if (change & new & R_SVCR_ZA_MASK) {
++        memset(env->zarray, 0, sizeof(env->zarray));
++    }
++
++    arm_rebuild_hflags(env);
++}
++
+ static void svcr_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                        uint64_t value)
+ {
+-    helper_set_pstate_sm(env, FIELD_EX64(value, SVCR, SM));
+-    helper_set_pstate_za(env, FIELD_EX64(value, SVCR, ZA));
+-    arm_rebuild_hflags(env);
++    aarch64_set_svcr(env, value, -1);
+ }
+ 
+ static void smcr_write(CPUARMState *env, const ARMCPRegInfo *ri,
+diff --git a/target/arm/sme_helper.c b/target/arm/sme_helper.c
+index e8b4ca38ff..3b7c6cd317 100644
+--- a/target/arm/sme_helper.c
++++ b/target/arm/sme_helper.c
+@@ -29,42 +29,9 @@
+ #include "vec_internal.h"
+ #include "sve_ldst_internal.h"
+ 
+-/* ResetSVEState */
+-void arm_reset_sve_state(CPUARMState *env)
++void helper_set_svcr(CPUARMState *env, uint32_t val, uint32_t mask)
+ {
+-    memset(env->vfp.zregs, 0, sizeof(env->vfp.zregs));
+-    /* Recall that FFR is stored as pregs[16]. */
+-    memset(env->vfp.pregs, 0, sizeof(env->vfp.pregs));
+-    vfp_set_fpsr(env, 0x0800009f);
+-}
+-
+-void helper_set_pstate_sm(CPUARMState *env, uint32_t i)
+-{
+-    if (i == FIELD_EX64(env->svcr, SVCR, SM)) {
+-        return;
+-    }
+-    env->svcr ^= R_SVCR_SM_MASK;
+-    arm_reset_sve_state(env);
+-}
+-
+-void helper_set_pstate_za(CPUARMState *env, uint32_t i)
+-{
+-    if (i == FIELD_EX64(env->svcr, SVCR, ZA)) {
+-        return;
+-    }
+-    env->svcr ^= R_SVCR_ZA_MASK;
+-
+-    /*
+-     * ResetSMEState.
+-     *
+-     * SetPSTATE_ZA zeros on enable and disable.  We can zero this only
+-     * on enable: while disabled, the storage is inaccessible and the
+-     * value does not matter.  We're not saving the storage in vmstate
+-     * when disabled either.
+-     */
+-    if (i) {
+-        memset(env->zarray, 0, sizeof(env->zarray));
+-    }
++    aarch64_set_svcr(env, val, mask);
+ }
+ 
+ void helper_sme_zero(CPUARMState *env, uint32_t imm, uint32_t svl)
+diff --git a/target/arm/translate-a64.c b/target/arm/translate-a64.c
+index 7210a9cc4d..9830fe70cf 100644
+--- a/target/arm/translate-a64.c
++++ b/target/arm/translate-a64.c
+@@ -1855,19 +1855,14 @@ static void handle_msr_i(DisasContext *s, uint32_t insn,
+             goto do_unallocated;
+         }
+         if (sme_access_check(s)) {
+-            bool i = crm & 1;
+-            bool changed = false;
+-
+-            if ((crm & 2) && i != s->pstate_sm) {
+-                gen_helper_set_pstate_sm(cpu_env, tcg_constant_i32(i));
+-                changed = true;
+-            }
+-            if ((crm & 4) && i != s->pstate_za) {
+-                gen_helper_set_pstate_za(cpu_env, tcg_constant_i32(i));
+-                changed = true;
+-            }
+-            if (changed) {
+-                gen_rebuild_hflags(s);
++            int old = s->pstate_sm | (s->pstate_za << 1);
++            int new = (crm & 1) * 3;
++            int msk = (crm >> 1) & 3;
++
++            if ((old ^ new) & msk) {
++                /* At least one bit changes. */
++                gen_helper_set_svcr(cpu_env, tcg_constant_i32(new),
++                                    tcg_constant_i32(msk));
+             } else {
+                 s->base.is_jmp = DISAS_NEXT;
+             }
+diff --git a/target/i386/tcg/decode-new.c.inc b/target/i386/tcg/decode-new.c.inc
+index 88de92ed16..c99f9ab249 100644
+--- a/target/i386/tcg/decode-new.c.inc
++++ b/target/i386/tcg/decode-new.c.inc
+@@ -598,10 +598,10 @@ static const X86OpEntry opcodes_0F3A[256] = {
+     [0x0e] = X86_OP_ENTRY4(VPBLENDW,   V,x,  H,x,  W,x,  vex4 cpuid(SSE41) avx2_256 p_66),
+     [0x0f] = X86_OP_ENTRY4(PALIGNR,    V,x,  H,x,  W,x,  vex4 cpuid(SSSE3) mmx avx2_256 p_00_66),
+ 
+-    [0x18] = X86_OP_ENTRY4(VINSERTx128,  V,qq, H,qq, W,qq, vex6 cpuid(AVX) p_66),
++    [0x18] = X86_OP_ENTRY4(VINSERTx128,  V,qq, H,qq, W,dq, vex6 cpuid(AVX) p_66),
+     [0x19] = X86_OP_ENTRY3(VEXTRACTx128, W,dq, V,qq, I,b,  vex6 cpuid(AVX) p_66),
+ 
+-    [0x38] = X86_OP_ENTRY4(VINSERTx128,  V,qq, H,qq, W,qq, vex6 cpuid(AVX2) p_66),
++    [0x38] = X86_OP_ENTRY4(VINSERTx128,  V,qq, H,qq, W,dq, vex6 cpuid(AVX2) p_66),
+     [0x39] = X86_OP_ENTRY3(VEXTRACTx128, W,dq, V,qq, I,b,  vex6 cpuid(AVX2) p_66),
+ 
+     /* Listed incorrectly as type 4 */
+diff --git a/target/i386/tcg/sysemu/svm_helper.c b/target/i386/tcg/sysemu/svm_helper.c
+index 744aed4b31..75a2b1e04b 100644
+--- a/target/i386/tcg/sysemu/svm_helper.c
++++ b/target/i386/tcg/sysemu/svm_helper.c
+@@ -49,7 +49,7 @@ static void svm_save_seg(CPUX86State *env, int mmu_idx, hwaddr addr,
+ static inline void svm_canonicalization(CPUX86State *env, target_ulong *seg_base)
+ {
+     uint16_t shift_amt = 64 - cpu_x86_virtual_addr_width(env);
+-    *seg_base = ((((long) *seg_base) << shift_amt) >> shift_amt);
++    *seg_base = (((int64_t) *seg_base) << shift_amt) >> shift_amt;
+ }
+ 
+ static void svm_load_seg(CPUX86State *env, int mmu_idx, hwaddr addr,
+diff --git a/target/mips/tcg/sysemu/cp0_helper.c b/target/mips/tcg/sysemu/cp0_helper.c
+index 80260ecd8a..125bd541a7 100644
+--- a/target/mips/tcg/sysemu/cp0_helper.c
++++ b/target/mips/tcg/sysemu/cp0_helper.c
+@@ -1624,12 +1624,14 @@ target_ulong helper_dvpe(CPUMIPSState *env)
+     CPUState *other_cs = first_cpu;
+     target_ulong prev = env->mvp->CP0_MVPControl;
+ 
+-    CPU_FOREACH(other_cs) {
+-        MIPSCPU *other_cpu = MIPS_CPU(other_cs);
+-        /* Turn off all VPEs except the one executing the dvpe.  */
+-        if (&other_cpu->env != env) {
+-            other_cpu->env.mvp->CP0_MVPControl &= ~(1 << CP0MVPCo_EVP);
+-            mips_vpe_sleep(other_cpu);
++    if (env->CP0_VPEConf0 & (1 << CP0VPEC0_MVP)) {
++        CPU_FOREACH(other_cs) {
++            MIPSCPU *other_cpu = MIPS_CPU(other_cs);
++            /* Turn off all VPEs except the one executing the dvpe.  */
++            if (&other_cpu->env != env) {
++                other_cpu->env.mvp->CP0_MVPControl &= ~(1 << CP0MVPCo_EVP);
++                mips_vpe_sleep(other_cpu);
++            }
+         }
+     }
+     return prev;
+@@ -1640,15 +1642,17 @@ target_ulong helper_evpe(CPUMIPSState *env)
+     CPUState *other_cs = first_cpu;
+     target_ulong prev = env->mvp->CP0_MVPControl;
+ 
+-    CPU_FOREACH(other_cs) {
+-        MIPSCPU *other_cpu = MIPS_CPU(other_cs);
++    if (env->CP0_VPEConf0 & (1 << CP0VPEC0_MVP)) {
++        CPU_FOREACH(other_cs) {
++            MIPSCPU *other_cpu = MIPS_CPU(other_cs);
+ 
+-        if (&other_cpu->env != env
+-            /* If the VPE is WFI, don't disturb its sleep.  */
+-            && !mips_vpe_is_wfi(other_cpu)) {
+-            /* Enable the VPE.  */
+-            other_cpu->env.mvp->CP0_MVPControl |= (1 << CP0MVPCo_EVP);
+-            mips_vpe_wake(other_cpu); /* And wake it up.  */
++            if (&other_cpu->env != env
++                /* If the VPE is WFI, don't disturb its sleep.  */
++                && !mips_vpe_is_wfi(other_cpu)) {
++                /* Enable the VPE.  */
++                other_cpu->env.mvp->CP0_MVPControl |= (1 << CP0MVPCo_EVP);
++                mips_vpe_wake(other_cpu); /* And wake it up.  */
++            }
+         }
+     }
+     return prev;
+diff --git a/target/mips/tcg/sysemu/tlb_helper.c b/target/mips/tcg/sysemu/tlb_helper.c
+index cce3dcdc0e..a502426be6 100644
+--- a/target/mips/tcg/sysemu/tlb_helper.c
++++ b/target/mips/tcg/sysemu/tlb_helper.c
+@@ -653,7 +653,7 @@ static int walk_directory(CPUMIPSState *env, uint64_t *vaddr,
+         return 0;
+     }
+ 
+-    if ((entry & (1 << psn)) && hugepg) {
++    if (extract64(entry, psn, 1) && hugepg) {
+         *huge_page = true;
+         *hgpg_directory_hit = true;
+         entry = get_tlb_entry_layout(env, entry, leafentry_size, pf_ptew);
+diff --git a/tests/qemu-iotests/039.out b/tests/qemu-iotests/039.out
+index e52484d4be..8fdbcc528a 100644
+--- a/tests/qemu-iotests/039.out
++++ b/tests/qemu-iotests/039.out
+@@ -11,7 +11,7 @@ No errors were found on the image.
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./common.rc: Killed                  ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
++./common.rc: Killed ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
+ incompatible_features     [0]
+ ERROR cluster 5 refcount=0 reference=1
+ ERROR OFLAG_COPIED data cluster: l2_entry=8000000000050000 refcount=0
+@@ -46,7 +46,7 @@ read 512/512 bytes at offset 0
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./common.rc: Killed                  ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
++./common.rc: Killed ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
+ incompatible_features     [0]
+ ERROR cluster 5 refcount=0 reference=1
+ Rebuilding refcount structure
+@@ -60,7 +60,7 @@ incompatible_features     []
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./common.rc: Killed                  ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
++./common.rc: Killed ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
+ incompatible_features     []
+ No errors were found on the image.
+ 
+@@ -79,7 +79,7 @@ No errors were found on the image.
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./common.rc: Killed                  ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
++./common.rc: Killed ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
+ incompatible_features     [0]
+ ERROR cluster 5 refcount=0 reference=1
+ ERROR OFLAG_COPIED data cluster: l2_entry=8000000000050000 refcount=0
+@@ -89,7 +89,7 @@ Data may be corrupted, or further writes to the image may corrupt it.
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=134217728
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./common.rc: Killed                  ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
++./common.rc: Killed ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
+ incompatible_features     []
+ No errors were found on the image.
+ *** done
+diff --git a/tests/qemu-iotests/061.out b/tests/qemu-iotests/061.out
+index 24c33add7c..951c6bf3e6 100644
+--- a/tests/qemu-iotests/061.out
++++ b/tests/qemu-iotests/061.out
+@@ -118,7 +118,7 @@ No errors were found on the image.
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
+ wrote 131072/131072 bytes at offset 0
+ 128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./common.rc: Killed                  ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
++./common.rc: Killed ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
+ magic                     0x514649fb
+ version                   3
+ backing_file_offset       0x0
+@@ -304,7 +304,7 @@ No errors were found on the image.
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
+ wrote 131072/131072 bytes at offset 0
+ 128 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./common.rc: Killed                  ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
++./common.rc: Killed ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
+ magic                     0x514649fb
+ version                   3
+ backing_file_offset       0x0
+diff --git a/tests/qemu-iotests/137.out b/tests/qemu-iotests/137.out
+index 86377c80cd..e19df5b6ba 100644
+--- a/tests/qemu-iotests/137.out
++++ b/tests/qemu-iotests/137.out
+@@ -35,7 +35,7 @@ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
+ qemu-io: Unsupported value 'blubb' for qcow2 option 'overlap-check'. Allowed are any of the following: none, constant, cached, all
+ wrote 512/512 bytes at offset 0
+ 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+-./common.rc: Killed                  ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
++./common.rc: Killed ( VALGRIND_QEMU="${VALGRIND_QEMU_IO}" _qemu_proc_exec "${VALGRIND_LOGFILE}" "$QEMU_IO_PROG" $QEMU_IO_ARGS "$@" )
+ OK: Dirty bit not set
+ Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
+ qemu-io: Parameter 'lazy-refcounts' expects 'on' or 'off'
+diff --git a/tests/qemu-iotests/common.filter b/tests/qemu-iotests/common.filter
+index cc9f1a5891..e8694d34df 100644
+--- a/tests/qemu-iotests/common.filter
++++ b/tests/qemu-iotests/common.filter
+@@ -74,7 +74,7 @@ _filter_qemu_io()
+ {
+     _filter_win32 | \
+     gsed -e "s/[0-9]* ops\; [0-9/:. sec]* ([0-9/.inf]* [EPTGMKiBbytes]*\/sec and [0-9/.inf]* ops\/sec)/X ops\; XX:XX:XX.X (XXX YYY\/sec and XXX ops\/sec)/" \
+-        -e "s/: line [0-9][0-9]*:  *[0-9][0-9]*\( Aborted\| Killed\)/:\1/" \
++        -e "s/: line [0-9][0-9]*:  *[0-9][0-9]*\( Aborted\| Killed\) \{2,\}/:\1 /" \
+         -e "s/qemu-io> //g"
+ }
+ 

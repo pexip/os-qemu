@@ -1,0 +1,1333 @@
+Subject: v7.2.22
+Date: Fri Dec 5 10:23:51 2025 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.21
+and upstream qemu v7.2.22.
+
+ VERSION                               |  2 +-
+ block/curl.c                          | 12 ++---
+ contrib/elf2dmp/download.c            |  4 +-
+ crypto/tlscredsx509.c                 | 10 +----
+ docs/system/tls.rst                   | 13 ++----
+ hw/display/xlnx_dp.c                  | 83 ++++++++++++++++++++++++++++++----
+ hw/intc/apic.c                        |  2 -
+ hw/misc/npcm7xx_clk.c                 |  5 ++-
+ hw/net/e1000e_core.c                  | 85 ++++++++++++++++++++++++-----------
+ include/io/channel-websock.h          |  3 +-
+ include/io/net-listener.h             |  2 +
+ io/channel-tls.c                      |  6 +++
+ io/channel-websock.c                  | 33 +++++++++++---
+ io/net-listener.c                     | 73 ++++++++++++++++++++++++------
+ io/trace-events                       |  6 +++
+ linux-user/ioctls.h                   |  4 +-
+ linux-user/syscall.c                  | 25 ++++++-----
+ net/net.c                             | 10 +++++
+ target/i386/cpu.c                     |  4 ++
+ target/i386/helper.c                  |  4 ++
+ target/i386/tcg/sysemu/excp_helper.c  |  3 +-
+ target/i386/tcg/sysemu/seg_helper.c   |  1 +
+ target/i386/tcg/sysemu/smm_helper.c   | 10 ++---
+ tests/unit/crypto-tls-x509-helpers.h  |  6 +--
+ tests/unit/test-crypto-tlscredsx509.c | 36 +++++++--------
+ tests/unit/test-crypto-tlssession.c   | 14 +++---
+ tests/unit/test-io-channel-tls.c      |  4 +-
+ util/async.c                          | 11 +++--
+ 28 files changed, 330 insertions(+), 141 deletions(-)
+
+diff --git a/VERSION b/VERSION
+index 94e695c9f4..28a73c73a7 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.21
++7.2.22
+diff --git a/block/curl.c b/block/curl.c
+index f9c5a1c182..3b6f18d02c 100644
+--- a/block/curl.c
++++ b/block/curl.c
+@@ -478,11 +478,11 @@ static int curl_init_state(BDRVCURLState *s, CURLState *state)
+                              (void *)curl_read_cb) ||
+             curl_easy_setopt(state->curl, CURLOPT_WRITEDATA, (void *)state) ||
+             curl_easy_setopt(state->curl, CURLOPT_PRIVATE, (void *)state) ||
+-            curl_easy_setopt(state->curl, CURLOPT_AUTOREFERER, 1) ||
+-            curl_easy_setopt(state->curl, CURLOPT_FOLLOWLOCATION, 1) ||
+-            curl_easy_setopt(state->curl, CURLOPT_NOSIGNAL, 1) ||
++            curl_easy_setopt(state->curl, CURLOPT_AUTOREFERER, 1L) ||
++            curl_easy_setopt(state->curl, CURLOPT_FOLLOWLOCATION, 1L) ||
++            curl_easy_setopt(state->curl, CURLOPT_NOSIGNAL, 1L) ||
+             curl_easy_setopt(state->curl, CURLOPT_ERRORBUFFER, state->errmsg) ||
+-            curl_easy_setopt(state->curl, CURLOPT_FAILONERROR, 1)) {
++            curl_easy_setopt(state->curl, CURLOPT_FAILONERROR, 1L)) {
+             goto err;
+         }
+         if (s->username) {
+@@ -531,7 +531,7 @@ static int curl_init_state(BDRVCURLState *s, CURLState *state)
+ #endif
+ 
+ #ifdef DEBUG_VERBOSE
+-        if (curl_easy_setopt(state->curl, CURLOPT_VERBOSE, 1)) {
++        if (curl_easy_setopt(state->curl, CURLOPT_VERBOSE, 1L)) {
+             goto err;
+         }
+ #endif
+@@ -805,7 +805,7 @@ static int curl_open(BlockDriverState *bs, QDict *options, int flags,
+     }
+ 
+     s->accept_range = false;
+-    if (curl_easy_setopt(state->curl, CURLOPT_NOBODY, 1) ||
++    if (curl_easy_setopt(state->curl, CURLOPT_NOBODY, 1L) ||
+         curl_easy_setopt(state->curl, CURLOPT_HEADERFUNCTION, curl_header_cb) ||
+         curl_easy_setopt(state->curl, CURLOPT_HEADERDATA, s)) {
+         pstrcpy(state->errmsg, CURL_ERROR_SIZE,
+diff --git a/contrib/elf2dmp/download.c b/contrib/elf2dmp/download.c
+index bd7650a7a2..e0c1075446 100644
+--- a/contrib/elf2dmp/download.c
++++ b/contrib/elf2dmp/download.c
+@@ -28,8 +28,8 @@ int download_url(const char *name, const char *url)
+     if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK
+             || curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL) != CURLE_OK
+             || curl_easy_setopt(curl, CURLOPT_WRITEDATA, file) != CURLE_OK
+-            || curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1) != CURLE_OK
+-            || curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0) != CURLE_OK
++            || curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L) != CURLE_OK
++            || curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK
+             || curl_easy_perform(curl) != CURLE_OK) {
+         unlink(name);
+         fclose(file);
+diff --git a/crypto/tlscredsx509.c b/crypto/tlscredsx509.c
+index d14313925d..27ed568637 100644
+--- a/crypto/tlscredsx509.c
++++ b/crypto/tlscredsx509.c
+@@ -144,7 +144,7 @@ qcrypto_tls_creds_check_cert_key_usage(QCryptoTLSCredsX509 *creds,
+     if (status < 0) {
+         if (status == GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE) {
+             usage = isCA ? GNUTLS_KEY_KEY_CERT_SIGN :
+-                GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT;
++                GNUTLS_KEY_DIGITAL_SIGNATURE;
+         } else {
+             error_setg(errp,
+                        "Unable to query certificate %s key usage: %s",
+@@ -171,14 +171,6 @@ qcrypto_tls_creds_check_cert_key_usage(QCryptoTLSCredsX509 *creds,
+                 return -1;
+             }
+         }
+-        if (!(usage & GNUTLS_KEY_KEY_ENCIPHERMENT)) {
+-            if (critical) {
+-                error_setg(errp,
+-                           "Certificate %s usage does not permit key "
+-                           "encipherment", certFile);
+-                return -1;
+-            }
+-        }
+     }
+ 
+     return 0;
+diff --git a/docs/system/tls.rst b/docs/system/tls.rst
+index e284c82801..a4f6781d62 100644
+--- a/docs/system/tls.rst
++++ b/docs/system/tls.rst
+@@ -118,7 +118,6 @@ information for each server, and use it to issue server certificates.
+    ip_address = 2620:0:cafe::87
+    ip_address = 2001:24::92
+    tls_www_server
+-   encryption_key
+    signing_key
+    EOF
+    # certtool --generate-privkey > server-hostNNN-key.pem
+@@ -134,9 +133,8 @@ the subject alt name extension data. The ``tls_www_server`` keyword is
+ the key purpose extension to indicate this certificate is intended for
+ usage in a web server. Although QEMU network services are not in fact
+ HTTP servers (except for VNC websockets), setting this key purpose is
+-still recommended. The ``encryption_key`` and ``signing_key`` keyword is
+-the key usage extension to indicate this certificate is intended for
+-usage in the data session.
++still recommended. The ``signing_key`` keyword is the key usage extension
++to indicate this certificate is intended for usage in the data session.
+ 
+ The ``server-hostNNN-key.pem`` and ``server-hostNNN-cert.pem`` files
+ should now be securely copied to the server for which they were
+@@ -171,7 +169,6 @@ certificates.
+    organization = Name of your organization
+    cn = hostNNN.foo.example.com
+    tls_www_client
+-   encryption_key
+    signing_key
+    EOF
+    # certtool --generate-privkey > client-hostNNN-key.pem
+@@ -187,9 +184,8 @@ the ``dns_name`` and ``ip_address`` fields are not included. The
+ ``tls_www_client`` keyword is the key purpose extension to indicate this
+ certificate is intended for usage in a web client. Although QEMU network
+ clients are not in fact HTTP clients, setting this key purpose is still
+-recommended. The ``encryption_key`` and ``signing_key`` keyword is the
+-key usage extension to indicate this certificate is intended for usage
+-in the data session.
++recommended. The ``signing_key`` keyword is the key usage extension to
++indicate this certificate is intended for usage in the data session.
+ 
+ The ``client-hostNNN-key.pem`` and ``client-hostNNN-cert.pem`` files
+ should now be securely copied to the client for which they were
+@@ -222,7 +218,6 @@ client and server instructions in one.
+    ip_address = 2001:24::92
+    tls_www_server
+    tls_www_client
+-   encryption_key
+    signing_key
+    EOF
+    # certtool --generate-privkey > both-hostNNN-key.pem
+diff --git a/hw/display/xlnx_dp.c b/hw/display/xlnx_dp.c
+index b0828d65aa..2cbbfeef59 100644
+--- a/hw/display/xlnx_dp.c
++++ b/hw/display/xlnx_dp.c
+@@ -432,7 +432,18 @@ static void xlnx_dp_aux_clear_rx_fifo(XlnxDPState *s)
+ 
+ static void xlnx_dp_aux_push_rx_fifo(XlnxDPState *s, uint8_t *buf, size_t len)
+ {
++    size_t avail = fifo8_num_free(&s->rx_fifo);
+     DPRINTF("Push %u data in rx_fifo\n", (unsigned)len);
++    if (len > avail) {
++        /*
++         * Data sheet doesn't specify behaviour here: we choose to ignore
++         * the excess data.
++         */
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: ignoring %zu bytes pushed to full RX_FIFO\n",
++                      __func__, len - avail);
++        len = avail;
++    }
+     fifo8_push_all(&s->rx_fifo, buf, len);
+ }
+ 
+@@ -463,7 +474,18 @@ static void xlnx_dp_aux_clear_tx_fifo(XlnxDPState *s)
+ 
+ static void xlnx_dp_aux_push_tx_fifo(XlnxDPState *s, uint8_t *buf, size_t len)
+ {
++    size_t avail = fifo8_num_free(&s->tx_fifo);
+     DPRINTF("Push %u data in tx_fifo\n", (unsigned)len);
++    if (len > avail) {
++        /*
++         * Data sheet doesn't specify behaviour here: we choose to ignore
++         * the excess data.
++         */
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: ignoring %zu bytes pushed to full TX_FIFO\n",
++                      __func__, len - avail);
++        len = avail;
++    }
+     fifo8_push_all(&s->tx_fifo, buf, len);
+ }
+ 
+@@ -472,8 +494,10 @@ static uint8_t xlnx_dp_aux_pop_tx_fifo(XlnxDPState *s)
+     uint8_t ret;
+ 
+     if (fifo8_is_empty(&s->tx_fifo)) {
+-        error_report("%s: TX_FIFO underflow", __func__);
+-        abort();
++        /* Data sheet doesn't specify behaviour here: we choose to return 0 */
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: attempt to read empty TX_FIFO\n",
++                      __func__);
++        return 0;
+     }
+     ret = fifo8_pop(&s->tx_fifo);
+     DPRINTF("pop 0x%2.2X from tx_fifo.\n", ret);
+@@ -638,14 +662,28 @@ static void xlnx_dp_change_graphic_fmt(XlnxDPState *s)
+     case DP_GRAPHIC_BGR888:
+         s->g_plane.format = PIXMAN_b8g8r8;
+         break;
++    case DP_GRAPHIC_RGBA5551:
++    case DP_GRAPHIC_RGBA4444:
++    case DP_GRAPHIC_8BPP:
++    case DP_GRAPHIC_4BPP:
++    case DP_GRAPHIC_2BPP:
++    case DP_GRAPHIC_1BPP:
++        qemu_log_mask(LOG_UNIMP, "%s: unimplemented graphic format %u",
++                      __func__,
++                      s->avbufm_registers[AV_BUF_FORMAT] & DP_GRAPHIC_MASK);
++        s->g_plane.format = PIXMAN_r8g8b8a8;
++        break;
+     default:
+-        error_report("%s: unsupported graphic format %u", __func__,
+-                     s->avbufm_registers[AV_BUF_FORMAT] & DP_GRAPHIC_MASK);
+-        abort();
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: invalid graphic format %u",
++                      __func__,
++                      s->avbufm_registers[AV_BUF_FORMAT] & DP_GRAPHIC_MASK);
++        s->g_plane.format = PIXMAN_r8g8b8a8;
++        break;
+     }
+ 
+     switch (s->avbufm_registers[AV_BUF_FORMAT] & DP_NL_VID_FMT_MASK) {
+     case 0:
++        /* This is DP_NL_VID_CB_Y0_CR_Y1 ??? */
+         s->v_plane.format = PIXMAN_x8b8g8r8;
+         break;
+     case DP_NL_VID_Y0_CB_Y1_CR:
+@@ -654,10 +692,39 @@ static void xlnx_dp_change_graphic_fmt(XlnxDPState *s)
+     case DP_NL_VID_RGBA8880:
+         s->v_plane.format = PIXMAN_x8b8g8r8;
+         break;
++    case DP_NL_VID_CR_Y0_CB_Y1:
++    case DP_NL_VID_Y0_CR_Y1_CB:
++    case DP_NL_VID_YV16:
++    case DP_NL_VID_YV24:
++    case DP_NL_VID_YV16CL:
++    case DP_NL_VID_MONO:
++    case DP_NL_VID_YV16CL2:
++    case DP_NL_VID_YUV444:
++    case DP_NL_VID_RGB888:
++    case DP_NL_VID_RGB888_10BPC:
++    case DP_NL_VID_YUV444_10BPC:
++    case DP_NL_VID_YV16CL2_10BPC:
++    case DP_NL_VID_YV16CL_10BPC:
++    case DP_NL_VID_YV16_10BPC:
++    case DP_NL_VID_YV24_10BPC:
++    case DP_NL_VID_Y_ONLY_10BPC:
++    case DP_NL_VID_YV16_420:
++    case DP_NL_VID_YV16CL_420:
++    case DP_NL_VID_YV16CL2_420:
++    case DP_NL_VID_YV16_420_10BPC:
++    case DP_NL_VID_YV16CL_420_10BPC:
++    case DP_NL_VID_YV16CL2_420_10BPC:
++        qemu_log_mask(LOG_UNIMP, "%s: unimplemented video format %u",
++                      __func__,
++                      s->avbufm_registers[AV_BUF_FORMAT] & DP_NL_VID_FMT_MASK);
++        s->v_plane.format = PIXMAN_x8b8g8r8;
++        break;
+     default:
+-        error_report("%s: unsupported video format %u", __func__,
+-                     s->avbufm_registers[AV_BUF_FORMAT] & DP_NL_VID_FMT_MASK);
+-        abort();
++        qemu_log_mask(LOG_UNIMP, "%s: invalid video format %u",
++                      __func__,
++                      s->avbufm_registers[AV_BUF_FORMAT] & DP_NL_VID_FMT_MASK);
++        s->v_plane.format = PIXMAN_x8b8g8r8;
++        break;
+     }
+ 
+     xlnx_dp_recreate_surface(s);
+diff --git a/hw/intc/apic.c b/hw/intc/apic.c
+index a7c2b301a8..315bef8f43 100644
+--- a/hw/intc/apic.c
++++ b/hw/intc/apic.c
+@@ -499,8 +499,6 @@ void apic_sipi(DeviceState *dev)
+ {
+     APICCommonState *s = APIC(dev);
+ 
+-    cpu_reset_interrupt(CPU(s->cpu), CPU_INTERRUPT_SIPI);
+-
+     if (!s->wait_for_sipi)
+         return;
+     cpu_x86_load_seg_cache_sipi(s->cpu, s->sipi_vector);
+diff --git a/hw/misc/npcm7xx_clk.c b/hw/misc/npcm7xx_clk.c
+index bc2b879feb..6d86f54113 100644
+--- a/hw/misc/npcm7xx_clk.c
++++ b/hw/misc/npcm7xx_clk.c
+@@ -122,13 +122,14 @@ static void npcm7xx_clk_update_pll(void *opaque)
+ {
+     NPCM7xxClockPLLState *s = opaque;
+     uint32_t con = s->clk->regs[s->reg];
+-    uint64_t freq;
++    uint64_t freq, freq_div;
+ 
+     /* The PLL is grounded if it is not locked yet. */
+     if (con & PLLCON_LOKI) {
+         freq = clock_get_hz(s->clock_in);
+         freq *= PLLCON_FBDV(con);
+-        freq /= PLLCON_INDV(con) * PLLCON_OTDV1(con) * PLLCON_OTDV2(con);
++        freq_div = PLLCON_INDV(con) * PLLCON_OTDV1(con) * PLLCON_OTDV2(con);
++        freq = freq_div ? freq / freq_div : 0;
+     } else {
+         freq = 0;
+     }
+diff --git a/hw/net/e1000e_core.c b/hw/net/e1000e_core.c
+index 5def4cfc1c..14bf3ee948 100644
+--- a/hw/net/e1000e_core.c
++++ b/hw/net/e1000e_core.c
+@@ -1411,10 +1411,13 @@ e1000e_write_to_rx_buffers(E1000ECore *core,
+                            dma_addr_t data_len)
+ {
+     while (data_len > 0) {
+-        uint32_t cur_buf_len = core->rxbuf_sizes[bastate->cur_idx];
+-        uint32_t cur_buf_bytes_left = cur_buf_len -
+-                                      bastate->written[bastate->cur_idx];
+-        uint32_t bytes_to_write = MIN(data_len, cur_buf_bytes_left);
++        uint32_t cur_buf_len, cur_buf_bytes_left, bytes_to_write;
++
++        assert(bastate->cur_idx < MAX_PS_BUFFERS);
++
++        cur_buf_len = core->rxbuf_sizes[bastate->cur_idx];
++        cur_buf_bytes_left = cur_buf_len - bastate->written[bastate->cur_idx];
++        bytes_to_write = MIN(data_len, cur_buf_bytes_left);
+ 
+         trace_e1000e_rx_desc_buff_write(bastate->cur_idx,
+                                         (*ba)[bastate->cur_idx],
+@@ -1433,8 +1436,6 @@ e1000e_write_to_rx_buffers(E1000ECore *core,
+         if (bastate->written[bastate->cur_idx] == cur_buf_len) {
+             bastate->cur_idx++;
+         }
+-
+-        assert(bastate->cur_idx < MAX_PS_BUFFERS);
+     }
+ }
+ 
+@@ -1512,7 +1513,6 @@ e1000e_write_packet_to_guest(E1000ECore *core, struct NetRxPkt *pkt,
+     PCIDevice *d = core->owner;
+     dma_addr_t base;
+     uint8_t desc[E1000_MAX_RX_DESC_LEN];
+-    size_t desc_size;
+     size_t desc_offset = 0;
+     size_t iov_ofs = 0;
+ 
+@@ -1527,16 +1527,17 @@ e1000e_write_packet_to_guest(E1000ECore *core, struct NetRxPkt *pkt,
+     rxi = rxr->i;
+ 
+     do {
++        /*
++         * Loop processing descriptors while we have packet data to
++         * DMA to the guest.  desc_offset tracks how much data we have
++         * sent to the guest in total over all descriptors, and goes
++         * from 0 up to total_size (the size of everything to send to
++         * the guest including possible trailing 4 bytes of CRC data).
++         */
+         hwaddr ba[MAX_PS_BUFFERS];
+         e1000e_ba_state bastate = { { 0 } };
+         bool is_last = false;
+ 
+-        desc_size = total_size - desc_offset;
+-
+-        if (desc_size > core->rx_desc_buf_size) {
+-            desc_size = core->rx_desc_buf_size;
+-        }
+-
+         if (e1000e_ring_empty(core, rxi)) {
+             return;
+         }
+@@ -1550,17 +1551,27 @@ e1000e_write_packet_to_guest(E1000ECore *core, struct NetRxPkt *pkt,
+         e1000e_read_rx_descr(core, desc, &ba);
+ 
+         if (ba[0]) {
++            /* Total amount of data DMA'd to the guest in this iteration */
++            size_t desc_size = 0;
++            /*
++             * Total space available in this descriptor (we will update
++             * this as we use it up)
++             */
++            size_t rx_desc_buf_size = core->rx_desc_buf_size;
++
+             if (desc_offset < size) {
+-                static const uint32_t fcs_pad;
+                 size_t iov_copy;
++                /* Amount of data to copy from the incoming packet */
+                 size_t copy_size = size - desc_offset;
+-                if (copy_size > core->rx_desc_buf_size) {
+-                    copy_size = core->rx_desc_buf_size;
+-                }
+ 
+                 /* For PS mode copy the packet header first */
+                 if (do_ps) {
+                     if (is_first) {
++                        /*
++                         * e1000e_do_ps() guarantees that buffer 0 has enough
++                         * space for the header; otherwise we will not split
++                         * the packet (i.e. do_ps is false).
++                         */
+                         size_t ps_hdr_copied = 0;
+                         do {
+                             iov_copy = MIN(ps_hdr_len - ps_hdr_copied,
+@@ -1580,14 +1591,26 @@ e1000e_write_packet_to_guest(E1000ECore *core, struct NetRxPkt *pkt,
+                         } while (ps_hdr_copied < ps_hdr_len);
+ 
+                         is_first = false;
++                        desc_size += ps_hdr_len;
+                     } else {
+                         /* Leave buffer 0 of each descriptor except first */
+                         /* empty as per spec 7.1.5.1                      */
+                         e1000e_write_hdr_to_rx_buffers(core, &ba, &bastate,
+                                                        NULL, 0);
+                     }
++                    rx_desc_buf_size -= core->rxbuf_sizes[0];
+                 }
+ 
++                /*
++                 * Clamp the amount of packet data we copy into what will fit
++                 * into the remaining buffers in the descriptor.
++                 */
++                if (copy_size > rx_desc_buf_size) {
++                    copy_size = rx_desc_buf_size;
++                }
++                desc_size += copy_size;
++                rx_desc_buf_size -= copy_size;
++
+                 /* Copy packet payload */
+                 while (copy_size) {
+                     iov_copy = MIN(copy_size, iov->iov_len - iov_ofs);
+@@ -1602,20 +1625,30 @@ e1000e_write_packet_to_guest(E1000ECore *core, struct NetRxPkt *pkt,
+                         iov_ofs = 0;
+                     }
+                 }
++            }
+ 
+-                if (desc_offset + desc_size >= total_size) {
+-                    /* Simulate FCS checksum presence in the last descriptor */
+-                    e1000e_write_to_rx_buffers(core, &ba, &bastate,
+-                          (const char *) &fcs_pad, e1000x_fcs_len(core->mac));
+-                }
++            if (rx_desc_buf_size &&
++                desc_offset >= size && desc_offset < total_size) {
++                /*
++                 * We are in the last 4 bytes corresponding to the FCS checksum.
++                 * We only ever write zeroes here (unlike the hardware).
++                 */
++                static const uint32_t fcs_pad;
++                /* Amount of space for the trailing checksum */
++                size_t fcs_len = MIN(rx_desc_buf_size,
++                                     total_size - desc_offset);
++                e1000e_write_to_rx_buffers(core, &ba, &bastate,
++                                           (const char *)&fcs_pad,
++                                           fcs_len);
++                desc_size += fcs_len;
++            }
++            desc_offset += desc_size;
++            if (desc_offset >= total_size) {
++                is_last = true;
+             }
+         } else { /* as per intel docs; skip descriptors with null buf addr */
+             trace_e1000e_rx_null_descriptor();
+         }
+-        desc_offset += desc_size;
+-        if (desc_offset >= total_size) {
+-            is_last = true;
+-        }
+ 
+         e1000e_write_rx_descr(core, desc, is_last ? core->rx_pkt : NULL,
+                            rss_info, do_ps ? ps_hdr_len : 0, &bastate.written);
+diff --git a/include/io/channel-websock.h b/include/io/channel-websock.h
+index e180827c57..6700cf8946 100644
+--- a/include/io/channel-websock.h
++++ b/include/io/channel-websock.h
+@@ -61,7 +61,8 @@ struct QIOChannelWebsock {
+     size_t payload_remain;
+     size_t pong_remain;
+     QIOChannelWebsockMask mask;
+-    guint io_tag;
++    guint hs_io_tag; /* tracking handshake task */
++    guint io_tag; /* tracking watch task */
+     Error *io_err;
+     gboolean io_eof;
+     uint8_t opcode;
+diff --git a/include/io/net-listener.h b/include/io/net-listener.h
+index ab9f291ed6..c2165dc166 100644
+--- a/include/io/net-listener.h
++++ b/include/io/net-listener.h
+@@ -50,9 +50,11 @@ struct QIONetListener {
+     QIOChannelSocket **sioc;
+     GSource **io_source;
+     size_t nsioc;
++    GMainContext *context;
+ 
+     bool connected;
+ 
++    QemuMutex lock; /* Protects remaining fields */
+     QIONetListenerClientFunc io_func;
+     gpointer io_data;
+     GDestroyNotify io_notify;
+diff --git a/io/channel-tls.c b/io/channel-tls.c
+index a91efb57f3..3b3934db72 100644
+--- a/io/channel-tls.c
++++ b/io/channel-tls.c
+@@ -255,6 +255,11 @@ static void qio_channel_tls_finalize(Object *obj)
+ {
+     QIOChannelTLS *ioc = QIO_CHANNEL_TLS(obj);
+ 
++    if (ioc->hs_ioc_tag) {
++        trace_qio_channel_tls_handshake_cancel(ioc);
++        g_clear_handle_id(&ioc->hs_ioc_tag, g_source_remove);
++    }
++
+     object_unref(OBJECT(ioc->master));
+     qcrypto_tls_session_free(ioc->session);
+ }
+@@ -380,6 +385,7 @@ static int qio_channel_tls_close(QIOChannel *ioc,
+     QIOChannelTLS *tioc = QIO_CHANNEL_TLS(ioc);
+ 
+     if (tioc->hs_ioc_tag) {
++        trace_qio_channel_tls_handshake_cancel(ioc);
+         g_clear_handle_id(&tioc->hs_ioc_tag, g_source_remove);
+     }
+ 
+diff --git a/io/channel-websock.c b/io/channel-websock.c
+index fb4932ade7..bc0bb80c9a 100644
+--- a/io/channel-websock.c
++++ b/io/channel-websock.c
+@@ -545,6 +545,7 @@ static gboolean qio_channel_websock_handshake_send(QIOChannel *ioc,
+         trace_qio_channel_websock_handshake_fail(ioc, error_get_pretty(err));
+         qio_task_set_error(task, err);
+         qio_task_complete(task);
++        wioc->hs_io_tag = 0;
+         return FALSE;
+     }
+ 
+@@ -560,6 +561,7 @@ static gboolean qio_channel_websock_handshake_send(QIOChannel *ioc,
+             trace_qio_channel_websock_handshake_complete(ioc);
+             qio_task_complete(task);
+         }
++        wioc->hs_io_tag = 0;
+         return FALSE;
+     }
+     trace_qio_channel_websock_handshake_pending(ioc, G_IO_OUT);
+@@ -586,6 +588,7 @@ static gboolean qio_channel_websock_handshake_io(QIOChannel *ioc,
+         trace_qio_channel_websock_handshake_fail(ioc, error_get_pretty(err));
+         qio_task_set_error(task, err);
+         qio_task_complete(task);
++        wioc->hs_io_tag = 0;
+         return FALSE;
+     }
+     if (ret == 0) {
+@@ -597,7 +600,7 @@ static gboolean qio_channel_websock_handshake_io(QIOChannel *ioc,
+     error_propagate(&wioc->io_err, err);
+ 
+     trace_qio_channel_websock_handshake_reply(ioc);
+-    qio_channel_add_watch(
++    wioc->hs_io_tag = qio_channel_add_watch(
+         wioc->master,
+         G_IO_OUT,
+         qio_channel_websock_handshake_send,
+@@ -906,11 +909,12 @@ void qio_channel_websock_handshake(QIOChannelWebsock *ioc,
+ 
+     trace_qio_channel_websock_handshake_start(ioc);
+     trace_qio_channel_websock_handshake_pending(ioc, G_IO_IN);
+-    qio_channel_add_watch(ioc->master,
+-                          G_IO_IN,
+-                          qio_channel_websock_handshake_io,
+-                          task,
+-                          NULL);
++    ioc->hs_io_tag = qio_channel_add_watch(
++        ioc->master,
++        G_IO_IN,
++        qio_channel_websock_handshake_io,
++        task,
++        NULL);
+ }
+ 
+ 
+@@ -921,13 +925,16 @@ static void qio_channel_websock_finalize(Object *obj)
+     buffer_free(&ioc->encinput);
+     buffer_free(&ioc->encoutput);
+     buffer_free(&ioc->rawinput);
+-    object_unref(OBJECT(ioc->master));
++    if (ioc->hs_io_tag) {
++        g_source_remove(ioc->hs_io_tag);
++    }
+     if (ioc->io_tag) {
+         g_source_remove(ioc->io_tag);
+     }
+     if (ioc->io_err) {
+         error_free(ioc->io_err);
+     }
++    object_unref(OBJECT(ioc->master));
+ }
+ 
+ 
+@@ -1217,6 +1224,18 @@ static int qio_channel_websock_close(QIOChannel *ioc,
+     QIOChannelWebsock *wioc = QIO_CHANNEL_WEBSOCK(ioc);
+ 
+     trace_qio_channel_websock_close(ioc);
++    buffer_free(&wioc->encinput);
++    buffer_free(&wioc->encoutput);
++    buffer_free(&wioc->rawinput);
++    if (wioc->hs_io_tag) {
++        g_clear_handle_id(&wioc->hs_io_tag, g_source_remove);
++    }
++    if (wioc->io_tag) {
++        g_clear_handle_id(&wioc->io_tag, g_source_remove);
++    }
++    if (wioc->io_err) {
++        g_clear_pointer(&wioc->io_err, error_free);
++    }
+     return qio_channel_close(wioc->master, errp);
+ }
+ 
+diff --git a/io/net-listener.c b/io/net-listener.c
+index 1c984d69c6..7352b5f8d4 100644
+--- a/io/net-listener.c
++++ b/io/net-listener.c
+@@ -23,10 +23,16 @@
+ #include "io/dns-resolver.h"
+ #include "qapi/error.h"
+ #include "qemu/module.h"
++#include "qemu/lockable.h"
++#include "trace.h"
+ 
+ QIONetListener *qio_net_listener_new(void)
+ {
+-    return QIO_NET_LISTENER(object_new(TYPE_QIO_NET_LISTENER));
++    QIONetListener *listener;
++
++    listener = QIO_NET_LISTENER(object_new(TYPE_QIO_NET_LISTENER));
++    qemu_mutex_init(&listener->lock);
++    return listener;
+ }
+ 
+ void qio_net_listener_set_name(QIONetListener *listener,
+@@ -43,6 +49,9 @@ static gboolean qio_net_listener_channel_func(QIOChannel *ioc,
+ {
+     QIONetListener *listener = QIO_NET_LISTENER(opaque);
+     QIOChannelSocket *sioc;
++    QIONetListenerClientFunc io_func;
++    gpointer io_data;
++    GMainContext *context;
+ 
+     sioc = qio_channel_socket_accept(QIO_CHANNEL_SOCKET(ioc),
+                                      NULL);
+@@ -50,8 +59,15 @@ static gboolean qio_net_listener_channel_func(QIOChannel *ioc,
+         return TRUE;
+     }
+ 
+-    if (listener->io_func) {
+-        listener->io_func(listener, sioc, listener->io_data);
++    WITH_QEMU_LOCK_GUARD(&listener->lock) {
++        io_func = listener->io_func;
++        io_data = listener->io_data;
++        context = listener->context;
++    }
++
++    trace_qio_net_listener_callback(listener, io_func, context);
++    if (io_func) {
++        io_func(listener, sioc, io_data);
+     }
+ 
+     object_unref(OBJECT(sioc));
+@@ -108,6 +124,9 @@ int qio_net_listener_open_sync(QIONetListener *listener,
+ void qio_net_listener_add(QIONetListener *listener,
+                           QIOChannelSocket *sioc)
+ {
++    QIONetListenerClientFunc io_func;
++    GMainContext *context;
++
+     if (listener->name) {
+         char *name = g_strdup_printf("%s-listen", listener->name);
+         qio_channel_set_name(QIO_CHANNEL(sioc), name);
+@@ -125,12 +144,18 @@ void qio_net_listener_add(QIONetListener *listener,
+     object_ref(OBJECT(sioc));
+     listener->connected = true;
+ 
+-    if (listener->io_func != NULL) {
++    WITH_QEMU_LOCK_GUARD(&listener->lock) {
++        io_func = listener->io_func;
++        context = listener->context;
++    }
++
++    trace_qio_net_listener_watch(listener, io_func, context, "add");
++    if (io_func) {
+         object_ref(OBJECT(listener));
+         listener->io_source[listener->nsioc] = qio_channel_add_watch_source(
+             QIO_CHANNEL(listener->sioc[listener->nsioc]), G_IO_IN,
+             qio_net_listener_channel_func,
+-            listener, (GDestroyNotify)object_unref, NULL);
++            listener, (GDestroyNotify)object_unref, context);
+     }
+ 
+     listener->nsioc++;
+@@ -145,12 +170,9 @@ void qio_net_listener_set_client_func_full(QIONetListener *listener,
+ {
+     size_t i;
+ 
+-    if (listener->io_notify) {
+-        listener->io_notify(listener->io_data);
+-    }
+-    listener->io_func = func;
+-    listener->io_data = data;
+-    listener->io_notify = notify;
++    QEMU_LOCK_GUARD(&listener->lock);
++    trace_qio_net_listener_unwatch(listener, listener->io_func,
++                                   listener->context, "set_client_func");
+ 
+     for (i = 0; i < listener->nsioc; i++) {
+         if (listener->io_source[i]) {
+@@ -160,6 +182,16 @@ void qio_net_listener_set_client_func_full(QIONetListener *listener,
+         }
+     }
+ 
++    if (listener->io_notify) {
++        listener->io_notify(listener->io_data);
++    }
++    listener->io_func = func;
++    listener->io_data = data;
++    listener->io_notify = notify;
++    listener->context = context;
++
++    trace_qio_net_listener_watch(listener, listener->io_func,
++                                 listener->context, "set_client_func");
+     if (listener->io_func != NULL) {
+         for (i = 0; i < listener->nsioc; i++) {
+             object_ref(OBJECT(listener));
+@@ -219,7 +251,15 @@ QIOChannelSocket *qio_net_listener_wait_client(QIONetListener *listener)
+         .loop = loop
+     };
+     size_t i;
++    QIONetListenerClientFunc io_func;
++    GMainContext *context;
+ 
++    WITH_QEMU_LOCK_GUARD(&listener->lock) {
++        io_func = listener->io_func;
++        context = listener->context;
++    }
++
++    trace_qio_net_listener_unwatch(listener, io_func, context, "wait_client");
+     for (i = 0; i < listener->nsioc; i++) {
+         if (listener->io_source[i]) {
+             g_source_destroy(listener->io_source[i]);
+@@ -249,13 +289,14 @@ QIOChannelSocket *qio_net_listener_wait_client(QIONetListener *listener)
+     g_main_loop_unref(loop);
+     g_main_context_unref(ctxt);
+ 
+-    if (listener->io_func != NULL) {
++    trace_qio_net_listener_watch(listener, io_func, context, "wait_client");
++    if (io_func != NULL) {
+         for (i = 0; i < listener->nsioc; i++) {
+             object_ref(OBJECT(listener));
+             listener->io_source[i] = qio_channel_add_watch_source(
+                 QIO_CHANNEL(listener->sioc[i]), G_IO_IN,
+                 qio_net_listener_channel_func,
+-                listener, (GDestroyNotify)object_unref, NULL);
++                listener, (GDestroyNotify)object_unref, context);
+         }
+     }
+ 
+@@ -270,6 +311,9 @@ void qio_net_listener_disconnect(QIONetListener *listener)
+         return;
+     }
+ 
++    QEMU_LOCK_GUARD(&listener->lock);
++    trace_qio_net_listener_unwatch(listener, listener->io_func,
++                                   listener->context, "disconnect");
+     for (i = 0; i < listener->nsioc; i++) {
+         if (listener->io_source[i]) {
+             g_source_destroy(listener->io_source[i]);
+@@ -292,10 +336,10 @@ static void qio_net_listener_finalize(Object *obj)
+     QIONetListener *listener = QIO_NET_LISTENER(obj);
+     size_t i;
+ 
++    qio_net_listener_disconnect(listener);
+     if (listener->io_notify) {
+         listener->io_notify(listener->io_data);
+     }
+-    qio_net_listener_disconnect(listener);
+ 
+     for (i = 0; i < listener->nsioc; i++) {
+         object_unref(OBJECT(listener->sioc[i]));
+@@ -303,6 +347,7 @@ static void qio_net_listener_finalize(Object *obj)
+     g_free(listener->io_source);
+     g_free(listener->sioc);
+     g_free(listener->name);
++    qemu_mutex_destroy(&listener->lock);
+ }
+ 
+ static const TypeInfo qio_net_listener_info = {
+diff --git a/io/trace-events b/io/trace-events
+index 3cc5cf1efd..6f56f8ba2d 100644
+--- a/io/trace-events
++++ b/io/trace-events
+@@ -43,6 +43,7 @@ qio_channel_tls_handshake_start(void *ioc) "TLS handshake start ioc=%p"
+ qio_channel_tls_handshake_pending(void *ioc, int status) "TLS handshake pending ioc=%p status=%d"
+ qio_channel_tls_handshake_fail(void *ioc) "TLS handshake fail ioc=%p"
+ qio_channel_tls_handshake_complete(void *ioc) "TLS handshake complete ioc=%p"
++qio_channel_tls_handshake_cancel(void *ioc) "TLS handshake cancel ioc=%p"
+ qio_channel_tls_credentials_allow(void *ioc) "TLS credentials allow ioc=%p"
+ qio_channel_tls_credentials_deny(void *ioc) "TLS credentials deny ioc=%p"
+ 
+@@ -66,3 +67,8 @@ qio_channel_command_new_pid(void *ioc, int writefd, int readfd, int pid) "Comman
+ qio_channel_command_new_spawn(void *ioc, const char *binary, int flags) "Command new spawn ioc=%p binary=%s flags=%d"
+ qio_channel_command_abort(void *ioc, int pid) "Command abort ioc=%p pid=%d"
+ qio_channel_command_wait(void *ioc, int pid, int ret, int status) "Command abort ioc=%p pid=%d ret=%d status=%d"
++
++# net-listener.c
++qio_net_listener_watch(void *listener, void *func, void *ctx, const char *extra) "Net listener=%p watch enabled func=%p ctx=%p by %s"
++qio_net_listener_unwatch(void *listener, void *func, void *ctx, const char *extra) "Net listener=%p watch disabled func=%p ctx=%p by %s"
++qio_net_listener_callback(void *listener, void *func, void *ctx) "Net listener=%p callback forwarding to func=%p ctx=%p"
+diff --git a/linux-user/ioctls.h b/linux-user/ioctls.h
+index 071f7ca253..261cef1e75 100644
+--- a/linux-user/ioctls.h
++++ b/linux-user/ioctls.h
+@@ -129,13 +129,13 @@
+      IOCTL(FDTWADDLE, 0, TYPE_NULL)
+      IOCTL(FDEJECT, 0, TYPE_NULL)
+ 
+-     IOCTL(FIBMAP, IOC_W | IOC_R, MK_PTR(TYPE_LONG))
++     IOCTL(FIBMAP, IOC_W | IOC_R, MK_PTR(TYPE_INT))
+ #ifdef FICLONE
+      IOCTL(FICLONE, IOC_W, TYPE_INT)
+      IOCTL(FICLONERANGE, IOC_W, MK_PTR(MK_STRUCT(STRUCT_file_clone_range)))
+ #endif
+ 
+-     IOCTL(FIGETBSZ, IOC_R, MK_PTR(TYPE_LONG))
++     IOCTL(FIGETBSZ, IOC_R, MK_PTR(TYPE_INT))
+ #ifdef CONFIG_FIEMAP
+      IOCTL_SPECIAL(FS_IOC_FIEMAP, IOC_W | IOC_R, do_ioctl_fs_ioc_fiemap,
+                    MK_PTR(MK_STRUCT(STRUCT_fiemap)))
+diff --git a/linux-user/syscall.c b/linux-user/syscall.c
+index 737065c28c..93b66bd2d7 100644
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -3529,7 +3529,7 @@ static abi_long do_sendto(int fd, abi_ulong msg, size_t len, int flags,
+                           abi_ulong target_addr, socklen_t addrlen)
+ {
+     void *addr;
+-    void *host_msg;
++    void *host_msg = NULL;
+     void *copy_msg = NULL;
+     abi_long ret;
+ 
+@@ -3537,16 +3537,19 @@ static abi_long do_sendto(int fd, abi_ulong msg, size_t len, int flags,
+         return -TARGET_EINVAL;
+     }
+ 
+-    host_msg = lock_user(VERIFY_READ, msg, len, 1);
+-    if (!host_msg)
+-        return -TARGET_EFAULT;
+-    if (fd_trans_target_to_host_data(fd)) {
+-        copy_msg = host_msg;
+-        host_msg = g_malloc(len);
+-        memcpy(host_msg, copy_msg, len);
+-        ret = fd_trans_target_to_host_data(fd)(host_msg, len);
+-        if (ret < 0) {
+-            goto fail;
++    if (len != 0) {
++        host_msg = lock_user(VERIFY_READ, msg, len, 1);
++        if (!host_msg) {
++            return -TARGET_EFAULT;
++        }
++        if (fd_trans_target_to_host_data(fd)) {
++            copy_msg = host_msg;
++            host_msg = g_malloc(len);
++            memcpy(host_msg, copy_msg, len);
++            ret = fd_trans_target_to_host_data(fd)(host_msg, len);
++            if (ret < 0) {
++                goto fail;
++            }
+         }
+     }
+     if (target_addr) {
+diff --git a/net/net.c b/net/net.c
+index c3391168f6..40db3b5dc0 100644
+--- a/net/net.c
++++ b/net/net.c
+@@ -728,10 +728,20 @@ ssize_t qemu_send_packet(NetClientState *nc, const uint8_t *buf, int size)
+ 
+ ssize_t qemu_receive_packet(NetClientState *nc, const uint8_t *buf, int size)
+ {
++    uint8_t min_pkt[ETH_ZLEN];
++    size_t min_pktsz = sizeof(min_pkt);
++
+     if (!qemu_can_receive_packet(nc)) {
+         return 0;
+     }
+ 
++    if (net_peer_needs_padding(nc)) {
++        if (eth_pad_short_frame(min_pkt, &min_pktsz, buf, size)) {
++            buf = min_pkt;
++            size = min_pktsz;
++        }
++    }
++
+     return qemu_net_queue_receive(nc->incoming_queue, buf, size);
+ }
+ 
+diff --git a/target/i386/cpu.c b/target/i386/cpu.c
+index 489ab9cd41..682d71be88 100644
+--- a/target/i386/cpu.c
++++ b/target/i386/cpu.c
+@@ -5906,7 +5906,11 @@ static void x86_cpu_reset(DeviceState *dev)
+ 
+     env->idt.limit = 0xffff;
+     env->gdt.limit = 0xffff;
++#if defined(CONFIG_USER_ONLY)
++    env->ldt.limit = 0;
++#else
+     env->ldt.limit = 0xffff;
++#endif
+     env->ldt.flags = DESC_P_MASK | (2 << DESC_TYPE_SHIFT);
+     env->tr.limit = 0xffff;
+     env->tr.flags = DESC_P_MASK | (11 << DESC_TYPE_SHIFT);
+diff --git a/target/i386/helper.c b/target/i386/helper.c
+index 290d9d309c..723f50279a 100644
+--- a/target/i386/helper.c
++++ b/target/i386/helper.c
+@@ -602,6 +602,10 @@ void do_cpu_init(X86CPU *cpu)
+ 
+ void do_cpu_sipi(X86CPU *cpu)
+ {
++    CPUX86State *env = &cpu->env;
++    if (env->hflags & HF_SMM_MASK) {
++        return;
++    }
+     apic_sipi(cpu->apic_state);
+ }
+ #else
+diff --git a/target/i386/tcg/sysemu/excp_helper.c b/target/i386/tcg/sysemu/excp_helper.c
+index 9e9e02e1ad..436d65d742 100644
+--- a/target/i386/tcg/sysemu/excp_helper.c
++++ b/target/i386/tcg/sysemu/excp_helper.c
+@@ -582,7 +582,8 @@ static bool get_physical_address(CPUX86State *env, vaddr addr,
+                 if (sext != 0 && sext != -1) {
+                     *err = (TranslateFault){
+                         .exception_index = EXCP0D_GPF,
+-                        .cr2 = addr,
++                        /* non-canonical #GP doesn't change CR2 */
++                        .cr2 = env->cr[2],
+                     };
+                     return false;
+                 }
+diff --git a/target/i386/tcg/sysemu/seg_helper.c b/target/i386/tcg/sysemu/seg_helper.c
+index 2c9bd007ad..8294a668d6 100644
+--- a/target/i386/tcg/sysemu/seg_helper.c
++++ b/target/i386/tcg/sysemu/seg_helper.c
+@@ -146,6 +146,7 @@ bool x86_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
+         apic_poll_irq(cpu->apic_state);
+         break;
+     case CPU_INTERRUPT_SIPI:
++        cpu_reset_interrupt(cs, CPU_INTERRUPT_SIPI);
+         do_cpu_sipi(cpu);
+         break;
+     case CPU_INTERRUPT_SMI:
+diff --git a/target/i386/tcg/sysemu/smm_helper.c b/target/i386/tcg/sysemu/smm_helper.c
+index a45b5651c3..f3d0bbb8c3 100644
+--- a/target/i386/tcg/sysemu/smm_helper.c
++++ b/target/i386/tcg/sysemu/smm_helper.c
+@@ -168,7 +168,7 @@ void do_smm_enter(X86CPU *cpu)
+                        env->cr[0] & ~(CR0_PE_MASK | CR0_EM_MASK | CR0_TS_MASK |
+                                       CR0_PG_MASK));
+     cpu_x86_update_cr4(env, 0);
+-    env->dr[7] = 0x00000400;
++    helper_set_dr(env, 7, 0x00000400);
+ 
+     cpu_x86_load_seg_cache(env, R_CS, (env->smbase >> 4) & 0xffff, env->smbase,
+                            0xffffffff,
+@@ -233,8 +233,8 @@ void helper_rsm(CPUX86State *env)
+     env->eip = x86_ldq_phys(cs, sm_state + 0x7f78);
+     cpu_load_eflags(env, x86_ldl_phys(cs, sm_state + 0x7f70),
+                     ~(CC_O | CC_S | CC_Z | CC_A | CC_P | CC_C | DF_MASK));
+-    env->dr[6] = x86_ldl_phys(cs, sm_state + 0x7f68);
+-    env->dr[7] = x86_ldl_phys(cs, sm_state + 0x7f60);
++    helper_set_dr(env, 6, x86_ldl_phys(cs, sm_state + 0x7f68));
++    helper_set_dr(env, 7, x86_ldl_phys(cs, sm_state + 0x7f60));
+ 
+     cpu_x86_update_cr4(env, x86_ldl_phys(cs, sm_state + 0x7f48));
+     cpu_x86_update_cr3(env, x86_ldq_phys(cs, sm_state + 0x7f50));
+@@ -268,8 +268,8 @@ void helper_rsm(CPUX86State *env)
+     env->regs[R_EDX] = x86_ldl_phys(cs, sm_state + 0x7fd8);
+     env->regs[R_ECX] = x86_ldl_phys(cs, sm_state + 0x7fd4);
+     env->regs[R_EAX] = x86_ldl_phys(cs, sm_state + 0x7fd0);
+-    env->dr[6] = x86_ldl_phys(cs, sm_state + 0x7fcc);
+-    env->dr[7] = x86_ldl_phys(cs, sm_state + 0x7fc8);
++    helper_set_dr(env, 6, x86_ldl_phys(cs, sm_state + 0x7fcc));
++    helper_set_dr(env, 7, x86_ldl_phys(cs, sm_state + 0x7fc8));
+ 
+     env->tr.selector = x86_ldl_phys(cs, sm_state + 0x7fc4) & 0xffff;
+     env->tr.base = x86_ldl_phys(cs, sm_state + 0x7f64);
+diff --git a/tests/unit/crypto-tls-x509-helpers.h b/tests/unit/crypto-tls-x509-helpers.h
+index 247e7160eb..d422838ef6 100644
+--- a/tests/unit/crypto-tls-x509-helpers.h
++++ b/tests/unit/crypto-tls-x509-helpers.h
+@@ -143,8 +143,7 @@ void test_tls_cleanup(const char *keyfile);
+         .basicConstraintsIsCA = false,                                  \
+         .keyUsageEnable = true,                                         \
+         .keyUsageCritical = true,                                       \
+-        .keyUsageValue =                                                \
+-        GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,     \
++        .keyUsageValue = GNUTLS_KEY_DIGITAL_SIGNATURE,                  \
+         .keyPurposeEnable = true,                                       \
+         .keyPurposeCritical = true,                                     \
+         .keyPurposeOID1 = GNUTLS_KP_TLS_WWW_CLIENT,                     \
+@@ -163,8 +162,7 @@ void test_tls_cleanup(const char *keyfile);
+         .basicConstraintsIsCA = false,                                  \
+         .keyUsageEnable = true,                                         \
+         .keyUsageCritical = true,                                       \
+-        .keyUsageValue =                                                \
+-        GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,     \
++        .keyUsageValue = GNUTLS_KEY_DIGITAL_SIGNATURE,                  \
+         .keyPurposeEnable = true,                                       \
+         .keyPurposeCritical = true,                                     \
+         .keyPurposeOID1 = GNUTLS_KP_TLS_WWW_SERVER,                     \
+diff --git a/tests/unit/test-crypto-tlscredsx509.c b/tests/unit/test-crypto-tlscredsx509.c
+index 3c25d75ca1..2025d75365 100644
+--- a/tests/unit/test-crypto-tlscredsx509.c
++++ b/tests/unit/test-crypto-tlscredsx509.c
+@@ -166,14 +166,14 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+     TLS_CERT_REQ(clientcertreq, cacertreq,
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_CLIENT, NULL,
+                  0, 0);
+ 
+@@ -196,7 +196,7 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+ 
+@@ -211,7 +211,7 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+ 
+@@ -226,7 +226,7 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+ 
+@@ -250,7 +250,7 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+     /* no-basic */
+@@ -264,7 +264,7 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+     /* Key usage:dig-sig:critical */
+@@ -278,7 +278,7 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+ 
+@@ -303,7 +303,7 @@ int main(int argc, char **argv)
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT |
++                 GNUTLS_KEY_DIGITAL_SIGNATURE |
+                  GNUTLS_KEY_KEY_CERT_SIGN,
+                  false, false, NULL, NULL,
+                  0, 0);
+@@ -406,7 +406,7 @@ int main(int argc, char **argv)
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT |
++                 GNUTLS_KEY_DIGITAL_SIGNATURE |
+                  GNUTLS_KEY_KEY_CERT_SIGN,
+                  false, false, NULL, NULL,
+                  0, 0);
+@@ -508,21 +508,21 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+     TLS_CERT_REQ(servercertexp1req, cacertreq,
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, -1);
+     TLS_CERT_REQ(clientcertexp1req, cacertreq,
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_CLIENT, NULL,
+                  0, -1);
+ 
+@@ -546,21 +546,21 @@ int main(int argc, char **argv)
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+     TLS_CERT_REQ(servercertnew1req, cacertreq,
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  1, 2);
+     TLS_CERT_REQ(clientcertnew1req, cacertreq,
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_CLIENT, NULL,
+                  1, 2);
+ 
+@@ -599,14 +599,14 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+     TLS_CERT_REQ(clientcertlevel2breq, cacertlevel1breq,
+                  "UK", "qemu client level 2b", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_CLIENT, NULL,
+                  0, 0);
+ 
+diff --git a/tests/unit/test-crypto-tlssession.c b/tests/unit/test-crypto-tlssession.c
+index 615a1344b4..10eaade834 100644
+--- a/tests/unit/test-crypto-tlssession.c
++++ b/tests/unit/test-crypto-tlssession.c
+@@ -454,14 +454,14 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+     TLS_CERT_REQ(clientcertreq, cacertreq,
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_CLIENT, NULL,
+                  0, 0);
+ 
+@@ -469,7 +469,7 @@ int main(int argc, char **argv)
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_CLIENT, NULL,
+                  0, 0);
+ 
+@@ -488,7 +488,7 @@ int main(int argc, char **argv)
+                  "192.168.122.1", "fec0::dead:beaf",
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+     /* This intentionally doesn't replicate */
+@@ -497,7 +497,7 @@ int main(int argc, char **argv)
+                  "192.168.122.1", "fec0::dead:beaf",
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+ 
+@@ -601,14 +601,14 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+     TLS_CERT_REQ(clientcertlevel2breq, cacertlevel1breq,
+                  "UK", "qemu client level 2b", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_CLIENT, NULL,
+                  0, 0);
+ 
+diff --git a/tests/unit/test-io-channel-tls.c b/tests/unit/test-io-channel-tls.c
+index cc39247556..ff73477671 100644
+--- a/tests/unit/test-io-channel-tls.c
++++ b/tests/unit/test-io-channel-tls.c
+@@ -302,14 +302,14 @@ int main(int argc, char **argv)
+                  "UK", "qemu.org", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_SERVER, NULL,
+                  0, 0);
+     TLS_CERT_REQ(clientcertreq, cacertreq,
+                  "UK", "qemu", NULL, NULL, NULL, NULL,
+                  true, true, false,
+                  true, true,
+-                 GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_KEY_ENCIPHERMENT,
++                 GNUTLS_KEY_DIGITAL_SIGNATURE,
+                  true, true, GNUTLS_KP_TLS_WWW_CLIENT, NULL,
+                  0, 0);
+ 
+diff --git a/util/async.c b/util/async.c
+index 0cc3037e0c..01961898be 100644
+--- a/util/async.c
++++ b/util/async.c
+@@ -247,8 +247,9 @@ static int64_t aio_compute_bh_timeout(BHList *head, int timeout)
+     QEMUBH *bh;
+ 
+     QSLIST_FOREACH_RCU(bh, head, next) {
+-        if ((bh->flags & (BH_SCHEDULED | BH_DELETED)) == BH_SCHEDULED) {
+-            if (bh->flags & BH_IDLE) {
++        int flags = qatomic_load_acquire(&bh->flags);
++        if ((flags & (BH_SCHEDULED | BH_DELETED)) == BH_SCHEDULED) {
++            if (flags & BH_IDLE) {
+                 /* idle bottom halves will be polled at least
+                  * every 10ms */
+                 timeout = 10000000;
+@@ -326,14 +327,16 @@ aio_ctx_check(GSource *source)
+     aio_notify_accept(ctx);
+ 
+     QSLIST_FOREACH_RCU(bh, &ctx->bh_list, next) {
+-        if ((bh->flags & (BH_SCHEDULED | BH_DELETED)) == BH_SCHEDULED) {
++        int flags = qatomic_load_acquire(&bh->flags);
++        if ((flags & (BH_SCHEDULED | BH_DELETED)) == BH_SCHEDULED) {
+             return true;
+         }
+     }
+ 
+     QSIMPLEQ_FOREACH(s, &ctx->bh_slice_list, next) {
+         QSLIST_FOREACH_RCU(bh, &s->bh_list, next) {
+-            if ((bh->flags & (BH_SCHEDULED | BH_DELETED)) == BH_SCHEDULED) {
++            int flags = qatomic_load_acquire(&bh->flags);
++            if ((flags & (BH_SCHEDULED | BH_DELETED)) == BH_SCHEDULED) {
+                 return true;
+             }
+         }

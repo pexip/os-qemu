@@ -17,6 +17,9 @@ v7.2.16.diff
 v7.2.17.diff
 v7.2.18.diff
 v7.2.19.diff
+v7.2.20.diff
+v7.2.21.diff
+v7.2.22.diff
 microvm-default-machine-type.patch
 skip-meson-pc-bios.diff
 linux-user-binfmt-P.diff
