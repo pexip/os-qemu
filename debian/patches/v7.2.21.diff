@@ -1,0 +1,664 @@
+Subject: v7.2.21
+Date: Wed Oct 8 10:54:51 2025 +0300
+From: Michael Tokarev <mjt@tls.msk.ru>
+Forwarded: not-needed
+
+This is a difference between upstream qemu v7.2.20 and
+upstream qemu v7.2.21 (without pc-bios/multiboot_dma.bin).
+
+ .gitmodules                            |   4 +-
+ VERSION                                |   2 +-
+ accel/tcg/tb-maint.c                   |   8 ++++
+ hw/usb/dev-network.c                   |   2 +-
+ hw/usb/hcd-ohci.c                      |   5 +++
+ hw/usb/hcd-uhci.c                      |  10 ++++-
+ hw/usb/trace-events                    |   1 +
+ pc-bios/multiboot_dma.bin              | Bin 1024 -> 1024 bytes
+ pc-bios/optionrom/multiboot.S          |   2 +-
+ python/qemu/machine/machine.py         |  29 +++++++++-----
+ python/qemu/qmp/legacy.py              |  18 +++++++--
+ python/qemu/qmp/protocol.py            |  25 +++++++++---
+ tests/avocado/avocado_qemu/__init__.py |   2 +-
+ tests/docker/dockerfiles/python.docker |   2 +-
+ tests/qtest/fuzz-lsi53c895a-test.c     |   4 ++
+ tests/qtest/qos-test.c                 |   5 ---
+ tests/qtest/rtl8139-test.c             |   3 +-
+ tests/qtest/vhost-user-test.c          |  33 ++++++++--------
+ tests/tcg/multiarch/Makefile.target    |   2 +
+ tests/tcg/multiarch/tb-link.c          |  67 +++++++++++++++++++++++++++++++++
+ ui/icons/qemu.svg                      |  21 ++++++++++-
+ 21 files changed, 196 insertions(+), 49 deletions(-)
+
+diff --git a/.gitmodules b/.gitmodules
+index 24cffa87d4..570d895aa1 100644
+--- a/.gitmodules
++++ b/.gitmodules
+@@ -21,7 +21,7 @@
+ 	url = https://gitlab.com/qemu-project/dtc.git
+ [submodule "roms/u-boot"]
+ 	path = roms/u-boot
+-	url = https://gitlab.com/qemu-project/u-boot.git
++	url = https://gitlab.com/qemu-project-mirrors/u-boot.git
+ [submodule "roms/skiboot"]
+ 	path = roms/skiboot
+ 	url = https://gitlab.com/qemu-project/skiboot.git
+@@ -36,7 +36,7 @@
+ 	url = https://gitlab.com/qemu-project/seabios-hppa.git
+ [submodule "roms/u-boot-sam460ex"]
+ 	path = roms/u-boot-sam460ex
+-	url = https://gitlab.com/qemu-project/u-boot-sam460ex.git
++	url = https://gitlab.com/qemu-project-mirrors/u-boot-sam460ex.git
+ [submodule "tests/fp/berkeley-testfloat-3"]
+ 	path = tests/fp/berkeley-testfloat-3
+ 	url = https://gitlab.com/qemu-project/berkeley-testfloat-3.git
+diff --git a/VERSION b/VERSION
+index f3cd98c594..94e695c9f4 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-7.2.20
++7.2.21
+diff --git a/accel/tcg/tb-maint.c b/accel/tcg/tb-maint.c
+index 9d9f651c78..077265172e 100644
+--- a/accel/tcg/tb-maint.c
++++ b/accel/tcg/tb-maint.c
+@@ -186,6 +186,14 @@ static inline void tb_remove_from_jmp_list(TranslationBlock *orig, int n_orig)
+      * We first acquired the lock, and since the destination pointer matches,
+      * we know for sure that @orig is in the jmp list.
+      */
++    if (dest == orig) {
++        /*
++         * In the case of a TB that links to itself, removing the entry
++         * from the list means that it won't be present later during
++         * tb_jmp_unlink -- unlink now.
++         */
++        tb_reset_jump(orig, n_orig);
++    }
+     pprev = &dest->jmp_list_head;
+     TB_FOR_EACH_JMP(dest, tb, n) {
+         if (tb == orig && n == n_orig) {
+diff --git a/hw/usb/dev-network.c b/hw/usb/dev-network.c
+index 2c33e36cad..1b6004c902 100644
+--- a/hw/usb/dev-network.c
++++ b/hw/usb/dev-network.c
+@@ -1391,7 +1391,7 @@ static void usb_net_realize(USBDevice *dev, Error **errp)
+     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+     snprintf(s->usbstring_mac, sizeof(s->usbstring_mac),
+              "%02x%02x%02x%02x%02x%02x",
+-             0x40,
++             s->conf.macaddr.a[0],
+              s->conf.macaddr.a[1],
+              s->conf.macaddr.a[2],
+              s->conf.macaddr.a[3],
+diff --git a/hw/usb/hcd-ohci.c b/hw/usb/hcd-ohci.c
+index c3ab762f54..0ec786dd6a 100644
+--- a/hw/usb/hcd-ohci.c
++++ b/hw/usb/hcd-ohci.c
+@@ -904,6 +904,11 @@ static int ohci_service_td(OHCIState *ohci, struct ohci_ed *ed)
+     case OHCI_TD_DIR_SETUP:
+         str = "setup";
+         pid = USB_TOKEN_SETUP;
++        if (OHCI_BM(ed->flags, ED_EN) > 0) {  /* setup only allowed to ep 0 */
++            trace_usb_ohci_td_bad_pid(str, ed->flags, td.flags);
++            ohci_die(ohci);
++            return 1;
++        }
+         break;
+     default:
+         trace_usb_ohci_td_bad_direction(dir);
+diff --git a/hw/usb/hcd-uhci.c b/hw/usb/hcd-uhci.c
+index ef967c42a1..1e7fc728a0 100644
+--- a/hw/usb/hcd-uhci.c
++++ b/hw/usb/hcd-uhci.c
+@@ -724,6 +724,7 @@ static int uhci_handle_td(UHCIState *s, UHCIQueue *q, uint32_t qh_addr,
+     bool spd;
+     bool queuing = (q != NULL);
+     uint8_t pid = td->token & 0xff;
++    uint8_t ep_id = (td->token >> 15) & 0xf;
+     UHCIAsync *async;
+ 
+     async = uhci_async_find_td(s, td_addr);
+@@ -767,9 +768,14 @@ static int uhci_handle_td(UHCIState *s, UHCIQueue *q, uint32_t qh_addr,
+ 
+     switch (pid) {
+     case USB_TOKEN_OUT:
+-    case USB_TOKEN_SETUP:
+     case USB_TOKEN_IN:
+         break;
++    case USB_TOKEN_SETUP:
++        /* SETUP is only valid to endpoint 0 */
++        if (ep_id == 0) {
++            break;
++        }
++        /* fallthrough */
+     default:
+         /* invalid pid : frame interrupted */
+         s->status |= UHCI_STS_HCPERR;
+@@ -816,7 +822,7 @@ static int uhci_handle_td(UHCIState *s, UHCIQueue *q, uint32_t qh_addr,
+             return uhci_handle_td_error(s, td, td_addr, USB_RET_NODEV,
+                                         int_mask);
+         }
+-        ep = usb_ep_get(dev, pid, (td->token >> 15) & 0xf);
++        ep = usb_ep_get(dev, pid, ep_id);
+         q = uhci_queue_new(s, qh_addr, td, ep);
+     }
+     async = uhci_async_alloc(q, td_addr);
+diff --git a/hw/usb/trace-events b/hw/usb/trace-events
+index b65269892c..743308c75d 100644
+--- a/hw/usb/trace-events
++++ b/hw/usb/trace-events
+@@ -28,6 +28,7 @@ usb_ohci_iso_td_data_overrun(int ret, ssize_t len) "DataOverrun %d > %zu"
+ usb_ohci_iso_td_data_underrun(int ret) "DataUnderrun %d"
+ usb_ohci_iso_td_nak(int ret) "got NAK/STALL %d"
+ usb_ohci_iso_td_bad_response(int ret) "Bad device response %d"
++usb_ohci_td_bad_pid(const char *s, uint32_t edf, uint32_t tdf) "Bad pid %s: ed.flags 0x%x td.flags 0x%x"
+ usb_ohci_port_attach(int index) "port #%d"
+ usb_ohci_port_detach(int index) "port #%d"
+ usb_ohci_port_wakeup(int index) "port #%d"
+diff --git a/pc-bios/optionrom/multiboot.S b/pc-bios/optionrom/multiboot.S
+index 181a4b03a3..c95e35c9cb 100644
+--- a/pc-bios/optionrom/multiboot.S
++++ b/pc-bios/optionrom/multiboot.S
+@@ -208,7 +208,7 @@ ljmp2:
+ prot_jump:	.long prot_mode
+ 		.short 8
+ 
+-.align 4, 0
++.align 8, 0
+ gdt:
+ 	/* 0x00 */
+ .byte	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+diff --git a/python/qemu/machine/machine.py b/python/qemu/machine/machine.py
+index 37191f433b..b6cb366584 100644
+--- a/python/qemu/machine/machine.py
++++ b/python/qemu/machine/machine.py
+@@ -157,18 +157,14 @@ def __init__(self,
+         self._wrapper = wrapper
+         self._qmp_timer = qmp_timer
+ 
+-        self._name = name or f"qemu-{os.getpid()}-{id(self):02x}"
++        self._name = name or f"{id(self):x}"
++        self._sock_pair: Optional[Tuple[socket.socket, socket.socket]] = None
+         self._temp_dir: Optional[str] = None
+         self._base_temp_dir = base_temp_dir
+         self._sock_dir = sock_dir
+         self._log_dir = log_dir
+ 
+-        if monitor_address is not None:
+-            self._monitor_address = monitor_address
+-        else:
+-            self._monitor_address = os.path.join(
+-                self.sock_dir, f"{self._name}-monitor.sock"
+-            )
++        self._monitor_address = monitor_address
+ 
+         self._console_log_path = console_log
+         if self._console_log_path:
+@@ -192,7 +188,7 @@ def __init__(self,
+         self._console_set = False
+         self._console_device_type: Optional[str] = None
+         self._console_address = os.path.join(
+-            self.sock_dir, f"{self._name}-console.sock"
++            self.sock_dir, f"{self._name}.con"
+         )
+         self._console_socket: Optional[socket.socket] = None
+         self._remove_files: List[str] = []
+@@ -303,7 +299,11 @@ def _base_args(self) -> List[str]:
+         args = ['-display', 'none', '-vga', 'none']
+ 
+         if self._qmp_set:
+-            if isinstance(self._monitor_address, tuple):
++            if self._sock_pair:
++                fd = self._sock_pair[0].fileno()
++                os.set_inheritable(fd, True)
++                moncdev = f"socket,id=mon,fd={fd}"
++            elif isinstance(self._monitor_address, tuple):
+                 moncdev = "socket,id=mon,host={},port={}".format(
+                     *self._monitor_address
+                 )
+@@ -337,10 +337,17 @@ def _pre_launch(self) -> None:
+             self._remove_files.append(self._console_address)
+ 
+         if self._qmp_set:
++            monitor_address = None
++            sock = None
++            if self._monitor_address is None:
++                self._sock_pair = socket.socketpair()
++                sock = self._sock_pair[1]
+             if isinstance(self._monitor_address, str):
+                 self._remove_files.append(self._monitor_address)
++                monitor_address = self._monitor_address
+             self._qmp_connection = QEMUMonitorProtocol(
+-                self._monitor_address,
++                address=monitor_address,
++                sock=sock,
+                 server=True,
+                 nickname=self._name
+             )
+@@ -360,6 +367,8 @@ def _pre_launch(self) -> None:
+         ))
+ 
+     def _post_launch(self) -> None:
++        if self._sock_pair:
++            self._sock_pair[0].close()
+         if self._qmp_connection:
+             self._qmp.accept(self._qmp_timer)
+ 
+diff --git a/python/qemu/qmp/legacy.py b/python/qemu/qmp/legacy.py
+index 1951754455..8b09ee7dbb 100644
+--- a/python/qemu/qmp/legacy.py
++++ b/python/qemu/qmp/legacy.py
+@@ -22,6 +22,7 @@
+ #
+ 
+ import asyncio
++import socket
+ from types import TracebackType
+ from typing import (
+     Any,
+@@ -69,22 +70,32 @@ class QEMUMonitorProtocol:
+ 
+     :param address:  QEMU address, can be either a unix socket path (string)
+                      or a tuple in the form ( address, port ) for a TCP
+-                     connection
++                     connection or None
++    :param sock:     a socket or None
+     :param server:   Act as the socket server. (See 'accept')
+     :param nickname: Optional nickname used for logging.
+     """
+ 
+-    def __init__(self, address: SocketAddrT,
++    def __init__(self,
++                 address: Optional[SocketAddrT] = None,
++                 sock: Optional[socket.socket] = None,
+                  server: bool = False,
+                  nickname: Optional[str] = None):
+ 
++        assert address or sock
+         self._qmp = QMPClient(nickname)
+         self._aloop = asyncio.get_event_loop()
+         self._address = address
++        self._sock = sock
+         self._timeout: Optional[float] = None
+ 
+         if server:
+-            self._sync(self._qmp.start_server(self._address))
++            if sock:
++                assert self._sock is not None
++                self._sync(self._qmp.open_with_socket(self._sock))
++            else:
++                assert self._address is not None
++                self._sync(self._qmp.start_server(self._address))
+ 
+     _T = TypeVar('_T')
+ 
+@@ -139,6 +150,7 @@ def connect(self, negotiate: bool = True) -> Optional[QMPMessage]:
+         :return: QMP greeting dict, or None if negotiate is false
+         :raise ConnectError: on connection errors
+         """
++        assert self._address is not None
+         self._qmp.await_greeting = negotiate
+         self._qmp.negotiate = negotiate
+ 
+diff --git a/python/qemu/qmp/protocol.py b/python/qemu/qmp/protocol.py
+index 6ea86650ad..4710a57f91 100644
+--- a/python/qemu/qmp/protocol.py
++++ b/python/qemu/qmp/protocol.py
+@@ -18,6 +18,7 @@
+ from enum import Enum
+ from functools import wraps
+ import logging
++import socket
+ from ssl import SSLContext
+ from typing import (
+     Any,
+@@ -296,6 +297,19 @@ async def start_server_and_accept(
+         await self.accept()
+         assert self.runstate == Runstate.RUNNING
+ 
++    @upper_half
++    @require(Runstate.IDLE)
++    async def open_with_socket(self, sock: socket.socket) -> None:
++        """
++        Start connection with given socket.
++
++        :param sock: A socket.
++
++        :raise StateError: When the `Runstate` is not `IDLE`.
++        """
++        self._reader, self._writer = await asyncio.open_connection(sock=sock)
++        self._set_state(Runstate.CONNECTING)
++
+     @upper_half
+     @require(Runstate.IDLE)
+     async def start_server(self, address: SocketAddrT,
+@@ -343,11 +357,12 @@ async def accept(self) -> None:
+             protocol-level failure occurs while establishing a new
+             session, the wrapped error may also be an `QMPError`.
+         """
+-        if self._accepted is None:
+-            raise QMPError("Cannot call accept() before start_server().")
+-        await self._session_guard(
+-            self._do_accept(),
+-            'Failed to establish connection')
++        if not self._reader:
++            if self._accepted is None:
++                raise QMPError("Cannot call accept() before start_server().")
++            await self._session_guard(
++                self._do_accept(),
++                'Failed to establish connection')
+         await self._session_guard(
+             self._establish_session(),
+             'Failed to establish session')
+diff --git a/tests/avocado/avocado_qemu/__init__.py b/tests/avocado/avocado_qemu/__init__.py
+index 910f3ba1ea..25a546842f 100644
+--- a/tests/avocado/avocado_qemu/__init__.py
++++ b/tests/avocado/avocado_qemu/__init__.py
+@@ -306,7 +306,7 @@ def require_netdev(self, netdevname):
+             self.cancel('no support for user networking')
+ 
+     def _new_vm(self, name, *args):
+-        self._sd = tempfile.TemporaryDirectory(prefix="avo_qemu_sock_")
++        self._sd = tempfile.TemporaryDirectory(prefix="qemu_")
+         vm = QEMUMachine(self.qemu_bin, base_temp_dir=self.workdir,
+                          sock_dir=self._sd.name, log_dir=self.logdir)
+         self.log.debug('QEMUMachine "%s" created', name)
+diff --git a/tests/docker/dockerfiles/python.docker b/tests/docker/dockerfiles/python.docker
+index 175c10a34e..8cc5d3567e 100644
+--- a/tests/docker/dockerfiles/python.docker
++++ b/tests/docker/dockerfiles/python.docker
+@@ -1,6 +1,6 @@
+ # Python library testing environment
+ 
+-FROM fedora:latest
++FROM fedora:37
+ MAINTAINER John Snow <jsnow@redhat.com>
+ 
+ # Please keep this list sorted alphabetically
+diff --git a/tests/qtest/fuzz-lsi53c895a-test.c b/tests/qtest/fuzz-lsi53c895a-test.c
+index 9b007def26..1b55928b9f 100644
+--- a/tests/qtest/fuzz-lsi53c895a-test.c
++++ b/tests/qtest/fuzz-lsi53c895a-test.c
+@@ -144,6 +144,10 @@ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+ 
++    if (!qtest_has_device("lsi53c895a")) {
++        return 0;
++    }
++
+     qtest_add_func("fuzz/lsi53c895a/lsi_do_dma_empty_queue",
+                    test_lsi_do_dma_empty_queue);
+ 
+diff --git a/tests/qtest/qos-test.c b/tests/qtest/qos-test.c
+index 5da4091ec3..566cb3b00b 100644
+--- a/tests/qtest/qos-test.c
++++ b/tests/qtest/qos-test.c
+@@ -321,11 +321,6 @@ static void walk_path(QOSGraphNode *orig_path, int len)
+ int main(int argc, char **argv, char** envp)
+ {
+     g_test_init(&argc, &argv, NULL);
+-
+-    if (g_test_subprocess()) {
+-        qos_printf("qos_test running single test in subprocess\n");
+-    }
+-
+     if (g_test_verbose()) {
+         qos_printf("ENVIRONMENT VARIABLES: {\n");
+         for (char **env = envp; *env != 0; env++) {
+diff --git a/tests/qtest/rtl8139-test.c b/tests/qtest/rtl8139-test.c
+index 8fa3313cc3..90bb616974 100644
+--- a/tests/qtest/rtl8139-test.c
++++ b/tests/qtest/rtl8139-test.c
+@@ -196,9 +196,10 @@ int main(int argc, char **argv)
+ {
+     int ret;
+ 
++    g_test_init(&argc, &argv, NULL);
++
+     qtest_start("-device rtl8139");
+ 
+-    g_test_init(&argc, &argv, NULL);
+     qtest_add_func("/rtl8139/nop", nop);
+     qtest_add_func("/rtl8139/timer", test_init);
+ 
+diff --git a/tests/qtest/vhost-user-test.c b/tests/qtest/vhost-user-test.c
+index bf9f7c4248..9bfd7f7217 100644
+--- a/tests/qtest/vhost-user-test.c
++++ b/tests/qtest/vhost-user-test.c
+@@ -26,7 +26,6 @@
+ #include "libqos/virtio-pci.h"
+ 
+ #include "libqos/malloc-pc.h"
+-#include "libqos/qgraph_internal.h"
+ #include "hw/virtio/virtio-net.h"
+ 
+ #include "standard-headers/linux/vhost_types.h"
+@@ -338,7 +337,7 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
+     }
+ 
+     if (size != VHOST_USER_HDR_SIZE) {
+-        qos_printf("%s: Wrong message size received %d\n", __func__, size);
++        g_test_message("Wrong message size received %d", size);
+         return;
+     }
+ 
+@@ -349,9 +348,9 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
+         p += VHOST_USER_HDR_SIZE;
+         size = qemu_chr_fe_read_all(chr, p, msg.size);
+         if (size != msg.size) {
+-            qos_printf("%s: Wrong message size received %d != %d\n",
+-                       __func__, size, msg.size);
+-            return;
++            g_test_message("Wrong message size received %d != %d",
++                           size, msg.size);
++            goto out;
+         }
+     }
+ 
+@@ -386,7 +385,7 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
+          * We don't need to do anything here, the remote is just
+          * letting us know it is in charge. Just log it.
+          */
+-        qos_printf("set_owner: start of session\n");
++        g_test_message("set_owner: start of session\n");
+         break;
+ 
+     case VHOST_USER_GET_PROTOCOL_FEATURES:
+@@ -412,7 +411,7 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
+          * the remote end to send this. There is no handshake reply so
+          * just log the details for debugging.
+          */
+-        qos_printf("set_protocol_features: 0x%"PRIx64 "\n", msg.payload.u64);
++        g_test_message("set_protocol_features: 0x%"PRIx64 "\n", msg.payload.u64);
+         break;
+ 
+         /*
+@@ -420,11 +419,11 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
+          * address of the vrings but we can simply report them.
+          */
+     case VHOST_USER_SET_VRING_NUM:
+-        qos_printf("set_vring_num: %d/%d\n",
++        g_test_message("set_vring_num: %d/%d\n",
+                    msg.payload.state.index, msg.payload.state.num);
+         break;
+     case VHOST_USER_SET_VRING_ADDR:
+-        qos_printf("set_vring_addr: 0x%"PRIx64"/0x%"PRIx64"/0x%"PRIx64"\n",
++        g_test_message("set_vring_addr: 0x%"PRIx64"/0x%"PRIx64"/0x%"PRIx64"\n",
+                    msg.payload.addr.avail_user_addr,
+                    msg.payload.addr.desc_user_addr,
+                    msg.payload.addr.used_user_addr);
+@@ -456,7 +455,10 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
+     case VHOST_USER_SET_VRING_KICK:
+     case VHOST_USER_SET_VRING_CALL:
+         /* consume the fd */
+-        qemu_chr_fe_get_msgfds(chr, &fd, 1);
++        if (!qemu_chr_fe_get_msgfds(chr, &fd, 1) && fd < 0) {
++            g_test_message("call fd: %d, do not set non-blocking\n", fd);
++            break;
++        }
+         /*
+          * This is a non-blocking eventfd.
+          * The receive function forces it to be blocking,
+@@ -500,15 +502,16 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
+          * fully functioning vhost-user we would enable/disable the
+          * vring monitoring.
+          */
+-        qos_printf("set_vring(%d)=%s\n", msg.payload.state.index,
++        g_test_message("set_vring(%d)=%s\n", msg.payload.state.index,
+                    msg.payload.state.num ? "enabled" : "disabled");
+         break;
+ 
+     default:
+-        qos_printf("vhost-user: un-handled message: %d\n", msg.request);
++        g_test_message("vhost-user: un-handled message: %d\n", msg.request);
+         break;
+     }
+ 
++out:
+     g_mutex_unlock(&s->data_mutex);
+ }
+ 
+@@ -528,7 +531,7 @@ static const char *init_hugepagefs(void)
+     }
+ 
+     if (access(path, R_OK | W_OK | X_OK)) {
+-        qos_printf("access on path (%s): %s", path, strerror(errno));
++        g_test_message("access on path (%s): %s", path, strerror(errno));
+         g_test_fail();
+         return NULL;
+     }
+@@ -538,13 +541,13 @@ static const char *init_hugepagefs(void)
+     } while (ret != 0 && errno == EINTR);
+ 
+     if (ret != 0) {
+-        qos_printf("statfs on path (%s): %s", path, strerror(errno));
++        g_test_message("statfs on path (%s): %s", path, strerror(errno));
+         g_test_fail();
+         return NULL;
+     }
+ 
+     if (fs.f_type != HUGETLBFS_MAGIC) {
+-        qos_printf("Warning: path not on HugeTLBFS: %s", path);
++        g_test_message("Warning: path not on HugeTLBFS: %s", path);
+         g_test_fail();
+         return NULL;
+     }
+diff --git a/tests/tcg/multiarch/Makefile.target b/tests/tcg/multiarch/Makefile.target
+index 5f0fee1aad..2fdec1f05f 100644
+--- a/tests/tcg/multiarch/Makefile.target
++++ b/tests/tcg/multiarch/Makefile.target
+@@ -39,6 +39,8 @@ signals: LDFLAGS+=-lrt -lpthread
+ munmap-pthread: CFLAGS+=-pthread
+ munmap-pthread: LDFLAGS+=-pthread
+ 
++tb-link: LDFLAGS+=-lpthread
++
+ # We define the runner for test-mmap after the individual
+ # architectures have defined their supported pages sizes. If no
+ # additional page sizes are defined we only run the default test.
+diff --git a/tests/tcg/multiarch/tb-link.c b/tests/tcg/multiarch/tb-link.c
+new file mode 100644
+index 0000000000..4e40306fa1
+--- /dev/null
++++ b/tests/tcg/multiarch/tb-link.c
+@@ -0,0 +1,67 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Verify that a single TB spin-loop is properly invalidated,
++ * releasing the thread from the spin-loop.
++ */
++
++#include <assert.h>
++#include <sys/mman.h>
++#include <pthread.h>
++#include <stdint.h>
++#include <stdbool.h>
++#include <unistd.h>
++#include <sched.h>
++
++
++#ifdef __x86_64__
++#define READY   0x000047c6      /* movb $0,0(%rdi) */
++#define LOOP    0xfceb9090      /* 1: nop*2; jmp 1b */
++#define RETURN  0x909090c3      /* ret; nop*3 */
++#define NOP     0x90909090      /* nop*4 */
++#elif defined(__aarch64__)
++#define READY   0x3900001f      /* strb wzr,[x0] */
++#define LOOP    0x14000000      /* b . */
++#define RETURN  0xd65f03c0      /* ret */
++#define NOP     0xd503201f      /* nop */
++#elif defined(__riscv)
++#define READY   0x00050023      /* sb zero, (a0) */
++#define LOOP    0x0000006f      /* jal zero, #0 */
++#define RETURN  0x00008067      /* jalr zero, ra, 0 */
++#define NOP     0x00000013      /* nop */
++#endif
++
++
++int main()
++{
++#ifdef READY
++    int tmp;
++    pthread_t thread_id;
++    bool hold = true;
++    uint32_t *buf;
++
++    buf = mmap(NULL, 3 * sizeof(uint32_t),
++               PROT_READ | PROT_WRITE | PROT_EXEC,
++               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++    assert(buf != MAP_FAILED);
++
++    buf[0] = READY;
++    buf[1] = LOOP;
++    buf[2] = RETURN;
++
++    alarm(2);
++
++    tmp = pthread_create(&thread_id, NULL, (void *(*)(void *))buf, &hold);
++    assert(tmp == 0);
++
++    while (hold) {
++        sched_yield();
++    }
++
++    buf[1] = NOP;
++    __builtin___clear_cache(&buf[1], &buf[2]);
++
++    tmp = pthread_join(thread_id, NULL);
++    assert(tmp == 0);
++#endif
++    return 0;
++}
+diff --git a/ui/icons/qemu.svg b/ui/icons/qemu.svg
+index 24ca23a1e9..f2500de339 100644
+--- a/ui/icons/qemu.svg
++++ b/ui/icons/qemu.svg
+@@ -918,7 +918,26 @@
+         <dc:format>image/svg+xml</dc:format>
+         <dc:type
+            rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+-        <dc:title />
++        <dc:title>Kew the Angry Emu</dc:title>
++        <dc:creator>
++          <cc:Agent>
++            <dc:title>Benoît Canet</dc:title>
++          </cc:Agent>
++        </dc:creator>
++        <dc:rights>
++          <cc:Agent>
++            <dc:title>CC BY 3.0</dc:title>
++          </cc:Agent>
++        </dc:rights>
++        <dc:publisher>
++          <cc:Agent>
++            <dc:title>QEMU Community</dc:title>
++          </cc:Agent>
++        </dc:publisher>
++        <dc:date>2012-02-15</dc:date>
++        <cc:license
++           rdf:resource="http://creativecommons.org/licenses/by/3.0/" />
++        <dc:source>https://lists.gnu.org/archive/html/qemu-devel/2012-02/msg02865.html</dc:source>
+       </cc:Work>
+     </rdf:RDF>
+   </metadata>

@@ -1,3 +1,107 @@
+qemu (1:7.2+dfsg-7+deb12u18+pexip24u1) pexip; urgency=medium
+
+  * New upstream release
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Tue, 20 Jan 2026 15:20:13 +0000
+
+qemu (1:7.2+dfsg-7+deb12u18) bookworm; urgency=medium
+
+  * v7.2.22:
+   - Update version for 7.2.22 release
+   - hw/misc/npcm_clk: Don't divide by zero when calculating frequency
+   - hw/display/xlnx_dp: Don't abort for unsupported graphics formats
+   - hw/display/xlnx_dp.c: Don't abort on AUX FIFO overrun/underrun
+   - net: pad packets to minimum length in qemu_receive_packet()
+   - hw/net/e1000e_core: Adjust
+     e1000e_write_payload_frag_to_rx_buffers() assert
+   - hw/net/e1000e_core: Correct rx oversize packet checks
+   - hw/net/e1000e_core: Don't advance desc_offset
+     for NULL buffer RX descriptors
+   - qio: Protect NetListener callback with mutex
+   - qio: Remember context of qio_net_listener_set_client_func_full
+   - qio: Unwatch before notify in QIONetListener
+   - qio: Add trace points to net_listener
+   - block/curl.c: Fix CURLOPT_VERBOSE parameter type
+   - block/curl.c: Use explicit long constants in curl_easy_setopt calls
+   - crypto: stop requiring "key encipherment" usage in x509 certs
+   - io: fix use after free in websocket handshake code
+     Closes: #1117153, CVE-2025-11234 (UAF in websocket handshake code)
+   - io: move websock resource release to close method
+   - io: release active GSource in TLS channel finalizer
+   - io: add trace event when cancelling TLS handshake
+   - linux-user: permit sendto() with NULL buf and 0 len
+   - linux-user: Use correct type for FIBMAP and FIGETBSZ emulation
+   - target/i386: user: do not set up a valid LDT on reset
+   - async: access bottom half flags with qatomic_read
+   - i386/tcg/smm_helper: Properly apply DR values on SMM entry / exit
+   - i386/cpu: Prevent delivering SIPI during SMM in TCG mode
+   - target/i386: Fix CR2 handling for non-canonical addresses
+  * v7.2.21:
+   - Update version for 7.2.21 release
+   - ui/icons/qemu.svg: Add metadata information (author, license) to the logo
+   - hw/usb/hcd-uhci: don't assert for SETUP to non-0 endpoint
+   - tests/tcg/multiarch: Add tb-link test
+   - accel/tcg: Properly unlink a TB linked to itself
+   - multiboot: Fix the split lock
+   - python/qemu/machine: use socketpair() for QMP by default
+   - python/qmp/legacy: make QEMUMonitorProtocol accept a socket
+   - python/qmp/protocol: add open_with_socket()
+   - python/machine: Fix AF_UNIX path too long on macOS
+   - use fedora:37 for python container instead of :latest
+   - hw/usb/network: Remove hardcoded 0x40 prefix in STRING_ETHADDR response
+   - tests: Ensure TAP version is printed before other messages
+   - tests/qtest: Do not run lsi53c895a test if device is not present
+   - Revert "tests/qtest: use qos_printf instead of g_test_message"
+   - vhost-user-test: no set non-blocking for cal fd less than 0.
+   - tests: vhost-user-test: release mutex on protocol violation
+   - .gitmodules: move u-boot mirrors to qemu-project-mirrors
+   - hw/usb/hcd-ohci: Fix #1510, #303: pid not IN or OUT
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 16 Dec 2025 09:10:19 +0300
+
+qemu (1:7.2+dfsg-7+deb12u17) bookworm; urgency=medium
+
+  * v7.2.20:
+   - Update version for 7.2.20 release
+   - block/curl: fix curl internal handles handling
+     (Closes: #1111809 for 7.2.x)
+   - target/mips: fix TLB huge page check to use 64-bit shift
+   - linux-user/mips: Select M14Kc CPU to run microMIPS binaries
+   - linux-user/mips: Select 74Kf CPU to run MIPS16e binaries
+   - elf: Add EF_MIPS_ARCH_ASE definitions
+   - linux-user/mips: Do not try to use removed R5900 CPU
+   - linux-user/mips: Use P5600 as default CPU to run NaN2008 ELF binaries
+   - e1000e: Prevent crash from legacy interrupt firing after MSI-X enable
+   - qga: Fix truncated output handling in guest-exec status reporting
+   - qga: Fix memory leak when output stream is unused
+   - hw/arm/stm32f205_soc: Don't leak TYPE_OR_IRQ objects
+   - scripts/kernel-doc: Avoid new Perl precedence warning
+   - virtio-net: Add queues for RSS during migration
+   - virtio-net: Add queues before loading them
+   - virtio-net: Add only one queue pair when realizing
+     (the 3 virtio-net changes above Closes: #1112044 in 7.2.x)
+   - i386/tcg/svm: fix incorrect canonicalization
+   - hw/sd/ssi-sd: Return noise (dummy byte) when no card connected
+   - qemu-iotests: Ignore indentation in Killed messages
+   - hw/ssi/aspeed_smc: Fix incorrect FMC_WDT2 register read on AST1030
+   - target/arm: Fix handling of setting SVE registers from gdb
+   - target/arm: Fix big-endian handling of NEON gdb remote debugging
+   - hw/intc/arm_gicv3_kvm: Write all 1's to clear enable/active
+   - hw/net/cadence_gem: fix register mask initialization
+   - target/mips: Only update MVPControl.EVP bit if executed by master VPE
+   - linux-user/aarch64: Support TPIDR2_MAGIC signal frame record
+   - target/arm/sme: Unify set_pstate() SM/ZA helpers as set_svcr()
+   - target/arm/sme: Rebuild hflags in aarch64_set_svcr()
+   - target/arm/sme: Reset ZA state in aarch64_set_svcr()
+   - target/arm/sme: Reset SVE state in aarch64_set_svcr()
+   - target/arm/sme: Introduce aarch64_set_svcr()
+   - target/arm/sme: Rebuild hflags in set_pstate() helpers
+   - target/arm/sme: Reorg SME access handling in handle_msr_i()
+   - target/i386: fix width of third operand of VINSERTx128
+   - hw/display/qxl-render.c: fix qxl_unpack_chunks() chunk size calculation
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 10 Sep 2025 08:32:42 +0300
+
 qemu (1:7.2+dfsg-7+deb12u16+pexip24u1) pexip; urgency=medium
 
   * New upstream release
