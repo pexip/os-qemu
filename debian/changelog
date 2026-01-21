@@ -1,3 +1,146 @@
+qemu (1:10.0.7+ds-0+deb13u1) trixie; urgency=medium
+
+  * 10.0.7 upstream stable/bugfix release:
+   - Update version for 10.0.7 release
+   - kvm: Fix kvm_vm_ioctl() and kvm_device_ioctl() return value
+   - docs/devel: Update URL for make-pullreq script
+   - target/arm: Fix assert on BRA.
+   - hw/aspeed/{xdma, rtc, sdhci}: Fix endianness to DEVICE_LITTLE_ENDIAN
+   - hw/core/machine: Provide a description for aux-ram-share property
+   - hw/pci: Make msix_init take a uint32_t for nentries
+   - block/io_uring: avoid potentially getting stuck after resubmit
+     at the end of ioq_submit()
+   - block-backend: Fix race when resuming queued requests
+   - ui/vnc: Fix qemu abort when query vnc info
+   - chardev/char-pty: Do not ignore chr_write() failures
+   - hw/display/exynos4210_fimd: Account for zero length
+     in fimd_update_memory_section()
+   - hw/arm/armv7m: Disable reentrancy guard for v7m_sysreg_ns_ops MRs
+   - hw/arm/aspeed: Fix missing SPI IRQ connection causing
+     DMA interrupt failure
+   - migration: Fix transition to COLO state from precopy
+   - qmp: Fix a typo for a USO feature
+   - MAINTAINERS: Add functional tests that are not covered yet
+   - tests/functional: Remove unnecessary import statements
+   - tests/functional: Remove semicolons at the end of lines
+   - Remove the remainders of the Avocado tests
+   - docs/devel/testing: Dissolve the ci-definitions.rst.inc file
+   - gitlab-ci: Update QEMU_JOB_AVOCADO and QEMU_CI_AVOCADO_TESTING
+   - tests/functional: Convert the SMMU test to the functional framework
+   - tests/functional: Use the tuxrun kernel for the aarch64 replay test
+   - tests/functional: Use the tuxrun kernel for the x86 replay test
+   - tests/avocado: Remove the boot_linux.py tests
+   - tests/functional: Convert the 64-bit big endian Wheezy mips test
+   - tests/functional: Convert the 64-bit little endian Wheezy mips test
+   - tests/functional: Convert the 32-bit little endian Wheezy mips test
+   - tests/functional: Convert the 32-bit big endian Wheezy mips test
+   - tests/avocado: Remove the LinuxKernelTest class
+   - tests/functional: Convert the i386 replay avocado test
+   - tests/functional: Convert reverse_debugging tests to the
+     functional framework
+   - tests/functional: Move the check for the parameters from avocado
+     to functional
+   - gitlab-ci: Remove the avocado tests from the CI pipelines
+   - tests/functional/test_vnc: skip test if no crypto backend available
+   - target/i386: fix stack size when delivering real mode interrupts
+   - target/i386: svm: fix sign extension of exit code
+   - target/i386/tcg: validate segment registers
+   - target/i386: Mark VPERMILPS as not valid with prefix 0
+   - hw/southbridge/lasi: Correct LasiState parent
+   - hw/dma/zynq-devcfg: Fix register memory
+   - tests/functional: handle URLError when fetching assets
+   - tests/functional: fix formatting of exception args
+   - block/io: Take reqs_lock for tracked_requests
+   - nvme: Fix coroutine waking
+   - nvme: Kick and check completions in BDS context
+   - curl: Fix coroutine waking
+   - nfs: Run co BH CB in the coroutine’s AioContext
+   - rbd: Run co BH CB in the coroutine’s AioContext
+   - tests: move test_virt_gpu to share.linaro.org
+   - tests: move test_kvm_xen to share.linaro.org
+   - tests: move test_netdev_ethtool to share.linaro.org
+   - tests: move test_virt assets to share.linaro.org
+   - tests: move test_xen assets to share.linaro.org
+   - block: add test non-active commit with zeroed data
+   - block: allow commit to unmap zero blocks
+   - block: refactor error handling of commit_iteration
+   - block: move commit_run loop to separate function
+   - block: get type of block allocation in commit_run
+   - hw/misc/npcm_clk: Don't divide by zero when calculating frequency
+   - hw/display/xlnx_dp: Don't abort for unsupported graphics formats
+   - hw/display/xlnx_dp.c: Don't abort on AUX FIFO overrun/underrun
+   - net: pad packets to minimum length in qemu_receive_packet()
+     Closes: #1119917, CVE-2025-12464 (buffer overflow in e1000_receive_iov)
+   - hw/net/e1000e_core: Adjust
+     e1000e_write_payload_frag_to_rx_buffers() assert
+   - hw/net/e1000e_core: Correct rx oversize packet checks
+   - hw/net/e1000e_core: Don't advance desc_offset for NULL buffer
+     RX descriptors
+   - qio: Protect NetListener callback with mutex
+   - qio: Remember context of qio_net_listener_set_client_func_full
+   - qio: Unwatch before notify in QIONetListener
+   - qio: Add trace points to net_listener
+   - tests/qemu-iotest: fix iotest 024 with qed images
+   - qemu-img rebase: don't exceed IO_BUF_SIZE in one operation
+   - qemu-img: Fix amend option parse error handling
+   - tests/qtest/bios-tables-test: Update DSDT blobs after GPEX _DSM change
+   - hw/pci-host/gpex-acpi: Fix _DSM function 0 support return value
+   - tests/qtest/bios-tables-test: Prepare for _DSM change in the DSDT table
+   - vhost-user: fix shared object lookup handler logic
+   - target/x86: Correctly handle invalid 0x0f 0xc7 0xxx insns
+   - hostmem/shm: Allow shm memory backend serve as shared memory for coco-VMs
+   - tests/tcg/s390x: Test SET CLOCK COMPARATOR
+   - target/s390x: Use address generation for register branch targets
+   - target/s390x: Fix missing clock-comparator interrupts after reset
+   - target/s390x: Fix missing interrupts for small CKC values
+   - target/microblaze: Handle signed division overflows
+   - target/microblaze: div: Break out raise_divzero()
+   - target/microblaze: Remove unused arg from check_divz()
+   - gdbstub: Fix %s formatting
+   - block/curl.c: Fix CURLOPT_VERBOSE parameter type
+   - block: fix luks 'amend' when run in coroutine
+   - block: remove 'detached-header' option from opts after use
+   - i386/kvm/cpu: Init SMM cpu address space for hotplugged CPUs
+   - hw/i386/pc: Avoid overlap between CXL window and PCI 64bit BARs
+     in QEMU 10.0.x
+   - target/i386: clear CPU_INTERRUPT_SIPI for all accelerators
+   - linux-user: permit sendto() with NULL buf and 0 len
+   - linux-user: Use correct type for FIBMAP and FIGETBSZ emulation
+   - qtest/am53c974-test: add additional test for cmdfifo overflow
+   - esp.c: fix esp_cdb_ready() FIFO wraparound limit calculation
+   - hw/hppa: Fix interrupt of LASI parallel port
+   - nw/nvram/ds1225y: Fix nvram MemoryRegion owner
+   - target/hppa: Set FPCR exception flag bits for non-trapped exceptions
+   - hw/scsi: avoid deadlock upon TMF request cancelling with VirtIO
+   - crypto: stop requiring "key encipherment" usage in x509 certs
+   - io: fix use after free in websocket handshake code
+     Closes: #1117153, CVE-2025-11234 (UAF in websocket handshake code)
+   - io: move websock resource release to close method
+   - io: release active GSource in TLS channel finalizer
+   - target/riscv: fix riscv_cpu_sirq_pending() mask
+   - target/riscv/kvm: fix env->priv setting in reset_regs_csr()
+   - target/riscv/kvm: add scounteren CSR
+   - target/riscv/kvm: read/write KVM regs via env size
+   - target/riscv/kvm: add senvcfg CSR
+   - aplic: fix mask for smsiaddrcfgh
+   - hw/riscv: Correct mmu-type property of sifive_u harts in device tree
+   - target/arm: Fix reads of CNTFRQ_EL0 in linux-user mode
+   - hw/ppc/e500: Check for compatible CPU type instead of
+     aborting ungracefully
+   - ui/gtk-gl-area: Remove extra draw call in refresh
+   - tests/tcg/multiarch/linux/linux-test: Don't try to test atime update
+  * linux-user-use-correct-type-for-FIBMAP-and-FIGETBSZ.patch:
+    remove, applied upstream
+  * d/control: qemu-system-xen: add the forgotten ipxe-qemu dependency
+    qemu-system binaries require pxe boot roms for the network adaptors.
+    When splitting qemu-system-xen into its own package, this dependency
+    has been forgotten initally, but has been enabled for bookworm (#1035676).
+    However, this change were lost when uploading the next version of qemu
+    aimed for trixie.  So trixie has this issue too, despite it's been fixed
+    in bookworm already.  (Closes: #1035676, #1120146)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 16 Dec 2025 10:01:50 +0300
+
 qemu (1:10.0.6+ds-0+deb13u2+pexip25u1) pexip-trixie; urgency=medium
 
   * New upstream release.
@@ -6,7 +149,7 @@ qemu (1:10.0.6+ds-0+deb13u2+pexip25u1) pexip-trixie; urgency=medium
 
 qemu (1:10.0.6+ds-0+deb13u2) trixie; urgency=medium
 
-  * d/changelog: remove wrong closes: #1095935 from the previous changelog
+  * d/changelog: remove wrong closes #1095935 from the previous changelog
     entry (and reopen the bug): I confused it with another bug
   * linux-user-use-correct-type-for-FIBMAP-and-FIGETBSZ.patch - add a patch
     from upstream stable series (before next stable release) - fix wrong
