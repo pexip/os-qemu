@@ -1,3 +1,106 @@
+qemu (1:10.0.8+ds-0+deb13u1) trixie; urgency=medium
+
+  * 10.0.8 upstream stable/bugfix release:
+   - Update version for 10.0.8 release
+   - scripts/qemugdb: timers: Fix KeyError in 'qemu timers' command
+   - linux-user/syscall.c: Prevent acquiring clone_lock while fork()
+   - virtio-gpu: fix error handling in virgl_cmd_resource_create_blob
+   - virtio-pmem: ignore empty queue notifications
+   - virtio-gpu-virgl: correct parent for blob memory region
+   - cryptodev-builtin: Limit the maximum size
+   - hw/virtio/virtio-crypto: verify asym request size
+     Closes: #1123670, CVE-2025-14876
+   - q35: Fix migration of SMRAM state
+   - virtio-dmabuf: Ensure UUID persistence for hash table insertion
+   - vdpa: fix vhost-vdpa suspended state not be shared
+   - hw/i2c/aspeed_i2c: Fix DMA moving data into incorrect address
+   - hw/i2c/aspeed: Fix wrong I2CC_DMA_LEN when I2CM_DMA_TX/RX_ADDR set first
+   - hw/i2c/aspeed_i2c.c: Add a check for dma_read
+   - hw/adc: Fix out-of-bounds write in Aspeed ADC model
+   - hw/uefi: fix size negotiation
+   - hw/nvme: Fix bootindex suffix use-after-free
+   - python: fix msys64 wheel directory specification
+   - tests/qtest/ufs-test: Add test for mcq completion queue wraparound
+   - hw/ufs: Fix mcq completion queue wraparound
+   - hw/ufs: fix CQE endianness and UPIU length
+   - hw/ufs: Ensure DBC of PRDT uses only lower 18 bits
+   - tests/functional: migrate sbsa_ref test images
+   - pc-bios/optionrom: Use 32-bit linker emulation for the optionroms
+   - target/i386/tcg: fix a few instructions that do not support VEX.L=1
+   - linux-user: fixup termios2 related things on PowerPC
+   - linux-user: Add missing termios baud rates
+   - linux-user: Add termios2 support to sparc target
+   - linux-user: Add termios2 support to sh4 target
+   - linux-user: Add termios2 support to mips target
+   - linux-user: Add termios2 support to hppa target
+   - linux-user: Add termios2 support to alpha target
+   - linux-user: Add termios2 support
+   - hw/intc: avoid byte swap fiddling in gicv3 its path
+   - bsd-user/syscall_defs.h: define STAT_TIME_T_EXT only for 32 bits
+   - bsd-user: Fix __i386__ test for TARGET_HAS_STAT_TIME_T_EXT
+   - hw/sd/sdhci: Fix TYPE_IMX_USDHC to implement sd-spec-version 3 by default
+   - linux-user/aarch64/target_fcntl.h: add missing
+     TARGET_O_LARGEFILE definition
+     https://gitlab.com/qemu-project/qemu/-/issues/3262
+   - tests/functional: Mark another MIPS replay test as flaky
+   - tests/functional: Mark the MIPS replay tests as flaky
+   - target/arm: Correctly trap HCR.TID1 registers in v7A
+   - target/arm: Correctly honour HCR.TID3 for v7A cores
+   - target/arm: Don't specify ID_PFR1 accessfn twice
+   - tests/functional: migrate aspeed_rainier image
+   - hw/loongarch/virt: Don't abort on access to unimplemented IOCSR
+   - target/loongarch: Fix exception ADEF/ADEM missing to update CSR_BADV
+   - target/loongarch: Fix exception BCE missing to update CSR_BADV
+   - target/loongach: Fix some exceptions failure in updating CSR_BADV
+   - hw/loongarch/virt: Fix irq allocation failure with pci device from fdt
+   - hw/loongarch/virt: Modify the interrupt trigger type in fdt table
+   - hw/i386/kvm: fix PIRQ bounds check in xen_physdev_map_pirq()
+     Closes: #1125423, CVE-2026-0665
+   - target/i386/tcg: allow VEX in 16-bit protected mode
+   - target/i386/tcg: mask addresses for VSIB
+   - target/i386/tcg: do not mark all SSE instructions as unaligned
+   - m68k: fix CAS2 writeback when Dc1==Dc2
+   - configs: use default prefix for Windows compilation
+   - tests: add tcg coverage for fixed mremap bugs
+   - linux-user: fix reserved_va page leak in do_munmap
+   - linux-user: fix mremap errors for invalid ranges
+   - linux-user: fix mremap unmapping adjacent region
+   - linux-user: allow null `pathname` for statx()/fstatat()
+   - tcg/riscv: Fix TCG_REG_TMP0 clobber in tcg_gen_dup{m,i}
+   - monitor/qmp: cleanup SocketChardev listener sources early
+     to avoid fd handling race
+   - hw/i2c/imx: Fix trace func name error
+   - target/i386/tcg: ignore V3 in 32-bit mode
+   - target/i386: Fix #GP error code for INT instructions
+     https://gitlab.com/qemu-project/qemu/-/issues/3160
+   - qdev: fix error handling in set_uint64_checkmask
+   - gdbstub: Fix const qualifier build errors with recent glibc
+   - monitor: Fix const qualifier build errors with recent glibc
+   - tests/vhost-user-bridge.c: Fix const qualifier build errors
+     with recent glibc
+   - i386: Fix const qualifier build errors with recent glibc
+   - Fix const qualifier build errors with recent glibc
+   - qga: Fix ubsan warning
+   - Revert "nvme: Fix coroutine waking"
+   - nvme: Note in which AioContext some functions run
+   - block: Fix BDS use after free during shutdown
+   - scripts/nsis.py: Tell makensis that WoA is 64 bit
+   - vhost: Always initialize cached vring data
+   - target/arm: handle unaligned PC during tlb probe
+     https://gitlab.com/qemu-project/qemu/-/issues/3233
+   - tcg: Zero extend 32-bit addresses for TCI
+   - tests/docker: fix debian-all-test-cross
+   - tests/docker: handle host-arch selection for all-test-cross
+   - tests/docker: add --arch-only to qemu deps for all-test-cross
+   - gitlab: move custom runners to Ubuntu 24.04
+   - gitlab-ci.d/cirrus: Update the FreeBSD job to v14.3
+   - tests/vm: bump FreeBSD image to 14.3
+  * virtio-gpu-virgl-Add-virtio-gpu-virgl-hostmem-region.patch
+    (fix regression in 10.0.8, introduced in
+     "virtio-gpu-virgl: correct parent for blob memory region")
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 28 Feb 2026 22:03:46 +0300
+
 qemu (1:10.0.7+ds-0+deb13u1) trixie; urgency=medium
 
   * 10.0.7 upstream stable/bugfix release:
