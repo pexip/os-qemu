@@ -1,3 +1,324 @@
+qemu (1:10.0.11+ds-0+deb13u1) trixie; urgency=medium
+
+  * new upstream stable/bugfix release:
+   - Update version for 10.0.11 release
+   - linux-user: Fix AT_PHDR when program headers are relocated into their own segment
+   - hw/pci: Replace assert with bounds check and return
+   - ppc/pnv_phb3: Error out on invalid config access
+   - linux-user/xtensa: fix unlock of uninitialized frame pointer on sigreturn
+   - linux-user/xtensa: save/restore FP registers across signal delivery
+   - target/xtensa: add cpu_set_fcr/fsr helpers to sync fp_status
+   - ui/sdl2: Set GL ES profile before creating initial GL context
+   - hw/9pfs: reject . and .. in Twstat rename
+   - hw/9pfs: fix abort due to illegal name with Twstat rename
+   - gdbstub: Update x86 control register bits
+   - target/i386: apply mod to immediate count of an RCL/RCR operation
+   - hw/uefi: fix parse_hexstr
+     (Closes: CVE-2026-48915)
+   - target/riscv: mask vxrm csrw write to the low 2 bits
+   - disas/riscv.c: fix inst_length()
+   - target/riscv/cpu_helper.c: add PMA access fault
+   - target/riscv/cpu_helper.c: fault with reserved PTE.PBMT val
+   - target/riscv/insn_trans/trans_rvzicbo.c.inc: save opcode before helpers
+   - disas/riscv.c: add 'cbo' insns to disassembler
+   - target/riscv/csr.c: fix mstatus.UXL reserved value
+   - target/riscv/csr.c: do not allow mstatus MPV/GVA writes
+   - target/riscv/cpu_helper.c: allow LOAD_ADDR_MIS promotion to AMO fault
+   - virtio: Allow to fill a whole virtqueue in order
+   - libvduse: fix buffer overflow in vduse_queue_read_indirect_desc()
+     (Closes: CVE-2026-6425)
+   - libvhost-user: fix buffer overflow in virtqueue_read_indirect_desc()
+     (Closes: CVE-2026-6425)
+   - tests/qtest: Add amd-iommu command buffer head wrap test
+   - amd_iommu: Update command buffer head ptr in MMIO region after wraparound
+   - amd_iommu: restrict command buffer head/tail ranges to ring size
+   - linux-user: add preadv2/preadv2
+   - system/rtc: Fix a possible year-2038 integer overflow problem
+   - linux-user/strace: add fsmount series of syscalls
+   - linux-user: implement fsmount(2) series of syscalls
+   - fpu: Handle all rounding modes in partsN_uncanon_normal
+   - hw/usb/hcd-ohci: Clean up USBPacket before freeing ISO TD packet
+   - qed: Don't try to flush during incoming migration
+   - qcow2: Fix data loss on zero write with detect-zeroes=unmap
+   - iotests/046: Test that discard/write_zeroes wait for dependencies
+   - qcow2: Fix corruption on discard during write with COW
+   - qemu-io: Add 'aio_discard' command
+   - virtio-blk: add missing VIRTIO_BLK_T_SCSI_CMD size check
+     (Closes: #1139923, CVE-2026-48914)
+   - block/io: fallback to bounce buffer if BLKZEROOUT is not supported because of alignment
+   - s390x/pci: Fix interrupt forwarding disable for interpreted devices
+   - target/s390x: Make container ids in SysIB_15x 1-based
+   - tests/unit: add test-envlist covering setenv/unsetenv name matching
+   - util/envlist: fix prefix-match in envlist_unsetenv() name lookup
+   - 9pfs: fix missing rename lock in v9fs_co_readdir_many
+     (Closes: CVE-2026-48004)
+   - tests/9pfs: add deep absolute path test
+   - tests/qtest/libqos: add qvirtqueue_reset_pool() for descriptor pool reset
+   - hw/9pfs: let callers of v9fs_path_sprintf() and v9fs_fix_path() handle errors
+   - hw/9pfs: add error handling to v9fs_fix_path()
+   - hw/9pfs: change V9fsPath.size to size_t and v9fs_path_sprintf() return type
+   - hw/9pfs: add NULL check in v9fs_path_is_ancestor()
+   - hw/9pfs: move G_GNUC_PRINTF to header
+   - linux-user/s390x: restore fpu_status rounding mode from FPC on sigreturn
+   - linux-user/sh4: restore FP rounding mode on sigreturn
+   - linux-user/sh4: preserve T/M/Q bits across signal delivery
+   - linux-user/mips: save/restore FCSR across signal delivery
+   - linux-user/ppc: restore fp_status from FPSCR on sigreturn
+   - hw/net/rocker_of_dpa: Avoid unaligned accesses in _of_dpa_flow_match()
+   - hw/net/rocker_of_dpa: Check group ID pointers are not NULL
+   - target/arm: Don't assert if 64-bit EL2 AT insn sees a Domain fault
+   - target/arm: Set correct fp flags for FLOGB when FPCR.AH = 1
+   - target/arm: Use FPST_A64_F16 for SVE FCVTLT_hs
+   - target/arm: SVE2 FMAXP, FMINP must honour AH=1
+   - block/linux-aio: bound ioq_submit() recursion depth
+   - mc146818rtc: Fix get_guest_rtc_ns() overflow bug
+   - apic: fix delivery bitmask with modified xAPIC ids
+   - lsi53c895a: clear tag byte when processing messages
+   - lsi53c895a: fix use-after-free of cancelled request
+   - ui: fix validation of VNC extended clipboard data length
+     (Closes: CVE-2026-8343)
+   - ui/vnc: fix OOB read updating VNC update frequency stats
+     (Closes: CVE-2026-48003)
+   - ui/vnc: fix OOB write in lossy rect worker code
+     (Closes: CVE-2026-48002)
+   - ui/vnc: fix OOB write in VNC stats array
+     (Closes: CVE-2026-48002)
+   - ui/vnc: fix OOB read access in VNC SASL mechname array
+   - target/riscv: clear mseccfg on reset for all dependent extensions
+   - target/riscv: Update the local interrupt mask
+   - target/riscv: Add mseccfg to VMStateDescription
+   - target/riscv: Save stimer and vstimer in CPU vmstate
+   - target/riscv/pmp: Fix integer overflow in TOR and NA4 address computation
+   - target/riscv: Fix medeleg[11] read-only zero bit for M-mode ECALL
+   - hw/char: sifive_uart: Implement txctrl.txen and rxctrl.rxen
+   - hw/char: sifive_uart: Avoid infinite delay of async xmit function
+   - target/riscv: Allow mseccfg access based on ext_zicfilp
+   - hw/riscv/riscv-iommu: Fix Svnapot 64KB pages
+   - target/riscv: Update MISA.X for non-standard extensions
+   - target/riscv: Update MISA.C for Zc* extensions
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sun, 28 Jun 2026 08:33:17 +0300
+
+qemu (1:10.0.10+ds-0+deb13u1) trixie; urgency=medium
+
+  * 10.0.10 upstream stable/bugfix release:
+   - Update version for 10.0.10 release
+   - block/graph-lock: fix missed wakeup in bdrv_graph_co_rdunlock()
+   - block: Add more defaults to DEFAULT_BLOCK_CONF
+   - block: Create DEFAULT_BLOCK_CONF macro
+   - ide-test: Test reset during TRIM
+   - ide-test: Factor out wait_dma_completion()
+   - ide: Clean up ide_trim_co_entry() to be idiomatic coroutine code
+   - ide: Minimal fix for deadlock between TRIM and drain
+   - block: Add flags parameter to blk_*_pdiscard()
+   - block: Add blk_co_start/end_request() and BDRV_REQ_NO_QUEUE
+   - blkdebug: Add 'delay-ns' option
+   - linux-user/sh4: Fix setup_sigtramp to match Linux kernel
+     trampoline pattern
+   - linux-user/sh4: Fix target_ucontext tuc_link field type
+   - linux-user: Fix AT_EXECFN in AUXV for symlinked programs
+   - hw/nvme: fix admin cq msix setup
+   - tests/functional/qemu_test/asset.py: Don't use setxattr
+     when it doesn't exist
+   - meson.build: Add -fzero-init-padding-bits=all
+   - hw/i2c/microbit_i2c: Don't index off end of twi_read_sequence[]
+   - aspeed/hace: Prevent total_req_len overflow
+   - aspeed/hace: Fix out-of-bounds read in has_padding()
+   - hw/display/cirrus_vga: Fix packed-24 color-expansion transparent copies
+   - hw/display/cirrus_vga: Fix packed-24 color-expansion
+     transparent pattern fills
+   - hw/ufs: Keep MCQ SQs alive while requests are outstanding
+   - hw/ufs: Reject zero-depth MCQ queues
+   - hw/ufs: Guard MCQ CQ accesses against missing queues
+   - hw/ufs: Validate MCQ SQ references before use
+   - hw/uefi: check auth.hdr_length minimum size
+     (Closes: CVE-2026-8341)
+   - hw/uefi: avoid possibly unaligned variable_auth_2 struct field access
+     (Closes: CVE-2026-41440)
+   - hw/uefi: verify data size before accessing it in wrap_pkcs7
+     (Closes: CVE-2026-41439)
+   - hw/uefi: add name_size check to uefi_vars_mm_lock_variable()
+     (Closes: CVE-2026-41438)
+   - hw/uefi: fix ucs2 string helper functions
+     (Closes: CVE-2026-41437)
+   - hw/uefi: verify pio_xfer_offset before calculating buffer checksum
+     (Closes: CVE-2026-41436)
+   - hw/uefi: fix buffer overruns
+     (Closes: CVE-2026-41435)
+   - hw/misc/bcm2835_rng: Specify valid memory access sizes
+   - target/arm: Report IL=0 for Thumb 16-bit BKPT insn
+   - target/microblaze: Fix endianness used to disassemble
+   - hw/intc/arm_gicv3: Fix NS write to ICC_AP1Rn_EL1 when prebits < 7
+   - hw/net/allwinner-sun8i-emac: Flush queued packets when rx is enabled
+   - hw/ppc/e500: fix bus-frequency property hardcoded to zero in CPU FDT node
+   - hw/ppc/e500: Move clock and TB frequency to machine class
+   - tests/rcutorture: Fix build error
+   - hw/intc/xics: Add a check for an invalid server id
+   - linux-user: Translate errno in IP_RECVERR and IPV6_RECVERR
+   - linux-user: Allow getsockopt() with NULL optval address
+   - linux-user: Flush errors by using exit() instead of _exit() in error path
+   - linux-user: Add missing CDROM ioctls
+   - target/riscv: Use ELEN for Fractional LMUL check
+   - target/riscv: Don't OR mip.SEIP when mvien is one
+   - target/riscv: Generate access fault if sc comparison fails
+   - riscv_htif: reject invalid signature ranges (end <= begin)
+   - hw/intc: fix heap OOB in ACLINT MTIMER multi-socket
+   - target/riscv: fix stale ptshift and base on page walk restart
+   - hw/riscv/virt-acpi-build.c: Use kvm timer frequency when kvm enabled
+   - linux-user: Flush errors by using exit() instead of _exit() in error path
+   - linux-user: Use abi_int for imr_ifindex in ip_mreqn struct
+   - linux-user: Fix CLONE_PARENT_SETTID when using fork-like clone
+   - linux-user: Add getsockopt() for SO_RCVTIMEO_NEW and SO_SNDTIMEO_NEW
+   - linux-user: Add setsockopt() for SO_RCVTIMEO_NEW and SO_SNDTIMEO_NEW
+   - linux-user: Define SO_TIMESTAMP*_NEW and SO_RCVTIMEIO_NEW
+   - linux-user/mips: sync k0 TLS for EF_MIPS_MACH_OCTEON userlands
+   - linux-user/strace: Use pointer type for read and write values
+   - linux-user/arm/nwfpe: Use thread-local storage for qemufpa
+   - linux-user/arm/nwfpe: Replace user_registers with current_cpu
+   - linux-user: Don't define target_stat64 struct for loongarch64
+   - linux-user: fix off-by-one in host_to_target_for_each_rtattr()
+   - linux-user/ppc: Fix ppc64 rt_sigframe stack offset
+   - hw/sh4/sh7750: Remove forgotten abort() in the MM_ITLB_DATA handler
+   - hw/misc: Fix the valid access size to the avr-power device
+   - migration: vmstate_save_state_v: fix double error_setg
+   - hw/display: don't accidentally autofree existing virgl resources
+     (Closes: CVE-2026-6502)
+   - meson: add missing semicolon in pthread_condattr_setclock test
+   - target/i386/tcg: fix decoding of MOVBE and CRC32 in 16-bit mode
+   - target/i386: fix missing PF_INSTR in SIGSEGV context
+   - target/i386: fix strList leak in x86_cpu_get_unavailable_features
+   - target/arm/tcg/translate.c: remove MO_TE usage
+   - ui/console-vc: fix off-by-one in CSI J 2 (clear entire screen)
+   - ui/spice-app: detect runtime directory creation failures
+   - serial COM: windows serial COM PollingFunc don't sleep
+   - util/cutils: Fix heap corruption under Windows
+   - virtio-blk: fix zone report buffer out-of-memory
+     (Closes: CVE-2026-5761)
+   - qemu-keymap: fix altgr modifier lookup for newer xkeyboard-config
+   - hw/uefi: fix heap overflow
+     (Closes: CVE-2026-5744)
+   - virtio-scsi: pass the same cdb_size to virtio_scsi_pop_req
+     and virtio_scsi_handle_cmd_req_prepare
+     (Closes: CVE-2026-5763)
+   - util/readline: Fix out-of-bounds access in readline_insert_char()
+   - target/arm: fix fault_s1ns for stage 2 faults
+   - target/arm: do_ats_write(): avoid assertion when ptw failed
+   - bsd-user, linux-user: signal: recursive signal delivery fix
+   - linux-user: Make openat2() use -L for absolute paths
+   - linux-user: update select timeout writeback
+   - linux-user: fix name_to_handle_at when AT_HANDLE_MNT_ID_UNIQUE flag is set
+   - util: fix missing aio_wait sym in qemu guest agent only build
+   - monitor: Fix deadlock in monitor_cleanup
+   - scsi: Don't consider LOGICAL UNIT NOT SUPPORTED guest recoverable
+   - ide: Fix potential assertion failure on VM stop for PIO read error
+   - ui/vnc-jobs: fix VncRectEntry leak on job cleanup
+   - hw/net/rocker: Avoid double-free of l2_flood.group_ids
+   - lsi53c895a: keep SCSIRequest alive during DMA
+   - lsi53c895a: keep lsi_request alive as long as the SCSIRequest
+   - lsi53c895a: keep lsi_request and SCSIRequest in local variables
+   - lsi53c895a: do not do anything else if a reset is requested
+     by writing ISTAT0
+   - lsi53c895a: keep a reference to the device while SCRIPTS execute
+     (Closes: #1085299, CVE-2024-6519)
+   - scripts/qemu-guest-agent/fsfreeze-hook: Fix syslog-fallback logic
+   - scripts/qemu-guest-agent/fsfreeze-hook: Avoid use of PIPESTATUS
+   - scripts/qemu-guest-agent/fsfreeze-hook: Avoid bash-isms
+   - hw/nvme: fix heap-buffer-overflow in nvme_abort
+   - hw/nvme: re-enable wzds bit in namespace dlfeat
+   - tcg: Pass host-endian values to plugin_gen_mem_callbacks_*
+   - hw/audio/sb16: validate VMState fields in post_load
+   - block/curl: free s->password in cleanup paths
+   - linux-aio: Resubmit tails of short reads/writes
+   - linux-aio: Put all parameters into qemu_laiocb
+   - hw/dma/pl080: Fix transfer logic in PL080
+   - linux-user/i386/signal.c: Correct definition of target_fpstate_32
+   - hw/ssi/aspeed_smc: Convert mem ops to read/write_with_attrs
+     for error handling
+   - hw/net/ftgmac100: Improve DMA error handling
+   - hw/usb/hcd-ohci: check for MPS=0 to avoid infinite loop
+     (Closes: CVE-2026-3890)
+   - rust: suggest passing --locked to "cargo install"
+   - target/riscv: rvv: Fix page probe issues in vext_ldff
+   - target/riscv: rvv: Fix missing flags merge in probe_pages
+     for cross-page accesses
+   - Expand the probe_pages helper function to handle probe flags
+   - block: Drop detach_subchain for bdrv_replace_node
+   - virtio-gpu: fix overflow check when allocating 2d image
+     (Closes: CVE-2026-3886)
+   - io: Fix TLS bye task leak
+   - ppc/pnv: generate dtb after machine initialization is complete
+   - ppc/pnv: fix dumpdtb option
+   - block/mirror: fix assertion failure upon duplicate complete
+     for job using 'replaces'
+   - throttle-group: Fix race condition in throttle_group_restart_queue()
+   - target/i386: fix NULL pointer dereference in legacy-cache=off handling
+   - hw/dma/pl080: Ignore bottom 2 bits of LLI register
+   - hw/dma/pl080: Update interrupts after pl080_run()
+   - hw/dma/pl080: Handle bogus swidth and dwidth in transfers
+   - linux-user: fix mremap with old_size=0 for shared mappings
+   - linux-user: Fix zero_bss for RX PT_LOAD segments
+   - hw/net/rtl8319: Work around GCC sanitizer / -Wstringop-overflow bug
+
+  * 10.0.9 stable/bugfix release:
+   - Update version for 10.0.9 release
+   - hyperv/syndbg: check length returned by cpu_physical_memory_map()
+     (Closes: CVE-2026-3842)
+   - fuse: Copy write buffer content before polling
+   - target/loongarch: Avoid recursive PNX exception on CSR_BADI fetch
+   - target/loongarch: Preserve PTE permission bits in LDPTE
+   - hw/net/npcm_gmac: Catch accesses off the end of the register array
+   - linux-user: fix TIOCGSID ioctl
+   - tests/tcg/multiarch/test-mmap: Check mmaps beyond reserved_va
+   - bsd-user: Deal with mmap where start > reserved_va
+   - linux-user: Deal with mmap where start > reserved_va
+   - hw/net/xilinx_ethlite: Check for oversized TX packets
+   - virtio-gpu: Ensure BHs are invoked only from main-loop thread
+   - block/nfs: Do not enter coroutine from CB
+   - block: Never drop BLOCK_IO_ERROR with action=stop for rate limiting
+   - block/throttle-groups: fix deadlock with iolimits and muliple iothreads
+   - mirror: Fix missed dirty bitmap writes during startup
+     (Closes: #1129349)
+   - block/curl: fix concurrent completion handling
+   - block/vmdk: fix OOB read in vmdk_read_extent()
+     (Closes: #1128478, CVE-2026-2243)
+   - hw/net/smc91c111: Don't allow negative-length packets
+   - io: fix cleanup for websock I/O source data on cancellation
+   - io: fix cleanup for TLS I/O source data on cancellation
+   - io: separate freeing of tasks from marking them as complete
+   - target/i386/hvf/x86_mmu: Fix compiler warning
+   - hw/i386/vmmouse: Fix hypercall clobbers
+   - tests/docker: upgrade most non-lcitool debian tests to debian 13
+   - hw/9pfs: fix missing EOPNOTSUPP on Twstat and Trenameat
+     for fs synth driver
+   - hw/9pfs: fix data race in v9fs_mark_fids_unreclaim()
+   - target/arm: set the correct TI bits for WFIT traps
+   - hw/ssi/xilinx_spips: Reset TX FIFO in reset
+   - hw/misc/virt_ctrl: Fix incorrect trace event in read operation
+   - virtio-snd: tighten read amount in in_cb
+     (Closes: #1129604, CVE-2026-3195)
+   - virtio-snd: fix max_size bounds check in input cb
+     (Closes: #1129604, CVE-2026-3195)
+   - virtio-snd: handle 5.14.6.2 for PCM_INFO properly
+     (Closes: #1129605, CVE-2026-3196)
+   - virtio-snd: remove TODO comments
+   - virtio-gpu-virgl: Add virtio-gpu-virgl-hostmem-region type
+     (was in virtio-gpu-virgl-Add-virtio-gpu-virgl-hostmem-region.patch)
+   - target/arm: Fix feature check in DO_SVE2_RRX, DO_SVE2_RRX_TB
+   - target/arm: Account for SME in aarch64_sve_narrow_vq() assertion
+   - target/arm: Introduce ARMCPU.sme_max_vq
+   - hw/i2c/aspeed_i2c: Fix out-of-bounds read in I2C MMIO handlers
+   - docs/about/emulation: Add documentation for hotblocks plugin arguments
+   - contrib/plugins/hotblocks: Print uint64_t with PRIu64 rather than PRId64
+   - contrib/plugins/hotblocks: Fix off by one error in iteration
+     of sorted blocks
+   - contrib/plugins/hotblocks: Correctly free sorted counts list
+   - contrib/plugins: Fix type conflict of GLib function pointers
+   - python: drop uses of pkg_resources
+   - plugins: fix cross-build using LLVM for Windows targets
+   - s390x/pci: Fix endianness for zPCI BAR values
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 11 Jun 2026 09:28:48 +0300
+
 qemu (1:10.0.8+ds-0+deb13u1) trixie; urgency=medium
 
   * 10.0.8 upstream stable/bugfix release:
