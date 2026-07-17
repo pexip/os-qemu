@@ -3507,8 +3507,9 @@ static uint64_t do_ats_write(CPUARMState *env, uint64_t value,
     /*
      * ATS operations only do S1 or S1+S2 translations, so we never
      * have to deal with the ARMCacheAttrs format for S2 only.
+     * (Note that res fields are only valid on ptw success.)
      */
-    assert(!res.cacheattrs.is_s2_format);
+    assert(ret || !res.cacheattrs.is_s2_format);
 
     if (ret) {
         /*
@@ -11590,7 +11591,7 @@ void aarch64_sve_narrow_vq(CPUARMState *env, unsigned vq)
     uint64_t pmask;
 
     assert(vq >= 1 && vq <= ARM_MAX_VQ);
-    assert(vq <= env_archcpu(env)->sve_max_vq);
+    assert(vq <= arm_max_vq(env_archcpu(env)));
 
     /* Zap the high bits of the zregs.  */
     for (i = 0; i < 32; i++) {
