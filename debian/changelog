@@ -1,3 +1,9 @@
+qemu (1:10.0.11+ds-0+deb13u1+pexip25u1) pexip-trixie; urgency=medium
+
+  * New upstream release with security fixes
+
+ -- Huw Jones <huw@pexip.com>  Fri, 17 Jul 2026 17:16:54 +0100
+
 qemu (1:10.0.11+ds-0+deb13u1) trixie; urgency=medium
 
   * new upstream stable/bugfix release:
