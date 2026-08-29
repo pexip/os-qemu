@@ -1,8 +1,490 @@
+qemu (1:10.0.13+ds-0+deb13u1) trixie; urgency=medium
+
+  * new upstream stable/bugfix release, including multiple security fixes:
+   -  Update version for 10.0.13 release
+   -  target/riscv/tcg: sret in virtual user mode
+      raises virtual instruction exception
+      https://gitlab.com/qemu-project/qemu/-/work_items/3622
+   -  target/riscv: enforce even register constraints for Zdinx fcvt pairs
+      https://gitlab.com/qemu-project/qemu/-/work_items/4109
+   -  target/riscv: reject FMV.X.W/FMV.W.X under Zfinx
+      https://gitlab.com/qemu-project/qemu/-/work_items/4108
+   -  target/riscv: honor zicbo* envcfg gating in linux-user mode
+      https://gitlab.com/qemu-project/qemu/-/work_items/4107
+   -  disas/riscv: Fix typo in th.lbib format
+   -  disas/riscv: Fix isa decoding of rev8
+   -  disas/riscv: Fix rv32 encoding of zext.h
+   -  target/riscv: allow menvcfg/henvcfg LPE and SSE bits on RV32
+      https://gitlab.com/qemu-project/qemu/-/work_items/4045
+   -  hw/riscv/riscv-iommu: preserve requested perm in spa_fetch()
+   -  hw/riscv/riscv-iommu: fix U-bit check to apply only to
+      leaf S/VS-stage PTEs
+   -  disas/riscv: Decode unsigned vector immediates as unsigned
+   -  disas/riscv: Use signed type for vector immediates
+   -  disas/riscv: Fix 6-bit immediate extraction
+   -  disas/riscv: Fix th.srri decoding
+   -  target/riscv: use SXL instead of MXL for read_sstatus
+   -  target/riscv: Fix PC sync in trans_sspopchk for CFI exception handling
+      https://gitlab.com/qemu-project/qemu/-/work_items/4118
+   -  hw/watchdog: Add lower bound check for watchdogNumber
+      https://gitlab.com/qemu-project/qemu/-/work_items/3600
+   -  tcg: Export tcg_gen_ussub_i{32,64,tl}
+   -  tcg: Defer tb_flush when initial thread region alloc fails
+      https://gitlab.com/qemu-project/qemu/-/work_items/2984
+   -  tcg: Return success from tcg_region_alloc
+   -  tcg: Return success from tcg_region_alloc__locked
+   -  target/loongarch: check FPE before reading fcc in bceqz/bcnez
+      https://gitlab.com/qemu-project/qemu/-/work_items/4209
+   -  meson: make linker warnings non-fatal on Linux
+   -  serial: clear transmit retry callback on unrealize
+      https://gitlab.com/qemu-project/qemu/-/work_items/4125
+   -  target/i386: decode opcode extensions group 3 /1 as TEST
+      https://gitlab.com/qemu-project/qemu/-/work_items/3580
+   -  target/i386: allow transition to virtual-8086 mode
+      only if CPL == 0 and CPU is not in long mode
+      https://gitlab.com/qemu-project/qemu/-/work_items/3583
+   -  target/i386: fix long mode segment override prefix decoding
+      https://gitlab.com/qemu-project/qemu/-/work_items/3391
+   -  target/i386: fix incorrect decoding of EXTRQ_i
+      https://gitlab.com/qemu-project/qemu/-/work_items/3611
+   -  target/i386: Clear OF, SF, and AF for fcomi/fucomi
+      https://gitlab.com/qemu-project/qemu/-/work_items/4133
+   -  target/i386: Use correct type for get_float_exception_flags() values
+   -  tcg/optimize: Fix s_mask computation for shifts
+   -  tcg/optimize: INDEX_op_mul is commutative
+   -  hw/elf_ops: defend against weird elf headers
+   -  hw/nvme: add SPDM_SOCKET Kconfig dependency
+   -  hw/block/pflash_cfi01: Restore ROMD mode after migration
+      https://gitlab.com/qemu-project/qemu/-/work_items/4042
+   -  hw/net/rtl8139: Send whole of vlan-tagged packet when doing loopback
+   -  hw/net/rtl8139: Fix handling of VLAN tags on incoming short packets
+      https://gitlab.com/qemu-project/qemu/-/work_items/3518
+   -  tests/qtest/ahci: regression test for ATAPI read vs. drain
+   -  hw/ide/atapi: read the whole elementary transfer asynchronously
+   -  tests/qtest/ahci: cover raw (2352-byte) ATAPI CD reads
+   -  tests/qtest/libqos/ahci: support raw (2352-byte) READ CD
+   -  tests/qtest/ide-test: cover raw (2352-byte) ATAPI CD reads
+   -  tests/qtest/ide-test: add a multi-sector ATAPI DMA read test
+   -  tests/qtest/ide-test: parametrize the ATAPI CD-ROM read test
+   -  hw/net/vmxnet3: Do not abort if guest provides bad interrupt numbers
+      https://gitlab.com/qemu-project/qemu/-/work_items/539
+   -  hw/usb/dev-uas: Don't abort if guest provided an undersized buffer
+      for status
+      https://gitlab.com/qemu-project/qemu/-/work_items/3900
+   -  hw/intc/loongarch_pch_pic: Validate htmsi_vector before indexing
+      parent_irq
+      https://gitlab.com/qemu-project/qemu/-/work_items/4114
+   -  migration/multifd: Replace assert() with error_setg() in recv paths
+   -  migration/multifd: Validate next_packet_size in zlib/zstd recv
+      https://gitlab.com/qemu-project/qemu/-/work_items/3737
+   -  tests/tcg/s390x: Test STCKF condition code on a faulting store
+   -  target/s390x/tcg: Set STCK/STCKF condition code after the store
+   -  pc-bios/s390-ccw.img: update s390x bios
+   -  pc-bios/s390-ccw: bound zipl menu strlen and replace VLA
+      in zipl_print_entry
+   -  pc-bios/s390-ccw: bounds-check zipl menu entry index before array write
+   -  pc-bios/s390-ccw: fix out-of-bounds read in iso_get_file_size()
+   -  s390x/ipl: validate num_comp against iplb length before iterating
+   -  hw/char/sclpconsole-lm: avoid guest triggerable assert
+   -  tests/tcg/s390x: Test DR overflow (INT64_MIN / -1)
+   -  target/s390x: Fix DR/D INT64_MIN / -1 host crash
+   -  tests/tcg/s390x: Test PRNO TRNG interruptibility
+   -  target/s390x: Make PRNO TRNG interruptible
+   -  target/s390x: Have MSA helper pass a mmu_idx argument
+   -  hw/arm/aspeed: Add missing Kconfig dependencies on required components
+   -  linux-user: implement mount_setattr(2)
+   -  linux-user/sh4: Fix crashes on signal delivery in conditional delay slot
+   -  linux-user/sh4: Initialize the FPSCR register on signal
+   -  linux-user/sh4: Deliver SIGILL on invalid instruction
+   -  gitlab: disable provenance attestations to work around CI bug
+   -  hw/nvme: fix leak on copy ranges
+   -  hw/nvme: cancel inflight requests on controller reset
+      https://gitlab.com/qemu-project/qemu/-/work_items/3398
+      https://gitlab.com/qemu-project/qemu/-/work_items/3883
+      https://gitlab.com/qemu-project/qemu/-/work_items/4068
+      https://gitlab.com/qemu-project/qemu/-/work_items/4072
+   -  hw/nvme: factor out nvme_sq_cancel_inflight()
+   -  hw/nvme: drop AER requests without aiocb in nvme_del_sq()
+   -  hw/display/virtio-gpu: Unmap DMA regions on reset
+      https://gitlab.com/qemu-project/qemu/-/work_items/3467
+   -  hw/display/virtio-gpu: Always reject invalid scanout bounds
+   -  virtio-gpu: reject requests with short/truncated control headers
+      Closes: CVE-2026-18054
+   -  hw/display/virtio-gpu: fix offset wraparound in scanout_blob_to_fb
+   -  vhost-user-gpu: fix integer overflow in buffer allocation
+      Closes: CVE-2026-15264
+   -  hw/display/vga: fix panning_buf OOB after text/graphics switch
+      https://gitlab.com/qemu-project/qemu/-/work_items/4085
+      Closes: CVE-2026-17516
+   -  hw/display/virtio-gpu: validate blob iov size
+      https://gitlab.com/qemu-project/qemu/-/work_items/3945
+      Closes: CVE-2026-66021
+   -  coroutine: fix lost wakeup in qemu_co_sleep_wake()
+   -  iotests: run the test pool with the 'fork' start method
+   -  qcow2: do not try to clear the dirty bit on a read-only node
+   -  dmg: reject inconsistent UDRW chunk sector count and length
+      https://gitlab.com/qemu-project/qemu/-/work_items/3846
+      Closes: CVE-2026-65928
+   -  dmg: refuse to open files with no chunks
+      https://gitlab.com/qemu-project/qemu/-/work_items/4021
+   -  dmg: fix out-of-bounds load in search_chunk()
+      https://gitlab.com/qemu-project/qemu/-/work_items/3844
+      Closes: CVE-2026-65929
+   -  tests/unit: add reproducer for BlockAcctStats histogram locking race
+   -  block/qapi: take stats->lock when reading BlockAcctStats
+      for query-blockstats
+   -  block/accounting: take stats->lock in latency histogram setters
+   -  block: Fix crash after setting latency historygram with single bin
+   -  block/cloop: fix integer overflow in total_sectors calculation
+   -  linux-user: fix incorrect msg_l[sr]pid members of target_msqid_ds
+   -  linux-user: Fix msqid_ds struct wrt 32-bit big endian architectures
+   -  hw/nvme: fix assertion failure on subregion removal
+   -  hw/nvme: fix unintentional integer overflow in shift
+   -  hw/nvme: fix cross-namespace copy dif buffer overflow
+   -  virtio-mmio: fix QUEUE_NUM_MAX
+      https://gitlab.com/qemu-project/qemu/-/work_items/3882
+      Closes: CVE-2026-50626
+   -  hw/display/exynos4210_fimd: Clamp windows to screen size
+      https://gitlab.com/qemu-project/qemu/-/work_items/3795
+   -  hw/display/exynos4210_fimd: Pass width to draw_line functions
+   -  hw/display/exynos4210_fimd: Factor out finding screen width/height
+   -  hw/i2c/bcm2835_i2c: Correct CLKT register offset
+   -  linux-user/sh4: allow full 32-bit address space
+   -  target/sparc: set reg window data structures currently
+      after vmstate load
+   -  hw/net/igb: recalculate rx_desc_len on migration load
+   -  hw/net/e1000e: recalculate rx_desc_len on migration load
+   -  linux-user: fix guards for the fsmount(2) syscall series
+   -  hw/net/xilinx_axienet: Don't write checksums off end of packet
+   -  linux-user: Guard local FUTEX_CMD_MASK definition
+   -  virtio: avoid packed vring virtio_queue_empty() infinite loops
+      https://gitlab.com/qemu-project/qemu/-/work_items/3968
+      Closes: CVE-2026-16457
+   -  backends/rng: cap request size to avoid oversized allocation
+      https://gitlab.com/qemu-project/qemu/-/work_items/3983
+   -  hw/virtio-rng: Fix host use-after-free
+      https://gitlab.com/qemu-project/qemu/-/work_items/3917
+      Closes: CVE-2026-50624
+   -  hw/net/virtio-net: Protect from DMA re-entrancy bugs
+      https://gitlab.com/qemu-project/qemu/-/work_items/4073
+      Closes: CVE-2026-66022 (again)
+   -  intel_iommu: Check address mask before using it in
+      pasid-based iotlb invalidation
+      https://gitlab.com/qemu-project/qemu/-/work_items/3619
+   -  hw/cxl: fix OOB access in cxl_doe_cdat_rsp via entry_handle
+   -  hw/virtio/vdpa-dev: pass set_config buffer to vhost backend
+   -  hw/pci-host/q35.c: Avoid early return in mch_write_config()
+   -  hw/pci-host/q35.c: Factor out creation of SMRAM MRs
+   -  hw/pci-host/q35.c: Always initialize smram-region even if SMM disabled
+   -  virtio-iommu: fix OOM due to unbounded call_rcu
+   -  libvduse: validate vq size
+      https://gitlab.com/qemu-project/qemu/-/work_items/3652
+      Closes: CVE-2026-61402
+   -  libvhost-user: fix heap overflow in vu_check_queue_inflights
+      https://gitlab.com/qemu-project/qemu/-/work_items/3974
+      Closes: CVE-2026-63110
+   -  libvhost-user: validate last_batch_head in vu_check_queue_inflights
+      https://gitlab.com/qemu-project/qemu/-/work_items/3974
+   -  virtio-pmem: wait for flush requests on unrealize
+      https://gitlab.com/qemu-project/qemu/-/work_items/3938
+      Closes: CVE-2026-63323
+   -  vhost-user: assert nregions within limit
+      https://gitlab.com/qemu-project/qemu/-/work_items/3910
+   -  virtio: fail early on bad config_len in migration
+      https://gitlab.com/qemu-project/qemu/-/work_items/3891
+   -  virtio-scsi: fix SCSIRequest leak on a bad request
+      https://gitlab.com/qemu-project/qemu/-/work_items/3875
+      Closes: CVE-2026-61476
+   -  vhost: do not crash on ring map failure
+      https://gitlab.com/qemu-project/qemu/-/work_items/3783
+   -  hw/virtio: reject zero-length packed indirect descriptor table
+      https://gitlab.com/qemu-project/qemu/-/work_items/3984
+   -  libvhost-user: protect against OOB vring queue access
+      https://gitlab.com/qemu-project/qemu/-/work_items/3741
+   -  libvhost-user: protect against OOB writes in vu_set_inflight_fd
+      https://gitlab.com/qemu-project/qemu/-/work_items/3740
+   -  virtio-net: fix short frame OOB read in receive_filter()
+      https://gitlab.com/qemu-project/qemu/-/work_items/3626
+      Closes: CVE-2026-63320
+   -  virtio-net: fix OOB read in RSC receive path
+      https://gitlab.com/qemu-project/qemu/-/work_items/3623
+      Closes: CVE-2026-63321
+   -  hw/display/virtio-gpu: Block Rutabaga migration
+   -  rutabaga: improve error handling, fix potential crash during init
+   -  hw/display/virtio-gpu: Initialize blob mapping for ATTACH_BACKING
+   -  hw/display/virtio-gpu: Fix empty blob discrimination
+   -  virtio-gpu: fix NULL deref in rutabaga set_scanout
+      https://gitlab.com/qemu-project/qemu/-/work_items/3897
+   -  target/i386/sev: fix MemoryRegion reference leaks in gpa2hva callers
+   -  net/colo: fix g_hash_table_destroy assertion on uninitialized filter
+   -  hw/display/qxl: unregister vm_change_state handler and BHs
+      https://gitlab.com/qemu-project/qemu/-/work_items/3607
+      Closes: CVE-2026-63322
+   -  ui/vnc: remove redundant rows computation
+   -  hw/display/vhost-user-gpu: validate message payload sizes
+      https://gitlab.com/qemu-project/qemu/-/work_items/3866
+   -  hw/display/virtio-gpu: Remove the bytes_pp field
+   -  hw/display/virtio-gpu: reject strides exceeding INT_MAX
+   -  hw/display/virtio-gpu: validate stride against width on scanout
+      https://gitlab.com/qemu-project/qemu/-/work_items/3989
+      Closes: CVE-2026-63109
+   -  hw/usb/hcd-xhci: Check return value of xhci_xfer_create_sgl()
+      for errors
+      https://gitlab.com/qemu-project/qemu/-/work_items/3786
+   -  hw/usb/core: Avoid possible assert() in do_parameter() -->
+      usb_packet_copy()
+      https://gitlab.com/qemu-project/qemu/-/work_items/3746
+   -  hw/ide/core: Fix possible crash via NULL pointer
+      in ide_cancel_dma_sync()
+      https://gitlab.com/qemu-project/qemu/-/work_items/905
+      https://gitlab.com/qemu-project/qemu/-/work_items/4052
+   -  hw/usb/dev-uas: Fix guest-triggerable heap OOB access
+      https://gitlab.com/qemu-project/qemu/-/work_items/3612
+      https://gitlab.com/qemu-project/qemu/-/work_items/3986
+   -  hw/9pfs/xen: drain in-flight PDUs before xen-9p disconnect
+   -  hw/9pfs/virtio: drain in-flight PDUs before virtio-9p unrealize
+      https://gitlab.com/qemu-project/qemu/-/work_items/3937
+   -  hw/9pfs: fix O_TRUNC bypass on read-only export
+      https://gitlab.com/qemu-project/qemu/-/work_items/4000
+      Closes: CVE-2026-63318
+   -  hw/display/vmware_vga: Don't allow guest to trigger
+      long running loop in host
+      https://gitlab.com/qemu-project/qemu/-/work_items/3782
+      https://gitlab.com/qemu-project/qemu/-/work_items/4026
+      https://gitlab.com/qemu-project/qemu/-/work_items/4076
+   -  hw/ide: replace assert with proper error handling
+      https://gitlab.com/qemu-project/qemu/-/work_items/2777
+   -  scsi-disk: fix off by one in assertion
+   -  scsi-disk: protect against guest sending truncated data
+      for MODE SELECT commands
+      https://gitlab.com/qemu-project/qemu/-/work_items/4051
+   -  target/i386: helper_sysret(): Check that RCX contains
+      a canonical address when emulating an Intel CPU
+      https://gitlab.com/qemu-project/qemu/-/work_items/3223
+   -  vfio/pci: reject invalid PCI_INTERRUPT_PIN values
+   -  vfio/pci: don't narrow a failed config read to a plausible value
+   -  vfio/igd: Clear saved BDSM in legacy VBIOS ROM at load time
+      https://gitlab.com/qemu-project/qemu/-/work_items/3093
+   -  vfio/pci: Initialize rom_read_failed in vfio_pci_load_rom()
+   -  hw/uefi: make SetupMode read-only
+      https://gitlab.com/qemu-project/qemu/-/work_items/4039
+      Closes: CVE-2026-16288
+   -  hw/uefi: add post_load checks
+      https://gitlab.com/qemu-project/qemu/-/work_items/3837
+      https://gitlab.com/qemu-project/qemu/-/work_items/3838
+      https://gitlab.com/qemu-project/qemu/-/work_items/3839
+      https://gitlab.com/qemu-project/qemu/-/work_items/3885
+      Closes: CVE-2026-61404
+   -  hw/uefi: account variable policy entries against storage size
+      https://gitlab.com/qemu-project/qemu/-/work_items/3890
+      Closes: CVE-2026-61405
+   -  hw/uefi: check lower limit for signature list size
+      https://gitlab.com/qemu-project/qemu/-/work_items/3899
+      Closes: CVE-2026-61406
+   -  hw/uefi: remove debug function
+      https://gitlab.com/qemu-project/qemu/-/work_items/3615
+      Closes: CVE-2026-58582
+   -  hw/uefi: add sanity check
+      https://gitlab.com/qemu-project/qemu/-/work_items/3614
+      Closes: CVE-2026-58581
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 29 Aug 2026 20:55:40 +0300
+
+qemu (1:10.0.12+ds-0+deb13u1) trixie; urgency=medium
+
+  * new upstream stable/bugfix release:
+   - Update version for 10.0.12 release
+   - hw/audio/intel-hda: restrict all DMA engine paths to memories
+     (update to CVE-2021-3611)
+   - hw/net/cadence: Return current Cadence GEM queue pointers
+   - hw/misc/applesmc: Fix a typo setting MSSD key
+   - replay: fix use of uninitialized pointer on error
+   - hw/display/qxl: validate monitors_config heads[] in phys2virt
+     https://gitlab.com/qemu-project/qemu/-/work_items/4027
+   - net: Correct padding check in qemu_receive_packet()
+   - hw/net/xilinx_axienet: Fix PHY register 17 link status reporting
+   - hw/usb/hcd-xhci-sysbus: Fix OOB heap access in xhci_sysbus_intr_raise()
+     https://gitlab.com/qemu-project/qemu/-/work_items/4001
+     (Closes: CVE-2026-16043)
+   - hw/usb/hcd-xhci: Fix guest-triggerable assert() in xhci_find_stream()
+     https://gitlab.com/qemu-project/qemu/-/work_items/273, 2020-06-16
+   - usbredir: fix infinite loop and SIGFPE with zero max_packet_size
+     https://gitlab.com/qemu-project/qemu/-/work_items/3995
+     (Closes: CVE-2026-63319)
+   - usbredir: fix use-after-free on buffered bulk packet overflow
+     https://gitlab.com/qemu-project/qemu/-/work_items/3808
+     (Closes: CVE-2026-15705)
+   - tests/qtest: add xhci-pci unplug finalize regression test
+   - hw/usb/hcd-xhci-pci: break host link cycle so device_finalize()
+     runs on unplug
+   - hw/usb/xhci: clamp interval exponent to avoid UB shift
+     in xhci_init_epctx()
+     https://gitlab.com/qemu-project/qemu/-/work_items/3703
+   - accel/tcg: move jit thread manipulation into do_tb_phys_invalidate
+     https://gitlab.com/qemu-project/qemu/-/work_items/3444
+   - hw/display/virtio-gpu: Check pixman_image_create_bits() results
+   - hw/display/virtio-gpu: handle migration iov allocation failure
+     https://gitlab.com/qemu-project/qemu/-/work_items/3753
+   - hw/display/virtio-gpu: cap submit_3d command buffer allocation
+     https://gitlab.com/qemu-project/qemu/-/work_items/3776
+   - ui/vnc: validate SetPixelFormat field ranges
+     https://gitlab.com/qemu-project/qemu/-/issues/3976
+     (Closes: CVE-2026-15578)
+   - ui/vnc: fix out-of-bounds write in lossy refresh dirty marking
+     https://gitlab.com/qemu-project/qemu/-/work_items/3935
+     (Closes: CVE-2026-61475)
+   - ui/gtk: Narrow DMA-BUF critical section
+   - ui/input-barrier: fix off-by-one in keycode bounds check
+     https://gitlab.com/qemu-project/qemu/-/issues/3951
+   - ui/vnc: validate color shifts in SetPixelFormat
+     https://gitlab.com/qemu-project/qemu/-/work_items/3948
+   - ui/vnc: fix OOB write in vnc_refresh_lossy_rect
+     https://gitlab.com/qemu-project/qemu/-/work_items/3950
+     (Closes: CVE-2026-48002)
+   - hw/usb/hcd-xhci: Turn guest-triggerable abort() into qemu_log_mask()
+     https://gitlab.com/qemu-project/qemu/-/work_items/3784
+   - hw/usb/hcd-ohci: Make sure that ohci_service_ed_list() cannot loop forever
+     https://gitlab.com/qemu-project/qemu/-/work_items/3781
+   - hw/display/virtio-gpu: fix dmabuf_fd leak on remap failure
+   - hw/scsi/vmw_pvscsi: add a comment to explain the endianness
+   - hw/scsi/vmw_pvscsi: translate data endianness
+   - hw/sparc64/niagara: use int64_t for vdisk size to avoid truncation
+   - hw/display/qxl: fix TOCTOU in cursor chunk data_size handling
+     https://gitlab.com/qemu-project/qemu/-/work_items/3757
+   - hw/misc/ivshmem: clear chardev handlers before freeing peers
+     https://gitlab.com/qemu-project/qemu/-/work_items/3594
+   - linux-user/alpha: populate AT_HWCAP from env->amask
+   - linux-user/alpha: add coredump support
+   - s390x/css: firm up handling of chained TIC CCWs
+   - s390x/sclp: prevent re-reading the sclp header
+   - hw/s390x/sclp: Do not ignore address_space_read/write() errors
+   - hw/s390x/sclp: Replace [cpu_physical_memory -> address_space]_r/w()
+   - hw/misc/stm32_rcc: Correct offset-to-irq calculation
+   - hw/display/sm501: Don't allow guest to set ram size larger than it is
+     https://gitlab.com/qemu-project/qemu/-/work_items/3811
+   - hw/display/sm501: Avoid overflow problems in bounds check calculations
+     https://gitlab.com/qemu-project/qemu/-/work_items/3584
+   - hw/display/sm501: Catch bad coordinates for RTL operations
+     https://gitlab.com/qemu-project/qemu/-/work_items/3920
+   - hw/usb/dev-wacom: Don't write off end of buffer
+     https://gitlab.com/qemu-project/qemu/-/work_items/3672
+   - hw/net/vmxnet3: Correct bounds check on tx queue index
+     https://gitlab.com/qemu-project/qemu/-/work_items/3780
+   - target/arm: Be more defensive for invalid tlbi_aa64_get_range
+   - linux-user: Validate guest-passed dm_ioctl data_size
+     https://gitlab.com/qemu-project/qemu/-/work_items/3736
+   - tests: update SPCR loongarch64 and riscv64 test data
+   - hw/acpi: correct field sequence in SPCR table
+     https://bugs.launchpad.net/ubuntu/+source/qemu/+bug/2146419
+   - tests: allow differences in SPCR
+   - hw/pci/pcie_doe: Check mailbox length for overflows
+     https://gitlab.com/qemu-project/qemu/-/work_items/3679
+   - hw/riscv/riscv-iommu: Fix MemoryRegion owner
+   - hw/riscv/riscv-iommu.c: set ftype and iova in riscv_iommu_ctx()
+     https://gitlab.com/qemu-project/qemu/-/work_items/3564
+   - hw/riscv: riscv-iommu: Don't look up DDT cache in Off and Bare modes
+   - hw/riscv/riscv-iommu: Avoid caching PCI device IDs
+   - hw/riscv/riscv-iommu: forbid GATE/SADE if caps.AMO_HWADD is zero
+     https://gitlab.com/qemu-project/qemu/-/work_items/3549
+   - hw/riscv/riscv-iommu.c: update ioval2 when faulting in spa_fetch()
+     https://gitlab.com/qemu-project/qemu/-/work_items/3559
+   - hw/riscv/riscv-iommu.c: check for misaligned IOHGATP_PPN
+     https://gitlab.com/qemu-project/qemu/-/work_items/3550
+   - hw/riscv/riscv-iommu-sys.c: record fault on IOMMU-generated MSI write
+     https://gitlab.com/qemu-project/qemu/-/work_items/3572
+   - hw/riscv/riscv-iommu.c: check reserved MSI PTE basic bits
+     https://gitlab.com/qemu-project/qemu/-/work_items/3563
+   - hw/riscv/riscv-iommu.c: fault for non-user PTE in G_STAGE
+     https://gitlab.com/qemu-project/qemu/-/work_items/3555
+   - hw/riscv/riscv-iommu.c: fault when !PTE_U and no priv access
+     https://gitlab.com/qemu-project/qemu/-/work_items/3553
+   - hw/riscv/riscv-iommu.c: check for reserved PTE bits
+     https://gitlab.com/qemu-project/qemu/-/work_items/3554
+   - hw/riscv/riscv-iommu.c: fix fault type for spa_fetch() faults
+     https://gitlab.com/qemu-project/qemu/-/work_items/3557
+     https://gitlab.com/qemu-project/qemu/-/work_items/3577
+   - hw/ufs: avoid double unref of wrapped scsi-hd
+   - target/sh4: fixup tcg for sh4 fipr/ftrv instructions
+   - tcg/loongarch64: Fix cmp_vec with TCG_COND_NE
+     https://gitlab.com/qemu-project/qemu/-/work_items/3589
+   - tcg/loongarch64: Improve constraints for TCG_CT_CONST_VCMP
+   - tcg/loongarch64: Fix vec_val computation in tcg_target_const_match
+   - accel/tcg: Make PageFlagsNodes' start and last immutable
+   - accel/tcg: Use TLB_FORCE_SLOW not TLB_MMIO for user-only plugins
+   - hw/net: fix e1000e/igb ip_len inflation by Ethernet minimum-frame padding
+   - hw/core/qdev-clock: Fix potential null pointer dereference
+     https://gitlab.com/qemu-project/qemu/-/work_items/2342
+   - vdpa: fix use-after-free of vqs in vhost_vdpa_device_unrealize
+   - hw/display/qxl: Fix mono cursor validation that can read
+     past a cursor chunk
+     https://gitlab.com/qemu-project/qemu/-/work_items/3646
+   - hw/scsi/mptsas: Reset doorbell state on reset
+     https://gitlab.com/qemu-project/qemu/-/work_items/304, 2020-12-17
+   - hw/dma/i8257: Return zeroes for read_memory in verify mode
+     https://gitlab.com/qemu-project/qemu/-/work_items/3487
+   - tests/qtest/ahci: test ATAPI read completing after engine restart
+   - hw/ide/ahci: cancel in-flight buffered reads on command engine restart
+   - hw/misc/edu: restrict dma access to dma buffer
+     https://gitlab.com/qemu-project/qemu/-/work_items/3852
+   - s390x/css: limit number of CHPIDs in description
+   - s390x/ioinst: Require strict length and format for SEI CHSC handler
+   - s390x/pci: Shrink RPCIT ranges to registered window
+   - s390x/pci: Tighten region detection for BAR read/write
+   - s390x/sclp: reject invalid write event data headers
+   - hw/nvme: ensure sgl forward progress
+   - hw/nvme: fix FDP set FDP events
+     https://gitlab.com/qemu-project/qemu/-/work_items/3631
+   - hw/arm: use cortex-a9 mpcore base for CBAR on npcm7xx machines
+   - hw/net/fsl_etsec: validate FCB offsets in process_tx_fcb()
+     https://gitlab.com/qemu-project/qemu/-/work_items/3517
+   - virtio-net: validate RSS indirections_len in post_load
+   - hw/char/virtio-serial-bus: fix guest-triggerable OOM in control_out()
+     https://gitlab.com/qemu-project/qemu/-/issues/3585
+   - hw/riscv/riscv-iommu.c: always fault with SADE=0 and A=0
+     https://gitlab.com/qemu-project/qemu/-/work_items/3551
+   - target/riscv: Apply UXL WARL handling to vsstatus
+   - target/riscv: avoid abort when reading vtype before env->xl is set
+     https://gitlab.com/qemu-project/qemu/-/issues/3545
+   - hw/riscv/virt-acpi-build: Fix RINTC PLIC context ID for KVM
+   - target/riscv: Check PMP before updating PTE
+   - hw/9pfs/local: harden local_fid_fd() on FID types
+   - hw/9pfs: fix invalid union access by v9fs_co_fstat()
+   - hw/9pfs: fix invalid union access by v9fs_co_fsync()
+   - tests/9p: add 3 xattr FID limit test cases (local fs driver)
+   - tests/9p: add 3 xattr FID limit test cases (synth fs driver)
+   - tests/9p: add virtio_9p_add_synth_driver_args() test client function
+   - tests/9p: increase P9_MAX_SIZE for test client
+   - hw/9pfs: add xattr count query interface to fs synth driver
+   - hw/9pfs: enable xattr (mockup) support for synth fs driver
+   - tests/9p: add Txattrcreate / Rxattrcreate test client functions
+   - tests/9p: add Tclunk / Rclunk test client functions
+   - tests/9p: add Tread / Rread test client functions
+   - qemu-options: document 9pfs max_xattr option
+   - hw/9pfs: add max_xattr option
+   - hw/9pfs: add xattr FID limit to prevent memory exhaustion
+     (Closes: CVE-2026-8348)
+   - hw/9pfs: cap Treaddir allocation
+     (Closes: CVE-2026-9238)
+   - 9pfs/xen: implement response_buffer_size callback
+   - 9pfs/virtio: implement response_buffer_size callback
+   - hw/9pfs: add response_buffer_size transport callback
+   - hw/9pfs: cap negotiated msize to transport limit
+   - 9pfs/xen: implement msize_limit callback
+   - 9pfs/virtio: implement msize_limit callback
+   - hw/9pfs: add msize_limit transport callback
+   - 9pfs: local : Introduce local_fid_fd() helper
+   - 9pfs: Don't use file descriptors in core code
+   - s390x/kvm: clamp stsi 3.2.2 size
+   - ui/gtk: fix bad widget realize on non-GFX VC
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 25 Jul 2026 09:35:02 +0300
+
 qemu (1:10.0.11+ds-0+deb13u1) trixie; urgency=medium
 
   * new upstream stable/bugfix release:
    - Update version for 10.0.11 release
-   - linux-user: Fix AT_PHDR when program headers are relocated into their own segment
+   - linux-user: Fix AT_PHDR when program headers are relocated
+     into their own segment
    - hw/pci: Replace assert with bounds check and return
    - ppc/pnv_phb3: Error out on invalid config access
    - linux-user/xtensa: fix unlock of uninitialized frame pointer on sigreturn
@@ -45,7 +527,8 @@ qemu (1:10.0.11+ds-0+deb13u1) trixie; urgency=medium
    - qemu-io: Add 'aio_discard' command
    - virtio-blk: add missing VIRTIO_BLK_T_SCSI_CMD size check
      (Closes: #1139923, CVE-2026-48914)
-   - block/io: fallback to bounce buffer if BLKZEROOUT is not supported because of alignment
+   - block/io: fallback to bounce buffer if BLKZEROOUT is not supported
+     because of alignment
    - s390x/pci: Fix interrupt forwarding disable for interpreted devices
    - target/s390x: Make container ids in SysIB_15x 1-based
    - tests/unit: add test-envlist covering setenv/unsetenv name matching
@@ -54,9 +537,11 @@ qemu (1:10.0.11+ds-0+deb13u1) trixie; urgency=medium
      (Closes: CVE-2026-48004)
    - tests/9pfs: add deep absolute path test
    - tests/qtest/libqos: add qvirtqueue_reset_pool() for descriptor pool reset
-   - hw/9pfs: let callers of v9fs_path_sprintf() and v9fs_fix_path() handle errors
+   - hw/9pfs: let callers of v9fs_path_sprintf() and v9fs_fix_path()
+     handle errors
    - hw/9pfs: add error handling to v9fs_fix_path()
-   - hw/9pfs: change V9fsPath.size to size_t and v9fs_path_sprintf() return type
+   - hw/9pfs: change V9fsPath.size to size_t and v9fs_path_sprintf()
+     return type
    - hw/9pfs: add NULL check in v9fs_path_is_ancestor()
    - hw/9pfs: move G_GNUC_PRINTF to header
    - linux-user/s390x: restore fpu_status rounding mode from FPC on sigreturn
