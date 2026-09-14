@@ -173,6 +173,7 @@ static void vhost_vdpa_device_unrealize(DeviceState *dev)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VhostVdpaDevice *s = VHOST_VDPA_DEVICE(vdev);
+    struct vhost_virtqueue *vqs = s->dev.vqs;
     int i;
 
     virtio_set_status(vdev, 0);
@@ -184,8 +185,8 @@ static void vhost_vdpa_device_unrealize(DeviceState *dev)
     virtio_cleanup(vdev);
 
     g_free(s->config);
-    g_free(s->dev.vqs);
     vhost_dev_cleanup(&s->dev);
+    g_free(vqs);
     g_free(s->vdpa.shared);
     qemu_close(s->vhostfd);
     s->vhostfd = -1;
@@ -212,7 +213,7 @@ vhost_vdpa_device_set_config(VirtIODevice *vdev, const uint8_t *config)
     VhostVdpaDevice *s = VHOST_VDPA_DEVICE(vdev);
     int ret;
 
-    ret = vhost_dev_set_config(&s->dev, s->config, 0, s->config_size,
+    ret = vhost_dev_set_config(&s->dev, config, 0, s->config_size,
                                VHOST_SET_CONFIG_TYPE_FRONTEND);
     if (ret) {
         error_report("set device config space failed");
